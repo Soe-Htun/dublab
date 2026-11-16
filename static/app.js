@@ -350,3 +350,10 @@ function pollTelegram() {
   show();
   tgTimer = setInterval(show, 3000);
 }
+
+// ⚙️: with a remembered password, open the admin page directly (no login hop)
+(() => {
+  const g = document.querySelector('.gear');
+  const k = admKey();
+  if (g && k) g.href = '/admin/reviews?key=' + encodeURIComponent(k);
+})();

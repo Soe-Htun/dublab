@@ -8,15 +8,29 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Noto+Sans+Myanmar:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css">
+<style>html.checking main{visibility:hidden}</style>
+<script>
+  // a remembered password goes straight on to the admin page — hide the form meanwhile
+  try { if (localStorage.getItem('dublab_admin_key')) document.documentElement.classList.add('checking'); } catch (e) {}
+</script>
 </head>
 <body>
+<div class="orbs"><span class="orb o1"></span><span class="orb o2"></span><span class="orb o3"></span></div>
 <header class="top">
+  <div class="logo">
+    <span class="logo-mark">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="white" stroke-width="2.4" stroke-linecap="round">
+        <path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 10v4"/>
+      </svg>
+    </span>
+    <span class="logo-name">DubLab</span>
+  </div>
+  <p class="tagline">⚙️ admin · 💬 reviews</p>
   <a class="gear back" href="/" title="Back" aria-label="Back to DubLab">
     <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M15 18l-6-6 6-6"/>
     </svg>
   </a>
-  <p class="tagline" style="padding-top:12px">⚙️ Settings</p>
 </header>
 <main>
   <section class="card">
@@ -37,6 +51,7 @@ async function tryKey(k, quiet) {
   const r = await fetch('/admin/api/settings', { headers: { 'X-Admin-Key': k } }).catch(() => null);
   if (r && r.ok) { set(k); location.href = '/admin/reviews?key=' + encodeURIComponent(k); return; }
   set('');
+  document.documentElement.classList.remove('checking');
   if (!quiet) document.getElementById('err').hidden = false;
 }
 if (get()) tryKey(get(), true);
