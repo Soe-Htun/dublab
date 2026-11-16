@@ -27,6 +27,7 @@ for this pair and runs in production for Myanmar content creators.
 - 🎵 **Keeps the background, drops the original voices** — [Demucs](https://github.com/facebookresearch/demucs) strips the original speech so only music and sound effects stay under the new voice (dipped slightly while it speaks); runs on Apple GPU / CUDA when available; can be switched off per video
 - 🌐 **Auto language detection → Burmese** — no language to pick: whisper detects the spoken language (Chinese, English, Japanese, Korean, …) and the video is dubbed into spoken Burmese, with tuned prompts for Chinese recaps
 - ✏️ **Check the translation before voicing** — review and edit every Burmese line (or blank it to skip) before the voice is generated
+- 📝 **Burmese captions** — the dubbed lines burned in as captions, timed to the new voice (plus an `.srt` download); optionally blur the original burned-in captions first. Needs `libraqm` for correct Burmese shaping (`brew install libraqm`)
 - 🏷️ **Channel logo** — upload a logo on the admin page, pick its corner and size, and tick it per video; burned in with the Apple hardware encoder when available
 - 📢 **Channel outro** — an optional closing line (e.g. “like and follow my channel”) spoken in the same voice at the end; set it on the admin page or with `DUBLAB_OUTRO`
 - 🤖 **Auto voice** — picks the male or female Burmese voice from the original speaker's pitch (or choose one yourself)

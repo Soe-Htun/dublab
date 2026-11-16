@@ -14,3 +14,5 @@ demucs>=4.0
 yt-dlp>=2026.10
 # CA bundle for HTTPS on python.org macOS builds
 certifi
+# Burmese caption rendering; needs libraqm for shaping (macOS: brew install libraqm, Debian: apt install libraqm0)
+pillow>=11

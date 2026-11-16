@@ -5,7 +5,7 @@ FROM python:3.12-slim
 
 # ffmpeg: DubLab shells out to it for audio extract/mux, plus DejaVu for the watermark
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core \
+ && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core fonts-noto-core libraqm0 \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /srv/dublab

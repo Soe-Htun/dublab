@@ -15,6 +15,9 @@ if [ -f .env ]; then
     export "$key=$val"
   done < .env
 fi
+# macOS: Pillow loads libraqm (Burmese text shaping for captions) at runtime;
+# python.org Python doesn't search Homebrew's lib folder by default.
+[ -d /opt/homebrew/lib ] && export DYLD_FALLBACK_LIBRARY_PATH="/opt/homebrew/lib${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
 # waitress rejects request bodies over 1 GB by default; follow DUBLAB_MAX_MB (+16 MB form overhead)
 MAX_BODY=$(( (${DUBLAB_MAX_MB:-3000} + 16) * 1024 * 1024 ))
 exec waitress-serve --listen="${HOST:-127.0.0.1}:${PORT:-8092}" --threads="${THREADS:-8}" \

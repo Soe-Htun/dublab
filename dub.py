@@ -1,5 +1,6 @@
 """Dubbing pipeline: extract audio -> transcribe -> translate -> TTS -> mux."""
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -323,6 +324,7 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=N
 
     # placement (sequential: each start depends on where the previous ended)
     plan = []
+    cues = []      # (start, end, text) of each spoken line, for captions
     for i, u in enumerate(utterances):
         tts_dur = durs[i]
         slot = max(u["end"] - u["start"], 0.5)
@@ -331,6 +333,7 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=N
         fitted = tts_dur / atempo
         start = max(u["start"], cursor)
         plan.append((tmpdir / f"u{i}.mp3", atempo, start))
+        cues.append((start, start + fitted, u["text"]))
         cursor = start + fitted + GAP
 
     # Channel outro ("like and follow…") in the same voice: after the last
@@ -340,7 +343,9 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=N
         op = tmpdir / "outro.mp3"
         synthesize(outro, voice, op)
         odur = probe_duration(op)
-        plan.append((op, 1.0, max(cursor + 0.5, total_dur - odur - 0.3)))
+        ostart = max(cursor + 0.5, total_dur - odur - 0.3)
+        plan.append((op, 1.0, ostart))
+        cues.append((ostart, ostart + odur, outro))
 
     # Decode + time-fit every line to raw samples in parallel, then add them
     # into one in-memory track. (The old way wrote one wav per line padded
@@ -374,7 +379,144 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=N
         w.setsampwidth(2)
         w.setframerate(SR)
         w.writeframes(pcm.tobytes())
-    return dub
+    return dub, cues
+
+
+# ---- Burmese captions ----
+def _srt_time(t):
+    ms = int(round(max(t, 0) * 1000))
+    return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
+
+
+def write_srt(cues, path):
+    with open(path, "w", encoding="utf-8") as fh:
+        for n, (a, b, text) in enumerate(cues, 1):
+            fh.write(f"{n}\n{_srt_time(a)} --> {_srt_time(b)}\n{text}\n\n")
+
+
+_CAPTION_FONTS = [  # (path, face index) — Unicode Burmese, bold first
+    ("/System/Library/Fonts/NotoSansMyanmar.ttc", 1),          # macOS: Bold
+    ("/usr/share/fonts/truetype/noto/NotoSansMyanmar-Bold.ttf", 0),
+    ("/usr/share/fonts/truetype/noto/NotoSansMyanmar-Regular.ttf", 0),
+    ("/usr/share/fonts/opentype/noto/NotoSansMyanmar-Bold.ttf", 0),
+    ("/System/Library/Fonts/Supplemental/Myanmar Sangam MN.ttc", 0),
+]
+
+
+def _caption_font(size):
+    from PIL import ImageFont, features
+    if not features.check("raqm"):
+        raise RuntimeError("Burmese captions need libraqm (macOS: brew install libraqm)")
+    forced = os.environ.get("DUBLAB_CAPTION_FONT")
+    for path, idx in ([(forced, 0)] if forced else []) + _CAPTION_FONTS:
+        if path and os.path.exists(path):
+            return ImageFont.truetype(path, size, index=idx,
+                                      layout_engine=ImageFont.Layout.RAQM)
+    raise RuntimeError("no Burmese font found (set DUBLAB_CAPTION_FONT)")
+
+
+# Burmese syllable start: a consonant/independent vowel not stacked under a
+# virama and not killed by an asat — safe places to break a long word.
+_MY_BREAK = re.compile(r"(?<!\u1039)(?=[\u1000-\u102A\u103F\u104C-\u104F](?![\u103A\u1039]))")
+
+
+def _split_wide(draw, word, font, max_w):
+    """Break one over-wide word at Burmese syllable starts (or characters)."""
+    parts = [p for p in _MY_BREAK.split(word) if p] or list(word)
+    if len(parts) == 1:
+        parts = list(word)
+    out, cur = [], ""
+    for p in parts:
+        if cur and draw.textlength(cur + p, font=font) > max_w:
+            out.append(cur)
+            cur = p
+        else:
+            cur += p
+    if cur:
+        out.append(cur)
+    return out
+
+
+def _wrap(draw, text, font, max_w):
+    """Greedy word wrap on spaces (Burmese phrases are space-separated);
+    words wider than a line are broken at syllable starts."""
+    words = []
+    for word in text.split():
+        if draw.textlength(word, font=font) > max_w:
+            words += _split_wide(draw, word, font, max_w)
+        else:
+            words.append(word)
+    lines, cur = [], ""
+    for word in words:
+        trial = f"{cur} {word}".strip()
+        if cur and draw.textlength(trial, font=font) > max_w:
+            lines.append(cur)
+            cur = word
+        else:
+            cur = trial
+    if cur:
+        lines.append(cur)
+    return lines or [""]
+
+
+def render_captions(cues, video_w, video_h, out_dir, size_pct=5.5):
+    """Draw each cue as a transparent PNG strip (white text, dark outline) and
+    write an ffconcat list that shows them at their times.
+    Returns (concat_list_path, strip_height)."""
+    from PIL import Image, ImageDraw
+    out_dir = Path(out_dir)
+    out_dir.mkdir(exist_ok=True)
+    fsize = max(14, int(video_h * size_pct / 100))
+    font = _caption_font(fsize)
+    stroke = max(2, fsize // 12)
+    line_h = int(fsize * 1.75)                 # Burmese stacks marks above/below
+    max_lines = 2
+    strip_h = line_h * max_lines + stroke * 2
+    max_w = int(video_w * 0.9)
+    probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+
+    blank = out_dir / "blank.png"
+    Image.new("RGBA", (video_w, strip_h), (0, 0, 0, 0)).save(blank)
+    # A long line becomes several captions shown one after another, each at
+    # most two lines, with the cue's time shared by text length.
+    pages = []
+    for a, b, text in cues:
+        lines = _wrap(probe, text, font, max_w)
+        groups = [lines[i:i + max_lines] for i in range(0, len(lines), max_lines)]
+        total = sum(len("".join(g)) for g in groups) or 1
+        t0 = a
+        for g in groups:
+            t1 = t0 + (b - a) * len("".join(g)) / total
+            pages.append((t0, t1, g))
+            t0 = t1
+
+    items, t = [], 0.0
+    for n, (a, b, lines) in enumerate(pages):
+        if b <= t:
+            continue
+        a = max(a, t)
+        if a > t + 0.01:
+            items.append((blank, a - t))
+        img = Image.new("RGBA", (video_w, strip_h), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        y = strip_h - stroke - line_h * len(lines)   # bottom-aligned
+        for ln in lines:
+            w = d.textlength(ln, font=font)
+            d.text(((video_w - w) / 2, y), ln, font=font, fill=(255, 255, 255, 255),
+                   stroke_width=stroke, stroke_fill=(0, 0, 0, 230))
+            y += line_h
+        p = out_dir / f"c{n}.png"
+        img.save(p)
+        items.append((p, b - a))
+        t = b
+    items.append((blank, 1.0))
+    lst = out_dir / "captions.txt"
+    with open(lst, "w") as fh:
+        fh.write("ffconcat version 1.0\n")
+        for p, dur in items:
+            fh.write(f"file '{p.name}'\nduration {dur:.3f}\n")
+        fh.write(f"file '{items[-1][0].name}'\n")   # concat needs the last file twice
+    return lst, strip_h
 
 
 def cleanup_segments(job_dir):
@@ -389,6 +531,8 @@ def cleanup_segments(job_dir):
         return 0
     d = Path(job_dir)
     removed = 0
+    import shutil as _sh
+    _sh.rmtree(d / "caps", ignore_errors=True)
     for pat in ("u*.mp3", "p*.wav", "outro.mp3"):
         for f in d.glob(pat):
             try:
@@ -458,7 +602,8 @@ def separate_music(src_video, job_dir):
     raise RuntimeError(f"music separation failed: {err}")
 
 
-def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None):
+def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
+        captions=None, blur=None):
     """Combine picture + dub track.
 
     bg_wav: music/effects with the original voices removed (separate_music).
@@ -468,6 +613,9 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None):
     voices are never mixed in.
     logo: optional dict(path=PNG, position="top-right"|"top-left"|
     "bottom-right"|"bottom-left", size=fraction of video width).
+    captions: optional dict(list=ffconcat file from render_captions, height=strip px).
+    blur: optional dict(bottom=fraction, height=fraction) — blurs a full-width
+    band (to hide burned-in original captions); captions are centred on it.
     """
     # Burned-in credit watermark, bottom-right; scale guard keeps even dims
     # for yuv420p.
@@ -500,16 +648,40 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None):
 
     logo_in = ["-i", str(logo["path"])] if logo else []
     logo_idx = 2 + (1 if bg_in else 0)
+    cap_in = ["-f", "concat", "-safe", "0", "-i", str(captions["list"])] if captions else []
+    cap_idx = logo_idx + (1 if logo else 0)
+    draw = bool(logo or captions or blur)
 
     def _cmd(copy_video, encoder="libx264"):
         if copy_video:   # nothing to draw: keep the original picture, no re-encode
             fc = ["-filter_complex", afc] if afc else []
             vid = ["-map", "0:v:0", "-c:v", "copy"]
         else:
-            if logo:
-                vfc = (f"[{logo_idx}:v]scale={lw}:-1,format=rgba[lg];"
-                       f"[0:v]{vf.replace(',format=yuv420p', '')}[base];"
-                       f"[base][lg]overlay={x}:{y},format=yuv420p[v]")
+            if draw:
+                parts = [f"[0:v]{vf.replace(',format=yuv420p', '')}[s0]"]
+                cur = "s0"
+                if blur:
+                    b0, bh = float(blur["bottom"]), float(blur["height"])
+                    by = f"ih*{1 - b0 - bh:.4f}"
+                    parts.append(f"[{cur}]split[bm][bb]")
+                    parts.append(f"[bb]crop=iw:ih*{bh:.4f}:0:{by},boxblur=luma_radius=18:luma_power=3[bz]")
+                    parts.append(f"[bm][bz]overlay=0:H*{1 - b0 - bh:.4f}[s1]")
+                    cur = "s1"
+                if logo:
+                    parts.append(f"[{logo_idx}:v]scale={lw}:-1,format=rgba[lg]")
+                    parts.append(f"[{cur}][lg]overlay={x}:{y}[s2]")
+                    cur = "s2"
+                if captions:
+                    ch = int(captions["height"])
+                    if blur:      # centre the text strip on the blurred band
+                        cy = f"H*{1 - b0 - bh / 2:.4f}-{ch // 2}"
+                    else:
+                        cy = f"H-{ch}-H*0.05"
+                    parts.append(f"[{cap_idx}:v]format=rgba[cp]")
+                    parts.append(f"[{cur}][cp]overlay=0:{cy}:eof_action=pass[s3]")
+                    cur = "s3"
+                parts.append(f"[{cur}]format=yuv420p[v]")
+                vfc = ";".join(parts)
             else:
                 vfc = f"[0:v]{vf}[v]"
             fc = ["-filter_complex", vfc + (";" + afc if afc else "")]
@@ -519,13 +691,13 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None):
                 enc = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
             vid = ["-map", "[v]", *enc]
         return ["ffmpeg", "-y", "-v", "error", "-i", str(src_video), "-i", str(dub_wav),
-                *bg_in, *logo_in, *fc, *vid, *amap, "-c:a", "aac", "-b:a", "128k",
+                *bg_in, *logo_in, *cap_in, *fc, *vid, *amap, "-c:a", "aac", "-b:a", "128k",
                 # No -shortest: the finish-the-sentence rule lets the tail of the
                 # last utterance run a little past the video end; -shortest would
                 # cut it off again.
                 "-movflags", "+faststart", str(out_mp4)]
 
-    if not watermark and not logo:
+    if not watermark and not draw:
         try:
             run(_cmd(copy_video=True))
             return
@@ -553,9 +725,14 @@ def _has_encoder(name):
 
 
 def _video_width(path):
+    return video_size(path)[0]
+
+
+def video_size(path):
     p = run(["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=width", "-of", "csv=p=0", str(path)])
-    return int(p.stdout.strip().split(",")[0])
+             "-show_entries", "stream=width,height", "-of", "csv=p=0", str(path)])
+    w, h = p.stdout.strip().split(",")[:2]
+    return int(w) // 2 * 2, int(h) // 2 * 2      # mux scales to even dims
 
 
 def normalize_logo(src, dst):

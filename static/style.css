@@ -141,3 +141,4 @@ textarea:focus{outline:none;border-color:var(--p1)}
 @keyframes ringspin{to{transform:rotate(270deg)}}
 @media (prefers-reduced-motion:reduce){.stages li.spin .ring svg{animation-duration:3s}}
 .opt-sub{font-size:11.5px;color:var(--dim);line-height:1.45;font-weight:400}
+.ghost.center{text-align:center;text-decoration:none;box-sizing:border-box}

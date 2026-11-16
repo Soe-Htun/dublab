@@ -43,3 +43,8 @@
 .setselect{background:rgba(255,255,255,.05);border:1px solid var(--card-br);border-radius:10px;color:var(--txt);padding:8px 10px;font:inherit;font-size:14px}
 .setselect option{background:#141420}
 #logosize{accent-color:var(--p1);width:140px}
+.blurprev{position:relative;width:100%;aspect-ratio:16/9;border-radius:10px;margin:4px 0 10px;overflow:hidden;
+  background:linear-gradient(135deg,#334,#556 50%,#443)}
+.blurband{position:absolute;left:0;right:0;background:rgba(255,255,255,.18);backdrop-filter:blur(3px);
+  border-top:1px dashed rgba(255,255,255,.5);border-bottom:1px dashed rgba(255,255,255,.5);display:flex;align-items:center;justify-content:center}
+.blurband span{font-size:12px;font-weight:700;color:#fff;text-shadow:0 0 3px #000}

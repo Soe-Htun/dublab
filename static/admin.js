@@ -97,6 +97,9 @@ async function loadSettings() {
     $('#logosize').value = j.logo_size;
     $('#logosizev').textContent = j.logo_size + '%';
     showLogo(j.has_logo);
+    [['capsize', j.caption_size], ['blurbottom', j.blur_bottom], ['blurheight', j.blur_height]]
+      .forEach(([id, v]) => { $('#' + id).value = v; $('#' + id + 'v').textContent = v + '%'; });
+    drawBlurPreview();
     $('#setnote').textContent = `🖴 Disk: ${j.disk_free_gb} GB လွတ်သေး / ${j.disk_total_gb} GB · ` +
       `jobs ဖိုင်တွေ ${j.jobs_gb} GB (၂၄ နာရီနေရင် အလိုလို ဖျက်တယ်) · ဖိုင်အရွယ်အစား အများဆုံး ${j.max_mb} MB (.env ထဲက DUBLAB_MAX_MB)`;
   } catch (e) { /* ignore */ }
@@ -108,7 +111,9 @@ $('#setsave').addEventListener('click', async () => {
     const r = await fetch('/admin/api/settings?key=' + encodeURIComponent(key), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ max_minutes: +$('#maxmin').value, outro: $('#outroin').value,
-        logo_position: $('#logopos').value, logo_size: +$('#logosize').value }),
+        logo_position: $('#logopos').value, logo_size: +$('#logosize').value,
+        caption_size: +$('#capsize').value, blur_bottom: +$('#blurbottom').value,
+        blur_height: +$('#blurheight').value }),
     });
     const j = await r.json().catch(() => ({}));
     msg.textContent = r.ok ? `✅ သိမ်းပြီးပြီ — ${j.max_minutes} မိနစ်အထိ လက်ခံမယ်` : (j.error || 'သိမ်းမရဘူး');
@@ -126,6 +131,15 @@ function showLogo(has) {
   img.hidden = !has; $('#logonone').hidden = has; $('#logodel').hidden = !has;
   if (has) img.src = '/admin/api/logo?key=' + encodeURIComponent(key) + '&t=' + Date.now();
 }
+function drawBlurPreview() {
+  const b = +$('#blurbottom').value, h = +$('#blurheight').value;
+  const band = $('#blurband');
+  band.style.bottom = b + '%'; band.style.height = h + '%';
+}
+['capsize', 'blurbottom', 'blurheight'].forEach((id) => $('#' + id).addEventListener('input', () => {
+  $('#' + id + 'v').textContent = $('#' + id).value + '%';
+  drawBlurPreview();
+}));
 $('#logosize').addEventListener('input', () => ($('#logosizev').textContent = $('#logosize').value + '%'));
 $('#logofile').addEventListener('change', async () => {
   const f = $('#logofile').files[0];

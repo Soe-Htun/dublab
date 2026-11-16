@@ -13,7 +13,7 @@ from pathlib import Path
 from flask import Flask, jsonify, render_template, request, send_file
 
 from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tts,
-                 normalize_logo,
+                 normalize_logo, render_captions, video_size, write_srt,
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
@@ -45,7 +45,11 @@ _settings = {"max_minutes": int(os.environ.get("DUBLAB_MAX_MINUTES") or 30),
              # spoken at the end of every dub (in the chosen voice); "" = off
              "outro": (os.environ.get("DUBLAB_OUTRO") or "").strip()[:OUTRO_MAX],
              "logo_position": "top-right",
-             "logo_size": 12}   # % of the video width
+             "logo_size": 12,   # % of the video width
+             # Burmese captions: text size (% of video height); blur band that
+             # hides burned-in original captions (% from bottom, % tall)
+             "caption_size": 5.5, "blur_bottom": 4, "blur_height": 16}
+_RANGES = {"caption_size": (3, 10), "blur_bottom": (0, 60), "blur_height": (4, 40)}
 try:
     _saved = json.loads(SETTINGS_FILE.read_text())
     if isinstance(_saved.get("max_minutes"), int) and 1 <= _saved["max_minutes"] <= MAX_MINUTES_LIMIT:
@@ -56,6 +60,9 @@ try:
         _settings["logo_position"] = _saved["logo_position"]
     if isinstance(_saved.get("logo_size"), int) and 5 <= _saved["logo_size"] <= 30:
         _settings["logo_size"] = _saved["logo_size"]
+    for _k, (_lo, _hi) in _RANGES.items():
+        if isinstance(_saved.get(_k), (int, float)) and _lo <= _saved[_k] <= _hi:
+            _settings[_k] = _saved[_k]
 except (OSError, ValueError, AttributeError):
     pass
 
@@ -304,7 +311,8 @@ def _voice_and_mux(job):
     outro = _settings["outro"] if job.get("outro") else ""
     if outro:
         jlog(job, f"adding outro: {outro}")
-    dub_wav = build_dub_track(utter, voice_name, d, job["total"], tts_prog, outro or None)
+    dub_wav, cues = build_dub_track(utter, voice_name, d, job["total"], tts_prog, outro or None)
+    write_srt(cues, d / "captions.srt")          # always offered as a download
 
     job.update(stage="mux", pct=93)
     jlog(job, "muxing dubbed audio with video…")
@@ -313,7 +321,21 @@ def _voice_and_mux(job):
         logo = {"path": LOGO_FILE, "position": _settings["logo_position"],
                 "size": _settings["logo_size"] / 100}
         jlog(job, f"adding logo ({_settings['logo_position']}, {_settings['logo_size']}%)")
-    mux(src, dub_wav, d / "dubbed.mp4", bg_wav=bg_wav, bg_volume=BG_VOLUME, logo=logo)
+    captions = blur = None
+    if job.get("blur"):
+        blur = {"bottom": _settings["blur_bottom"] / 100, "height": _settings["blur_height"] / 100}
+        jlog(job, f"blurring original captions (bottom {_settings['blur_bottom']}%, "
+                  f"{_settings['blur_height']}% tall)")
+    if job.get("captions"):
+        try:
+            vw, vh = video_size(src)
+            lst, strip_h = render_captions(cues, vw, vh, d / "caps", _settings["caption_size"])
+            captions = {"list": lst, "height": strip_h}
+            jlog(job, f"burning {len(cues)} Burmese captions")
+        except Exception as e:  # noqa: BLE001 - never lose the dub over captions
+            jlog(job, f"captions skipped: {e}")
+    mux(src, dub_wav, d / "dubbed.mp4", bg_wav=bg_wav, bg_volume=BG_VOLUME, logo=logo,
+        captions=captions, blur=blur)
     shutil.rmtree(d / "sep", ignore_errors=True)
     cleanup_segments(d)
     (d / "dub.wav").unlink(missing_ok=True)
@@ -392,6 +414,8 @@ def create_job():
     keep_bg = request.form.get("keep_bg", "0") == "1"
     outro = request.form.get("outro", "1") == "1"
     logo = request.form.get("logo", "1") == "1"
+    captions = request.form.get("captions", "1") == "1"
+    blur = request.form.get("blur", "0") == "1"
     model = request.form.get("model") or default_whisper_model()
     if model not in WHISPER_MODELS:
         model = default_whisper_model()
@@ -440,6 +464,7 @@ def create_job():
                  "dir": d, "ext": ext, "direction": direction, "url": url,
                  "voice": voice, "review": review, "keep_bg": keep_bg, "phase": 1,
                  "model": model, "outro": outro, "logo": logo,
+                 "captions": captions, "blur": blur,
                  "created": time.time()}
     jlog(jobs[jid], "uploaded " + re.sub(r"[\r\n]", " ", label)[:160])
     with lock:
@@ -616,7 +641,8 @@ def admin_get_settings():
     return jsonify(max_minutes=max_minutes(), max_minutes_limit=MAX_MINUTES_LIMIT,
                    max_mb=max_mb(), outro=_settings["outro"], outro_max=OUTRO_MAX,
                    has_logo=LOGO_FILE.exists(), logo_position=_settings["logo_position"],
-                   logo_size=_settings["logo_size"],
+                   logo_size=_settings["logo_size"], caption_size=_settings["caption_size"],
+                   blur_bottom=_settings["blur_bottom"], blur_height=_settings["blur_height"],
                    disk_free_gb=round(du.free / 1e9, 1), disk_total_gb=round(du.total / 1e9, 1),
                    jobs_gb=round(jobs_bytes / 1e9, 2))
 
@@ -642,6 +668,12 @@ def admin_set_settings():
             _settings["logo_size"] = max(5, min(30, int(data["logo_size"])))
         except (TypeError, ValueError):
             pass
+    for k, (lo, hi) in _RANGES.items():
+        if k in data:
+            try:
+                _settings[k] = max(lo, min(hi, round(float(data[k]), 1)))
+            except (TypeError, ValueError):
+                pass
     try:
         SETTINGS_FILE.write_text(json.dumps(_settings, ensure_ascii=False))
     except OSError:
@@ -706,6 +738,15 @@ def admin_del_review(rid):
     except OSError:
         return jsonify(error="write failed"), 500
     return jsonify(ok=True)
+
+
+@app.get("/r/<jid>.srt")
+def result_srt(jid):
+    job = jobs.get(jid)
+    if not job or job["status"] != "done" or not (job["dir"] / "captions.srt").exists():
+        return jsonify(error="မရှိဘူး"), 404
+    return send_file(job["dir"] / "captions.srt", as_attachment=True,
+                     download_name="dublab-burmese.srt", mimetype="application/x-subrip")
 
 
 @app.get("/r/<jid>")

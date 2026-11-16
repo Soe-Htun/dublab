@@ -72,6 +72,8 @@ $('#go').addEventListener('click', () => {
   fd.append('model', model);
   fd.append('outro', $('#outrochk') && $('#outrochk').checked ? '1' : '0');
   fd.append('logo', $('#logochk') && $('#logochk').checked ? '1' : '0');
+  fd.append('captions', $('#capchk').checked ? '1' : '0');
+  fd.append('blur', $('#blurchk').checked ? '1' : '0');
   // NOTE: iOS Safari's fetch() throws "The string did not match the expected
   // pattern" on FormData POST uploads (WebKit bug) — XHR works reliably.
   const xhr = new XMLHttpRequest();
@@ -215,6 +217,7 @@ function showResult(jid) {
   $('#resultvideo').src = '/r/' + jid;
   setSpeed(1);
   $('#download').href = '/r/' + jid;
+  $('#dlsrt').href = '/r/' + jid + '.srt';
   $('#card-result').scrollIntoView({ behavior: 'smooth' });
 }
 
