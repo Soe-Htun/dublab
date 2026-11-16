@@ -16,7 +16,9 @@ body{
 .o1{width:340px;height:340px;background:#7c3aed;top:-90px;left:-90px}
 .o2{width:300px;height:300px;background:#0ea5e9;top:30%;right:-110px}
 .o3{width:260px;height:260px;background:#d946ef;bottom:-80px;left:20%}
-.top{text-align:center;padding:34px 0 18px}
+.top{text-align:center;padding:34px 0 18px;position:relative}
+.gear{position:absolute;top:18px;right:0;display:grid;place-items:center;width:42px;height:42px;border-radius:12px;color:var(--dim);background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);transition:color .2s,border-color .2s}
+.gear:hover{color:var(--txt);border-color:rgba(255,255,255,.2)}
 .logo{display:inline-flex;align-items:center;gap:10px}
 .logo-mark{width:44px;height:44px;border-radius:14px;background:var(--grad);
   display:flex;align-items:center;justify-content:center;
