@@ -122,6 +122,7 @@ All configuration is via environment variables (see `.env.example`):
 |---|---|---|
 | `GEMINI_API_KEY` | ✅ | Translation (and TTS fallback if no TTS keys set) |
 | `GEMINI_TTS_API_KEYS` | — | Comma-separated keys for Gemini TTS rotation |
+| `DUBLAB_CHANNEL_NAME` | Marco Recap | Your channel name: the translator puts it in place of the original creator's channel name, and the outro is skipped when the video already ends with that shout-out (editable on the admin page) |
 | `DUBLAB_OUTRO` | — | Default closing line spoken at the end of every dub (editable on the admin page); empty = none |
 | `DUBLAB_MAIL_TO` | — | E-mail address that receives every new review/feedback |
 | `DUBLAB_SMTP_USER` / `DUBLAB_SMTP_PASSWORD` | — | SMTP login for sending it (Gmail: address + [App Password](https://myaccount.google.com/apppasswords)); `DUBLAB_SMTP_HOST` / `DUBLAB_SMTP_PORT` default to Gmail SSL |

@@ -93,6 +93,7 @@ async function loadSettings() {
     $('#maxmin').value = j.max_minutes;
     $('#maxmin').max = j.max_minutes_limit;
     $('#outroin').value = j.outro || '';
+    $('#chanin').value = j.channel_name || '';
     $('#logopos').value = j.logo_position;
     $('#logosize').value = j.logo_size;
     $('#logosizev').textContent = j.logo_size + '%';
@@ -110,7 +111,7 @@ $('#setsave').addEventListener('click', async () => {
   try {
     const r = await fetch('/admin/api/settings?key=' + encodeURIComponent(key), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ max_minutes: +$('#maxmin').value, outro: $('#outroin').value,
+      body: JSON.stringify({ max_minutes: +$('#maxmin').value, outro: $('#outroin').value, channel_name: $('#chanin').value,
         logo_position: $('#logopos').value, logo_size: +$('#logosize').value,
         caption_size: +$('#capsize').value, caption_bottom: +$('#capbottom').value, blur_bottom: +$('#blurbottom').value,
         blur_height: +$('#blurheight').value }),

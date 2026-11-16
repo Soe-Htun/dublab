@@ -32,6 +32,7 @@
 .setinput{display:flex;align-items:center;gap:8px;color:var(--dim)}
 .setinput input{width:90px;background:rgba(255,255,255,.05);border:1px solid var(--card-br);border-radius:10px;
   color:var(--txt);padding:8px 10px;font:inherit;font-size:15px;text-align:right}
+.setinput input[type=text]{width:170px;text-align:left}
 .setinput input:focus{outline:none;border-color:var(--p1)}
 .setcol{display:flex;flex-direction:column;gap:6px;font-size:14px;margin:6px 0 8px}
 .logorow{display:flex;align-items:center;gap:12px}

@@ -96,14 +96,22 @@ def _call(prompt, api_key):
     raise RuntimeError("gemini unreachable")
 
 
-def translate_lines(lines, direction, api_key, src_lang_name=None):
+CHANNEL_RULE = """
+- CHANNEL NAME: this dub is published on the channel "{channel}". Whenever a line names the original creator's channel or brand (e.g. "subscribe to Filmyvia Recaps", "welcome back to X", "follow X for more"), write "{channel}" instead of that name, keeping it in Latin letters exactly as given. Never mention any other channel's name."""
+
+
+def translate_lines(lines, direction, api_key, src_lang_name=None, channel=None):
     """lines: [str] -> [translated str], same order.
 
-    direction "any2mm" translates from src_lang_name (e.g. "Japanese")."""
+    direction "any2mm" translates from src_lang_name (e.g. "Japanese").
+    channel: the owner's channel name, swapped in for the original creator's."""
     if direction == "any2mm":
         prompt = PROMPT_ANY2MM.format(lang=src_lang_name or "the original")
     else:
         prompt = PROMPTS[direction]
+    if channel:
+        head, sep, tail = prompt.partition("\n- Output format:")
+        prompt = head + CHANNEL_RULE.format(channel=channel) + sep + tail
     def _chunk(start):
         chunk = lines[start:start + CHUNK]
         numbered = "\n".join(f"{i + 1}|||{t}" for i, t in enumerate(chunk))

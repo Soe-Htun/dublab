@@ -39,6 +39,7 @@ JOBS.mkdir(exist_ok=True)
 SETTINGS_FILE = BASE / "settings.json"
 MAX_MINUTES_LIMIT = 180
 OUTRO_MAX = 200   # chars
+CHANNEL_MAX = 60
 # channel logo burned into the video corner (uploaded on the admin page)
 BRAND_DIR = BASE / "brand"
 LOGO_FILE = BRAND_DIR / "logo.png"
@@ -46,6 +47,8 @@ LOGO_POSITIONS = ("top-right", "top-left", "bottom-right", "bottom-left")
 _settings = {"max_minutes": int(os.environ.get("DUBLAB_MAX_MINUTES") or 30),
              # spoken at the end of every dub (in the chosen voice); "" = off
              "outro": (os.environ.get("DUBLAB_OUTRO") or "").strip()[:OUTRO_MAX],
+             # the owner's channel: replaces other channels' names in the dub
+             "channel_name": (os.environ.get("DUBLAB_CHANNEL_NAME") or "Marco Recap").strip()[:CHANNEL_MAX],
              "logo_position": "top-right",
              "logo_size": 12,   # % of the video width
              # Burmese captions: text size (% of video height); blur band that
@@ -59,6 +62,8 @@ try:
         _settings["max_minutes"] = _saved["max_minutes"]
     if isinstance(_saved.get("outro"), str):
         _settings["outro"] = _saved["outro"].strip()[:OUTRO_MAX]
+    if isinstance(_saved.get("channel_name"), str):
+        _settings["channel_name"] = _saved["channel_name"].strip()[:CHANNEL_MAX]
     if _saved.get("logo_position") in LOGO_POSITIONS:
         _settings["logo_position"] = _saved["logo_position"]
     if isinstance(_saved.get("logo_size"), int) and 5 <= _saved["logo_size"] <= 30:
@@ -286,12 +291,23 @@ def _transcribe_and_translate(jid, job):
     job.update(stage="translate", pct=45)
     jlog(job, "translating with gemini…")
     texts = translate_lines([u["text"] for u in utter], direction, api_key,
-                            LANG_NAMES.get(lang, lang))
+                            LANG_NAMES.get(lang, lang), _settings["channel_name"] or None)
     for u, t in zip(utter, texts):
         u["orig"] = u["text"]
         u["text"] = t or u["text"]
     job["utter"] = utter
     jlog(job, f"translated {len(texts)} lines")
+
+
+def _ends_with_channel_promo(utter, total):
+    """True when the last minute or so already names the owner's channel
+    (the translator swapped it in for the original creator's sign-off)."""
+    name = (_settings["channel_name"] or "").casefold()
+    if not name:
+        return False
+    tail_from = max(0.0, total - max(60.0, total * 0.1))
+    return any(name in (u.get("text") or "").casefold()
+               for u in utter if u["end"] >= tail_from)
 
 
 def _voice_and_mux(job):
@@ -315,6 +331,9 @@ def _voice_and_mux(job):
         if i % 5 == 0 or i == n:
             jlog(job, f"tts {i}/{n}")
     outro = _settings["outro"] if job.get("outro") else ""
+    if outro and _ends_with_channel_promo(utter, job["total"]):
+        jlog(job, "video already ends with a channel shout-out — outro skipped")
+        outro = ""
     if outro:
         jlog(job, f"adding outro: {outro}")
     dub_wav, cues = build_dub_track(utter, voice_name, d, job["total"], tts_prog, outro or None)
@@ -655,6 +674,7 @@ def admin_get_settings():
     jobs_bytes = sum(f.stat().st_size for f in JOBS.rglob("*") if f.is_file())
     return jsonify(max_minutes=max_minutes(), max_minutes_limit=MAX_MINUTES_LIMIT,
                    max_mb=max_mb(), outro=_settings["outro"], outro_max=OUTRO_MAX,
+                   channel_name=_settings["channel_name"],
                    has_logo=LOGO_FILE.exists(), logo_position=_settings["logo_position"],
                    logo_size=_settings["logo_size"], caption_size=_settings["caption_size"],
                    caption_bottom=_settings["caption_bottom"],
@@ -677,6 +697,8 @@ def admin_set_settings():
     _settings["max_minutes"] = mins
     if "outro" in data:
         _settings["outro"] = re.sub(r"\s+", " ", str(data.get("outro") or "")).strip()[:OUTRO_MAX]
+    if "channel_name" in data:
+        _settings["channel_name"] = re.sub(r"\s+", " ", str(data.get("channel_name") or "")).strip()[:CHANNEL_MAX]
     if data.get("logo_position") in LOGO_POSITIONS:
         _settings["logo_position"] = data["logo_position"]
     if "logo_size" in data:
