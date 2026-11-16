@@ -460,7 +460,8 @@ def _wrap(draw, text, font, max_w):
 
 
 def render_captions(cues, video_w, video_h, out_dir, size_pct=5.5):
-    """Draw each cue as a transparent PNG strip (white text, dark outline) and
+    """Draw each cue as a transparent PNG strip (white text on a translucent
+    dark box, like YouTube captions) and
     write an ffconcat list that shows them at their times.
     Returns (concat_list_path, strip_height)."""
     from PIL import Image, ImageDraw
@@ -468,11 +469,12 @@ def render_captions(cues, video_w, video_h, out_dir, size_pct=5.5):
     out_dir.mkdir(exist_ok=True)
     fsize = max(14, int(video_h * size_pct / 100))
     font = _caption_font(fsize)
-    stroke = max(2, fsize // 12)
+    stroke = max(1, fsize // 24)               # thin edge; the box does the work
     line_h = int(fsize * 1.75)                 # Burmese stacks marks above/below
     max_lines = 2
-    strip_h = line_h * max_lines + stroke * 2
-    max_w = int(video_w * 0.9)
+    pad_x, pad_y = int(fsize * 0.6), int(fsize * 0.3)
+    strip_h = line_h * max_lines + pad_y * 4
+    max_w = int(video_w * 0.9) - pad_x * 2
     probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
 
     blank = out_dir / "blank.png"
@@ -499,12 +501,30 @@ def render_captions(cues, video_w, video_h, out_dir, size_pct=5.5):
             items.append((blank, a - t))
         img = Image.new("RGBA", (video_w, strip_h), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
-        y = strip_h - stroke - line_h * len(lines)   # bottom-aligned
+        y0 = strip_h - pad_y - line_h * len(lines)   # bottom-aligned
+        placed, y = [], y0
         for ln in lines:
             w = d.textlength(ln, font=font)
-            d.text(((video_w - w) / 2, y), ln, font=font, fill=(255, 255, 255, 255),
-                   stroke_width=stroke, stroke_fill=(0, 0, 0, 230))
+            placed.append(((video_w - w) / 2, y, ln))
             y += line_h
+        # translucent box around the real ink of the text block
+        boxes = [d.textbbox((x, yy), ln, font=font) for x, yy, ln in placed]
+        top = min(b[1] for b in boxes) - pad_y
+        bot = max(b[3] for b in boxes) + pad_y
+        dy = strip_h - 1 - bot                 # sit the box on the strip's bottom edge
+        placed = [(x, yy + dy, ln) for x, yy, ln in placed]
+        top, bot = top + dy, bot + dy
+        left = min(b[0] for b in boxes) - pad_x
+        right = max(b[2] for b in boxes) + pad_x
+        box = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        ImageDraw.Draw(box).rounded_rectangle(
+            (max(0, left), max(0, top), min(video_w, right), min(strip_h, bot)),
+            radius=int(fsize * 0.25), fill=(8, 8, 8, 185))
+        img = Image.alpha_composite(img, box)
+        d = ImageDraw.Draw(img)
+        for x, yy, ln in placed:
+            d.text((x, yy), ln, font=font, fill=(255, 255, 255, 255),
+                   stroke_width=stroke, stroke_fill=(0, 0, 0, 200))
         p = out_dir / f"c{n}.png"
         img.save(p)
         items.append((p, b - a))
