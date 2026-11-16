@@ -97,7 +97,7 @@ async function loadSettings() {
     $('#logosize').value = j.logo_size;
     $('#logosizev').textContent = j.logo_size + '%';
     showLogo(j.has_logo);
-    [['capsize', j.caption_size], ['blurbottom', j.blur_bottom], ['blurheight', j.blur_height]]
+    [['capsize', j.caption_size], ['capbottom', j.caption_bottom], ['blurbottom', j.blur_bottom], ['blurheight', j.blur_height]]
       .forEach(([id, v]) => { $('#' + id).value = v; $('#' + id + 'v').textContent = v + '%'; });
     drawBlurPreview();
     $('#setnote').textContent = `🖴 Disk: ${j.disk_free_gb} GB လွတ်သေး / ${j.disk_total_gb} GB · ` +
@@ -112,7 +112,7 @@ $('#setsave').addEventListener('click', async () => {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ max_minutes: +$('#maxmin').value, outro: $('#outroin').value,
         logo_position: $('#logopos').value, logo_size: +$('#logosize').value,
-        caption_size: +$('#capsize').value, blur_bottom: +$('#blurbottom').value,
+        caption_size: +$('#capsize').value, caption_bottom: +$('#capbottom').value, blur_bottom: +$('#blurbottom').value,
         blur_height: +$('#blurheight').value }),
     });
     const j = await r.json().catch(() => ({}));
@@ -136,7 +136,7 @@ function drawBlurPreview() {
   const band = $('#blurband');
   band.style.bottom = b + '%'; band.style.height = h + '%';
 }
-['capsize', 'blurbottom', 'blurheight'].forEach((id) => $('#' + id).addEventListener('input', () => {
+['capsize', 'capbottom', 'blurbottom', 'blurheight'].forEach((id) => $('#' + id).addEventListener('input', () => {
   $('#' + id + 'v').textContent = $('#' + id).value + '%';
   drawBlurPreview();
 }));
@@ -157,6 +157,32 @@ $('#logodel').addEventListener('click', async () => {
   const r = await fetch('/admin/api/logo?key=' + encodeURIComponent(key), { method: 'DELETE' });
   if (r.ok) showLogo(false);
 });
+
+// ---- Telegram ----
+async function loadTelegram() {
+  let st = {};
+  try { st = await (await fetch('/api/telegram?key=' + encodeURIComponent(key))).json(); } catch (e) { return; }
+  $('#tg-off').hidden = !!st.configured; $('#tg-on').hidden = !st.configured;
+  if (!st.configured) return;
+  $('#tg-bot').textContent = st.bot ? '@' + st.bot.username : (st.error || '–');
+  $('#tg-chat').textContent = st.connected ? st.chat : 'မချိတ်ရသေးဘူး';
+  $('#tg-help').hidden = !!st.connected;
+  $('#tg-connect').textContent = st.connected ? '🔄 Reconnect' : '🔗 Connect';
+  $('#tg-disconnect').hidden = !st.connected;
+}
+async function tgAction(path) {
+  const msg = $('#tg-msg');
+  try {
+    const r = await fetch(path + '?key=' + encodeURIComponent(key), { method: 'POST' });
+    const j = await r.json().catch(() => ({}));
+    msg.textContent = r.ok ? (j.chat ? `✅ ${j.chat} နဲ့ ချိတ်ပြီးပြီ — Telegram မှာ စမ်းသပ်စာ ပို့ထားတယ်` : '✅ ဖြုတ်ပြီးပြီ') : ('⚠️ ' + (j.error || 'မရဘူး'));
+  } catch (e) { msg.textContent = '⚠️ မရဘူး'; }
+  msg.hidden = false;
+  loadTelegram();
+}
+$('#tg-connect').addEventListener('click', () => tgAction('/api/telegram/connect'));
+$('#tg-disconnect').addEventListener('click', () => { if (confirm('Telegram ကို ဖြုတ်မလား?')) tgAction('/api/telegram/disconnect'); });
+loadTelegram();
 
 load();
 setInterval(() => { if (!document.hidden) load(); }, 30000);

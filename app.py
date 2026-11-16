@@ -10,9 +10,9 @@ import uuid
 from collections import deque
 from pathlib import Path
 
-from flask import Flask, jsonify, redirect, render_template, request, send_file
+from flask import Flask, jsonify, render_template, request, send_file
 
-import tiktok
+import telegram
 
 from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tts,
                  normalize_logo, render_captions, video_size, write_srt,
@@ -50,8 +50,9 @@ _settings = {"max_minutes": int(os.environ.get("DUBLAB_MAX_MINUTES") or 30),
              "logo_size": 12,   # % of the video width
              # Burmese captions: text size (% of video height); blur band that
              # hides burned-in original captions (% from bottom, % tall)
-             "caption_size": 5.5, "blur_bottom": 4, "blur_height": 16}
-_RANGES = {"caption_size": (3, 10), "blur_bottom": (0, 60), "blur_height": (4, 40)}
+             "caption_size": 5.5, "caption_bottom": 8, "blur_bottom": 4, "blur_height": 16}
+_RANGES = {"caption_size": (3, 10), "caption_bottom": (0, 40),
+           "blur_bottom": (0, 60), "blur_height": (4, 40)}
 try:
     _saved = json.loads(SETTINGS_FILE.read_text())
     if isinstance(_saved.get("max_minutes"), int) and 1 <= _saved["max_minutes"] <= MAX_MINUTES_LIMIT:
@@ -65,6 +66,9 @@ try:
     for _k, (_lo, _hi) in _RANGES.items():
         if isinstance(_saved.get(_k), (int, float)) and _lo <= _saved[_k] <= _hi:
             _settings[_k] = _saved[_k]
+    if isinstance(_saved.get("telegram_chat_id"), int):
+        _settings["telegram_chat_id"] = _saved["telegram_chat_id"]
+        _settings["telegram_chat_name"] = str(_saved.get("telegram_chat_name") or "")[:80]
 except (OSError, ValueError, AttributeError):
     pass
 
@@ -332,7 +336,8 @@ def _voice_and_mux(job):
         try:
             vw, vh = video_size(src)
             lst, strip_h = render_captions(cues, vw, vh, d / "caps", _settings["caption_size"])
-            captions = {"list": lst, "height": strip_h}
+            captions = {"list": lst, "height": strip_h,
+                        "bottom": _settings["caption_bottom"] / 100}
             jlog(job, f"burning {len(cues)} Burmese captions")
         except Exception as e:  # noqa: BLE001 - never lose the dub over captions
             jlog(job, f"captions skipped: {e}")
@@ -347,6 +352,8 @@ def _voice_and_mux(job):
 
     job.update(status="done", stage="done", pct=100)
     jlog(job, "done ✅")
+    if job.get("telegram"):
+        threading.Thread(target=_telegram_send, args=(job,), daemon=True).start()
 
 
 def _stay_awake():
@@ -416,6 +423,7 @@ def create_job():
     keep_bg = request.form.get("keep_bg", "0") == "1"
     outro = request.form.get("outro", "1") == "1"
     logo = request.form.get("logo", "1") == "1"
+    send_tg = request.form.get("telegram") == "1" and _admin_ok() and telegram.configured()
     captions = request.form.get("captions", "1") == "1"
     blur = request.form.get("blur", "0") == "1"
     model = request.form.get("model") or default_whisper_model()
@@ -438,6 +446,7 @@ def create_job():
         if dur > max_sec:
             return jsonify(error=too_long), 400
         ext, label = ".mp4", f"{title} · {url}"
+        name = title
     else:
         if not f or not f.filename:
             return jsonify(error="ဗီဒီယိုဖိုင် ရွေးပေးပါ"), 400
@@ -457,6 +466,7 @@ def create_job():
             if not has_video_stream(src):
                 raise ValueError("ဗီဒီယိုဖိုင် မဟုတ်ဘူး")
             label = f"{f.filename} ({src.stat().st_size / 1048576:.1f} MB)"
+            name = os.path.splitext(os.path.basename(f.filename))[0]
     except Exception as e:  # noqa: BLE001
         shutil.rmtree(d, ignore_errors=True)
         if isinstance(e, ValueError):
@@ -465,7 +475,8 @@ def create_job():
     jobs[jid] = {"status": "queued", "stage": "queue", "pct": 0, "error": "",
                  "dir": d, "ext": ext, "direction": direction, "url": url,
                  "voice": voice, "review": review, "keep_bg": keep_bg, "phase": 1,
-                 "model": model, "outro": outro, "logo": logo,
+                 "model": model, "outro": outro, "logo": logo, "name": name,
+                 "id": jid, "telegram": send_tg,
                  "captions": captions, "blur": blur,
                  "created": time.time()}
     jlog(jobs[jid], "uploaded " + re.sub(r"[\r\n]", " ", label)[:160])
@@ -646,6 +657,7 @@ def admin_get_settings():
                    max_mb=max_mb(), outro=_settings["outro"], outro_max=OUTRO_MAX,
                    has_logo=LOGO_FILE.exists(), logo_position=_settings["logo_position"],
                    logo_size=_settings["logo_size"], caption_size=_settings["caption_size"],
+                   caption_bottom=_settings["caption_bottom"],
                    blur_bottom=_settings["blur_bottom"], blur_height=_settings["blur_height"],
                    disk_free_gb=round(du.free / 1e9, 1), disk_total_gb=round(du.total / 1e9, 1),
                    jobs_gb=round(jobs_bytes / 1e9, 2))
@@ -744,8 +756,7 @@ def admin_del_review(rid):
     return jsonify(ok=True)
 
 
-# ---------------- legal pages + TikTok URL verification ----------------
-VERIFY_DIR = BASE / "verify"   # drop TikTok's tiktok*.txt verification files here
+# ---------------- legal pages ----------------
 
 
 def _contact_email():
@@ -764,124 +775,124 @@ def privacy():
                            app_name=os.environ.get("DUBLAB_APP_NAME") or "DubLab")
 
 
-@app.get("/<fname>.txt")
-def verify_file(fname):
-    if not re.fullmatch(r"tiktok[A-Za-z0-9_-]{1,80}", fname):
-        return "not found", 404
-    p = VERIFY_DIR / f"{fname}.txt"
-    if not p.exists():
-        return "not found", 404
-    return send_file(p, mimetype="text/plain", max_age=0)
+# ---------------- Telegram: send finished dubs to the owner's bot ----------------
+def _public_url():
+    url = (os.environ.get("PUBLIC_URL") or "").strip().rstrip("/")
+    if not url and os.environ.get("NGROK_DOMAIN"):
+        url = "https://" + os.environ["NGROK_DOMAIN"].strip()
+    return url
 
 
-# ---------------- TikTok: connect account + post ----------------
-@app.get("/api/tiktok")
-def tiktok_state():
-    if not tiktok.configured():
+@app.get("/api/telegram")
+def telegram_state():
+    if not telegram.configured():
         return jsonify(configured=False)
     if not _admin_ok():
         return jsonify(configured=True, authorized=False)
     try:
-        user = tiktok.user_info()
-    except tiktok.TikTokError:
-        user = None
-    return jsonify(configured=True, authorized=True, connected=bool(user), user=user)
+        bot = telegram.bot_info()
+    except telegram.TelegramError as e:
+        return jsonify(configured=True, authorized=True, connected=False, error=str(e))
+    return jsonify(configured=True, authorized=True, bot=bot,
+                   connected=bool(_settings.get("telegram_chat_id")),
+                   chat=_settings.get("telegram_chat_name", ""))
 
 
-@app.get("/tiktok/login")
-def tiktok_login():
-    if not tiktok.configured() or not _admin_ok():
-        return "not found", 404
-    return redirect(tiktok.auth_url())
+def _save_settings():
+    try:
+        SETTINGS_FILE.write_text(json.dumps(_settings, ensure_ascii=False))
+    except OSError:
+        pass
 
 
-@app.get("/tiktok/callback")
-def tiktok_callback():
-    err = request.args.get("error")
-    if err:
-        msg = f"TikTok login cancelled ({err})"
-    else:
-        try:
-            tiktok.finish_login(request.args.get("code", ""), request.args.get("state", ""))
-            msg = ""
-        except tiktok.TikTokError as e:
-            msg = str(e)
-    return render_template("tiktok_done.html", error=msg)
+@app.post("/api/telegram/connect")
+def telegram_connect():
+    if not _admin_ok() or not telegram.configured():
+        return jsonify(error="not found"), 404
+    try:
+        chat_id, name = telegram.find_chat()
+        telegram.send_message(chat_id, "✅ DubLab connected — finished dubs will be sent here.")
+    except telegram.TelegramError as e:
+        return jsonify(error=str(e)), 400
+    _settings.update(telegram_chat_id=chat_id, telegram_chat_name=name)
+    _save_settings()
+    return jsonify(ok=True, chat=name)
 
 
-@app.post("/api/tiktok/disconnect")
-def tiktok_disconnect():
+@app.post("/api/telegram/disconnect")
+def telegram_disconnect():
     if not _admin_ok():
         return jsonify(error="not found"), 404
-    tiktok.disconnect()
+    _settings.pop("telegram_chat_id", None)
+    _settings.pop("telegram_chat_name", None)
+    _save_settings()
     return jsonify(ok=True)
 
 
-@app.get("/api/tiktok/creator")
-def tiktok_creator():
-    if not _admin_ok():
-        return jsonify(error="not found"), 404
+def _telegram_send(job):
+    tg = job["tg"] = {"state": "sending", "error": ""}
     try:
-        return jsonify(tiktok.creator_info())
-    except tiktok.TikTokError as e:
-        return jsonify(error=str(e)), 400
-
-
-def _tiktok_upload(job, opts):
-    tt = job["tiktok"]
-    try:
-        jlog(job, f"TikTok upload started ({opts['mode']})")
-        def prog(i, n):
-            tt["progress"] = int(100 * i / n)
-        tt["publish_id"] = tiktok.upload(job["dir"] / "dubbed.mp4", progress=prog, **opts)
-        tt["state"] = "processing"
-        for _ in range(120):                       # up to ~10 minutes
-            time.sleep(5)
-            st = tiktok.status(tt["publish_id"])
-            tt["tiktok_status"] = st.get("status", "")
-            if st.get("status") in ("PUBLISH_COMPLETE", "SEND_TO_USER_INBOX"):
-                tt["state"] = "done"
-                jlog(job, f"TikTok: {st.get('status')}")
-                return
-            if st.get("status") == "FAILED":
-                raise tiktok.TikTokError(st.get("fail_reason") or "TikTok processing failed")
-        tt["state"] = "done"   # still processing on TikTok's side; it will finish there
+        chat = _settings.get("telegram_chat_id")
+        if not chat:
+            raise telegram.TelegramError("Telegram not connected (admin page → Telegram)")
+        video = job["dir"] / "dubbed.mp4"
+        name = _download_name(job, ".mp4")
+        size_mb = video.stat().st_size / 1048576
+        jlog(job, f"sending to Telegram ({size_mb:.0f} MB)…")
+        if video.stat().st_size <= telegram.MAX_UPLOAD:
+            telegram.send_file(chat, video, name, caption=f"🎬 {name[:-4]}")
+            tg["how"] = "file"
+        else:
+            link = _public_url()
+            if link:
+                text = (f"🎬 {name[:-4]}\n⬇️ {link}/r/{job['id']}\n"
+                        f"({size_mb:.0f} MB — Telegram bot can send files up to 50 MB, "
+                        f"so here is the download link; it works for 24 hours)")
+            else:
+                text = (f"🎬 {name[:-4]} is ready ({size_mb:.0f} MB) — too big for a Telegram "
+                        f"bot (50 MB limit); download it from DubLab.")
+            telegram.send_message(chat, text)
+            tg["how"] = "link"
+        srt = job["dir"] / "captions.srt"
+        if srt.exists():
+            telegram.send_file(chat, srt, _download_name(job, ".srt"), kind="document")
+        tg["state"] = "done"
+        jlog(job, f"sent to Telegram ({tg['how']})")
     except Exception as e:  # noqa: BLE001 - shown in the UI
-        tt.update(state="failed", error=str(e)[:300])
-        jlog(job, f"TikTok upload failed: {e}")
+        tg.update(state="failed", error=str(e)[:300])
+        jlog(job, f"Telegram send failed: {e}")
 
 
-@app.post("/api/jobs/<jid>/tiktok")
-def tiktok_post(jid):
+@app.post("/api/jobs/<jid>/telegram")
+def telegram_send(jid):
     if not _admin_ok():
         return jsonify(error="admin password လိုတယ်"), 403
     job = jobs.get(jid)
     if not job or job["status"] != "done":
         return jsonify(error="ဗီဒီယို အဆင်သင့် မဖြစ်သေးဘူး"), 404
-    if job.get("tiktok", {}).get("state") in ("uploading", "processing"):
-        return jsonify(error="တင်နေဆဲပါ"), 409
-    d = request.get_json(force=True, silent=True) or {}
-    mode = "direct" if d.get("mode") == "direct" else "draft"
-    opts = {"mode": mode}
-    if mode == "direct":
-        privacy = str(d.get("privacy") or "")
-        if not privacy:
-            return jsonify(error="ဘယ်သူတွေ မြင်ရမလဲ (privacy) ရွေးပါ"), 400
-        opts.update(title=str(d.get("title") or "")[:2200], privacy=privacy,
-                    disable_comment=not d.get("allow_comment"),
-                    disable_duet=not d.get("allow_duet"),
-                    disable_stitch=not d.get("allow_stitch"))
-    job["tiktok"] = {"state": "uploading", "progress": 0, "error": "", "mode": mode}
-    threading.Thread(target=_tiktok_upload, args=(job, opts), daemon=True).start()
+    if job.get("tg", {}).get("state") == "sending":
+        return jsonify(error="ပို့နေဆဲပါ"), 409
+    threading.Thread(target=_telegram_send, args=(job,), daemon=True).start()
     return jsonify(ok=True)
 
 
-@app.get("/api/jobs/<jid>/tiktok")
-def tiktok_job_status(jid):
+@app.get("/api/jobs/<jid>/telegram")
+def telegram_job_status(jid):
     job = jobs.get(jid)
     if not job:
         return jsonify(error="job မတွေ့ဘူး"), 404
-    return jsonify(job.get("tiktok") or {"state": "none"})
+    return jsonify(job.get("tg") or {"state": "none"})
+
+
+def _download_name(job, ext):
+    """Short, file-system-safe name from the source video's title or file name,
+    e.g. "Bullies Picked on the Wrong Girl - mm.mp4"."""
+    name = re.sub(r"#\S+", "", job.get("name") or "")        # drop hashtags
+    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', " ", name)       # characters files can't use
+    name = re.sub(r"\s+", " ", name).strip(" .-_")
+    if len(name) > 50:                                       # cut at a word boundary
+        name = name[:50].rsplit(" ", 1)[0].strip(" .-_,") or name[:50]
+    return f"{name or 'dublab'} - mm{ext}"
 
 
 @app.get("/r/<jid>.srt")
@@ -890,7 +901,7 @@ def result_srt(jid):
     if not job or job["status"] != "done" or not (job["dir"] / "captions.srt").exists():
         return jsonify(error="မရှိဘူး"), 404
     return send_file(job["dir"] / "captions.srt", as_attachment=True,
-                     download_name="dublab-burmese.srt", mimetype="application/x-subrip")
+                     download_name=_download_name(job, ".srt"), mimetype="application/x-subrip")
 
 
 @app.get("/r/<jid>")
@@ -899,4 +910,4 @@ def result(jid):
     if not job or job["status"] != "done":
         return jsonify(error="အဆင်သင့် မဖြစ်သေးဘူး"), 404
     return send_file(job["dir"] / "dubbed.mp4", as_attachment=True,
-                     download_name="dublab-dubbed.mp4")
+                     download_name=_download_name(job, ".mp4"))

@@ -613,7 +613,8 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
     voices are never mixed in.
     logo: optional dict(path=PNG, position="top-right"|"top-left"|
     "bottom-right"|"bottom-left", size=fraction of video width).
-    captions: optional dict(list=ffconcat file from render_captions, height=strip px).
+    captions: optional dict(list=ffconcat file from render_captions, height=strip px,
+    bottom=gap below the text as a fraction of the video height).
     blur: optional dict(bottom=fraction, height=fraction) — blurs a full-width
     band (to hide burned-in original captions); captions are centred on it.
     """
@@ -676,7 +677,7 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
                     if blur:      # centre the text strip on the blurred band
                         cy = f"H*{1 - b0 - bh / 2:.4f}-{ch // 2}"
                     else:
-                        cy = f"H-{ch}-H*0.05"
+                        cy = f"H-{ch}-H*{float(captions.get('bottom', 0.08)):.4f}"
                     parts.append(f"[{cap_idx}:v]format=rgba[cp]")
                     parts.append(f"[{cur}][cp]overlay=0:{cy}:eof_action=pass[s3]")
                     cur = "s3"

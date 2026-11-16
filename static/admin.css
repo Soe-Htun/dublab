@@ -48,3 +48,8 @@
 .blurband{position:absolute;left:0;right:0;background:rgba(255,255,255,.18);backdrop-filter:blur(3px);
   border-top:1px dashed rgba(255,255,255,.5);border-bottom:1px dashed rgba(255,255,255,.5);display:flex;align-items:center;justify-content:center}
 .blurband span{font-size:12px;font-weight:700;color:#fff;text-shadow:0 0 3px #000}
+.steps{margin:6px 0 4px 18px;font-size:13.5px;line-height:1.8;color:var(--txt)}
+.steps code,.tgline code,#tg-help code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:5px}
+.tgline{font-size:14px;margin:4px 0}
+.tgbtns{display:flex;gap:8px}
+.tgbtns .ghost{width:auto;flex:1}

@@ -63,6 +63,10 @@
       <span>📝 Caption စာလုံး အရွယ်</span>
       <span class="setinput"><input type="range" id="capsize" min="3" max="10" step="0.5"> <b id="capsizev">5.5%</b></span>
     </label>
+    <label class="setrow" for="capbottom">
+      <span>📝 Caption နေရာ <span class="dim">(အောက်ခြေကနေ · blur မသုံးရင်)</span></span>
+      <span class="setinput"><input type="range" id="capbottom" min="0" max="40" step="1"> <b id="capbottomv">8%</b></span>
+    </label>
     <label class="setrow" for="blurbottom">
       <span>🌫️ Blur နေရာ <span class="dim">(အောက်ခြေကနေ)</span></span>
       <span class="setinput"><input type="range" id="blurbottom" min="0" max="60" step="1"> <b id="blurbottomv">4%</b></span>
@@ -75,6 +79,28 @@
     <p class="note left" id="setnote">–</p>
     <button class="cta" id="setsave">💾 သိမ်းမယ်</button>
     <p class="note" id="setmsg" hidden></p>
+  </section>
+
+  <section class="card" id="tgcard">
+    <h2>📨 Telegram</h2>
+    <div id="tg-off" hidden>
+      <p class="note left">ဗီဒီယိုပြီးတာနဲ့ ခင်ဗျား Telegram ဆီ bot က ပို့ပေးမယ်။ ချိတ်နည်း:</p>
+      <ol class="steps">
+        <li>Telegram မှာ <b>@BotFather</b> ကို ဖွင့် → <code>/newbot</code> → နာမည်ပေး → <b>bot token</b> ရမယ်</li>
+        <li><code>.env</code> ထဲမှာ <code>TELEGRAM_BOT_TOKEN=&lt;token&gt;</code> ထည့်ပြီး <code>./run.sh</code> ပြန်ဖွင့်</li>
+        <li>ဒီစာမျက်နှာကို refresh လုပ်ပါ</li>
+      </ol>
+    </div>
+    <div id="tg-on" hidden>
+      <p class="tgline">🤖 Bot: <b id="tg-bot">–</b></p>
+      <p class="tgline">💬 Chat: <b id="tg-chat">မချိတ်ရသေးဘူး</b></p>
+      <p class="note left" id="tg-help">Telegram မှာ bot ကို ဖွင့်ပြီး <code>/start</code> ပို့ → ပြီးရင် <b>🔗 Connect</b> နှိပ်ပါ</p>
+      <div class="tgbtns">
+        <button class="ghost" id="tg-connect">🔗 Connect</button>
+        <button class="ghost" id="tg-disconnect" hidden>Disconnect</button>
+      </div>
+      <p class="note" id="tg-msg" hidden></p>
+    </div>
   </section>
 
   <section class="card">
