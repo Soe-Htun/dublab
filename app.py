@@ -20,7 +20,7 @@ from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tt
                  download_url, extract_audio,
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
                  mux, probe_duration, probe_url, separate_music, transcribe)
-from gemini import translate_lines
+from gemini import RateLimited, translate_lines
 
 # Gemini TTS key rotation.
 # GEMINI_TTS_API_KEYS is comma-separated; falls back to the single GEMINI_API_KEY.
@@ -290,8 +290,13 @@ def _transcribe_and_translate(jid, job):
 
     job.update(stage="translate", pct=45)
     jlog(job, "translating with gemini…")
-    texts = translate_lines([u["text"] for u in utter], direction, api_key,
-                            LANG_NAMES.get(lang, lang), _settings["channel_name"] or None)
+    try:
+        texts = translate_lines([u["text"] for u in utter], direction, api_key,
+                                LANG_NAMES.get(lang, lang), _settings["channel_name"] or None)
+    except RateLimited as e:
+        raise ValueError("Gemini ဘာသာပြန် quota ဒီနေ့အတွက် ကုန်သွားပြီ — မနက်ဖြန် ပြန်စမ်းပါ"
+                         if e.daily else
+                         "Gemini က ခဏ ပိတ်ထားတယ် (request များလွန်း) — ၁–၂ မိနစ်နေရင် 🔁 ပြန်စမ်းပါ") from None
     for u, t in zip(utter, texts):
         u["orig"] = u["text"]
         u["text"] = t or u["text"]

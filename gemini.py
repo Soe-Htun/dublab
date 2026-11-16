@@ -3,6 +3,7 @@ import json
 import re
 import time
 import ssl
+import urllib.error
 import urllib.request
 
 def _ssl_context():
@@ -78,7 +79,9 @@ def _call(prompt, api_key):
            f":generateContent?key={api_key}")
     body = {"contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"maxOutputTokens": 8192, "temperature": 0.7}}
-    for attempt in range(MAX_RETRIES):
+    limited = 0
+    attempt = 0
+    while True:
         try:
             req = urllib.request.Request(url, data=json.dumps(body).encode(),
                                          headers={"Content-Type": "application/json"})
@@ -89,11 +92,51 @@ def _call(prompt, api_key):
             if text.strip():
                 return text
             raise RuntimeError("empty response")
+        except urllib.error.HTTPError as e:
+            if e.code != 429:
+                attempt += 1
+                if attempt >= MAX_RETRIES:
+                    raise
+                time.sleep(2 ** attempt * 2)
+                continue
+            # rate limited: wait as long as Gemini asks (per-minute quota), a few times
+            limited += 1
+            wait, daily = _retry_info(e)
+            if daily or limited > RATE_RETRIES:
+                raise RateLimited(daily) from None
+            time.sleep(min(90, max(wait, 15 * limited)))
         except Exception:
-            if attempt == MAX_RETRIES - 1:
+            attempt += 1
+            if attempt >= MAX_RETRIES:
                 raise
             time.sleep(2 ** attempt * 2)
-    raise RuntimeError("gemini unreachable")
+
+
+RATE_RETRIES = 5
+
+
+class RateLimited(RuntimeError):
+    """Gemini quota hit even after waiting (daily=True: the day's quota is used up)."""
+    def __init__(self, daily=False):
+        super().__init__("gemini daily quota used up" if daily else "gemini rate limit")
+        self.daily = daily
+
+
+def _retry_info(err):
+    """(seconds to wait, is_daily_quota) from a 429 response body."""
+    try:
+        info = json.loads(err.read().decode()).get("error", {})
+    except Exception:  # noqa: BLE001
+        return 30, False
+    wait, daily = 30, False
+    for d in info.get("details", []):
+        m = re.match(r"([\d.]+)s", str(d.get("retryDelay", "")))
+        if m:
+            wait = float(m.group(1)) + 1
+        for v in d.get("violations", []):
+            if "PerDay" in str(v.get("quotaId", "")):
+                daily = True
+    return wait, daily
 
 
 CHANNEL_RULE = """
