@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="my">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TikTok · DubLab</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main>
+<section class="card" style="text-align:center">
+{% if error %}
+  <h2>⚠️ TikTok ချိတ်မရဘူး</h2>
+  <p class="err">{{ error }}</p>
+  <p class="note">ဒီ tab ကို ပိတ်ပြီး ပြန်စမ်းပါ</p>
+{% else %}
+  <h2>✅ TikTok account ချိတ်ပြီးပါပြီ</h2>
+  <p class="note">ဒီ tab ကို ပိတ်ပြီး DubLab tab ကို ပြန်သွားပါ</p>
+{% endif %}
+  <button class="ghost" onclick="window.close()">ပိတ်မယ်</button>
+</section>
+</main>
+<script>
+  // tell the DubLab tab that opened us, then close if we can
+  try { if (window.opener) window.opener.postMessage({ tiktok: {{ 'false' if error else 'true' }} }, location.origin); } catch (e) {}
+</script>
+</body>
+</html>

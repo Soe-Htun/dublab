@@ -218,6 +218,7 @@ function showResult(jid) {
   setSpeed(1);
   $('#download').href = '/r/' + jid;
   $('#dlsrt').href = '/r/' + jid + '.srt';
+  initTikTok(jid);
   $('#card-result').scrollIntoView({ behavior: 'smooth' });
 }
 
@@ -289,3 +290,85 @@ document.querySelectorAll('#speedrow button').forEach((b) => b.addEventListener(
   const slider = $('#speedslider');
   if (slider) slider.addEventListener('input', () => setSpeed(parseFloat(slider.value)));
 })();
+
+// ---- TikTok posting (owner only: needs the admin password) ----
+const TTKEY = 'dublab_admin_key';
+const ttKey = () => { try { return localStorage.getItem(TTKEY) || ''; } catch (e) { return ''; } };
+const ttHeaders = (extra) => Object.assign({ 'X-Admin-Key': ttKey() }, extra || {});
+let ttJid = null, ttTimer = null;
+
+async function initTikTok(jid) {
+  ttJid = jid;
+  let st;
+  try { st = await (await fetch('/api/tiktok', { headers: ttHeaders() })).json(); } catch (e) { return; }
+  if (!st.configured) return;                 // TikTok not set up on this server
+  $('#ttbox').hidden = false;
+  ['tt-auth', 'tt-connect', 'tt-form'].forEach((id) => ($('#' + id).hidden = true));
+  if (!st.authorized) { $('#tt-auth').hidden = false; return; }
+  if (!st.connected) { $('#tt-connect').hidden = false; return; }
+  $('#tt-form').hidden = false;
+  $('#tt-name').textContent = st.user.display_name || 'TikTok';
+  if (st.user.avatar_url) $('#tt-avatar').src = st.user.avatar_url;
+  try {
+    const c = await (await fetch('/api/tiktok/creator', { headers: ttHeaders() })).json();
+    const sel = $('#tt-privacy');
+    sel.length = 1;
+    const label = { PUBLIC_TO_EVERYONE: 'Everyone', MUTUAL_FOLLOW_FRIENDS: 'Friends', FOLLOWER_OF_CREATOR: 'Followers', SELF_ONLY: 'Only me' };
+    (c.privacy_level_options || []).forEach((v) => sel.add(new Option(label[v] || v, v)));
+    [['tt-comment', c.comment_disabled], ['tt-duet', c.duet_disabled], ['tt-stitch', c.stitch_disabled]]
+      .forEach(([id, off]) => { $('#' + id).disabled = !!off; $('#' + id).checked = false; });
+    if (c.creator_nickname) $('#tt-name').textContent = c.creator_nickname;
+  } catch (e) { /* posting will report the error */ }
+  pollTikTok();
+}
+
+$('#tt-keybtn').addEventListener('click', () => {
+  try { localStorage.setItem(TTKEY, $('#tt-key').value.trim()); } catch (e) {}
+  initTikTok(ttJid);
+});
+$('#tt-login').addEventListener('click', () => {
+  window.open('/tiktok/login?key=' + encodeURIComponent(ttKey()), 'tiktok_login', 'width=520,height=760');
+});
+window.addEventListener('message', (e) => {
+  if (e.origin === location.origin && e.data && 'tiktok' in e.data) initTikTok(ttJid);
+});
+$('#tt-logout').addEventListener('click', async () => {
+  if (!confirm('TikTok account ကို ဖြုတ်မလား?')) return;
+  await fetch('/api/tiktok/disconnect', { method: 'POST', headers: ttHeaders() });
+  initTikTok(ttJid);
+});
+document.querySelectorAll('input[name="ttmode"]').forEach((r) => r.addEventListener('change', () => {
+  const direct = document.querySelector('input[name="ttmode"]:checked').value === 'direct';
+  $('#tt-direct').hidden = !direct; $('#tt-draftnote').hidden = direct;
+}));
+$('#tt-post').addEventListener('click', async () => {
+  const mode = document.querySelector('input[name="ttmode"]:checked').value;
+  const body = { mode, title: $('#tt-title').value, privacy: $('#tt-privacy').value,
+    allow_comment: $('#tt-comment').checked, allow_duet: $('#tt-duet').checked, allow_stitch: $('#tt-stitch').checked };
+  if (mode === 'direct' && !body.privacy) { alert('Who can view this video — ရွေးပါ'); return; }
+  $('#tt-post').disabled = true;
+  try {
+    const r = await fetch('/api/jobs/' + ttJid + '/tiktok', { method: 'POST',
+      headers: ttHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { alert(j.error || 'တင်မရဘူး'); $('#tt-post').disabled = false; return; }
+  } catch (e) { alert('တင်မရဘူး'); $('#tt-post').disabled = false; return; }
+  pollTikTok();
+});
+function pollTikTok() {
+  clearInterval(ttTimer);
+  const show = async () => {
+    let t;
+    try { t = await (await fetch('/api/jobs/' + ttJid + '/tiktok')).json(); } catch (e) { return; }
+    const s = $('#tt-status');
+    if (t.state === 'uploading') { s.textContent = `⏳ TikTok ကို တင်နေတယ်… ${t.progress || 0}%`; $('#tt-post').disabled = true; }
+    else if (t.state === 'processing') { s.textContent = '⏳ TikTok က ပြင်ဆင်နေတယ်…'; $('#tt-post').disabled = true; }
+    else if (t.state === 'done') {
+      s.textContent = t.mode === 'draft' ? '✅ TikTok app ရဲ့ Draft/inbox ထဲ ပို့ပြီးပြီ' : '✅ TikTok မှာ တင်ပြီးပြီ (ပေါ်လာဖို့ မိနစ်အနည်းငယ် ကြာနိုင်တယ်)';
+      $('#tt-post').disabled = false; clearInterval(ttTimer);
+    } else if (t.state === 'failed') { s.textContent = '⚠️ ' + (t.error || 'မအောင်မြင်ဘူး'); $('#tt-post').disabled = false; clearInterval(ttTimer); }
+    else { s.textContent = ''; clearInterval(ttTimer); }
+  };
+  show();
+  ttTimer = setInterval(show, 3000);
+}

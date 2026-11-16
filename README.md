@@ -27,6 +27,7 @@ for this pair and runs in production for Myanmar content creators.
 - 🎵 **Keeps the background, drops the original voices** — [Demucs](https://github.com/facebookresearch/demucs) strips the original speech so only music and sound effects stay under the new voice (dipped slightly while it speaks); runs on Apple GPU / CUDA when available; can be switched off per video
 - 🌐 **Auto language detection → Burmese** — no language to pick: whisper detects the spoken language (Chinese, English, Japanese, Korean, …) and the video is dubbed into spoken Burmese, with tuned prompts for Chinese recaps
 - ✏️ **Check the translation before voicing** — review and edit every Burmese line (or blank it to skip) before the voice is generated
+- 📤 **Post to TikTok** — after a dub finishes, post it straight to your TikTok (caption, hashtags, privacy, comment/duet/stitch) or send it to your TikTok drafts, via TikTok's official Content Posting API; owner-only (admin password). Includes `/terms` and `/privacy` pages for the TikTok app review
 - 📝 **Burmese captions** — the dubbed lines burned in as captions, timed to the new voice (plus an `.srt` download); optionally blur the original burned-in captions first. Needs `libraqm` for correct Burmese shaping (`brew install libraqm`)
 - 🏷️ **Channel logo** — upload a logo on the admin page, pick its corner and size, and tick it per video; burned in with the Apple hardware encoder when available
 - 📢 **Channel outro** — an optional closing line (e.g. “like and follow my channel”) spoken in the same voice at the end; set it on the admin page or with `DUBLAB_OUTRO`
@@ -116,6 +117,8 @@ All configuration is via environment variables (see `.env.example`):
 | `DUBLAB_OUTRO` | — | Default closing line spoken at the end of every dub (editable on the admin page); empty = none |
 | `DUBLAB_MAIL_TO` | — | E-mail address that receives every new review/feedback |
 | `DUBLAB_SMTP_USER` / `DUBLAB_SMTP_PASSWORD` | — | SMTP login for sending it (Gmail: address + [App Password](https://myaccount.google.com/apppasswords)); `DUBLAB_SMTP_HOST` / `DUBLAB_SMTP_PORT` default to Gmail SSL |
+| `TIKTOK_CLIENT_KEY` / `TIKTOK_CLIENT_SECRET` | — | Your TikTok developer app keys; enables the TikTok panel. Register `<PUBLIC_URL>/tiktok/callback` as the redirect URI |
+| `PUBLIC_URL` | — | Public HTTPS address of the app (defaults to `https://$NGROK_DOMAIN`) |
 | `DUBLAB_ADMIN_KEY` | — | Password for the admin page (`/admin/reviews?key=…`): reviews + settings |
 | `DUBLAB_WATERMARK` | — | Watermark text (default: `made with DubLab`) |
 | `DUBLAB_MAX_MINUTES` | — | Default longest video, in minutes (default `30`); can be changed live on the admin page (saved to `settings.json`) |

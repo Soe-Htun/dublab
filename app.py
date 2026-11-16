@@ -10,7 +10,9 @@ import uuid
 from collections import deque
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import Flask, jsonify, redirect, render_template, request, send_file
+
+import tiktok
 
 from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tts,
                  normalize_logo, render_captions, video_size, write_srt,
@@ -610,7 +612,9 @@ def _read_reviews():
 
 
 def _admin_ok():
-    return bool(ADMIN_KEY) and request.args.get("key") == ADMIN_KEY
+    import hmac
+    given = request.args.get("key") or request.headers.get("X-Admin-Key") or ""
+    return bool(ADMIN_KEY) and hmac.compare_digest(given, ADMIN_KEY)
 
 
 @app.get("/admin/api/reviews")
@@ -738,6 +742,146 @@ def admin_del_review(rid):
     except OSError:
         return jsonify(error="write failed"), 500
     return jsonify(ok=True)
+
+
+# ---------------- legal pages + TikTok URL verification ----------------
+VERIFY_DIR = BASE / "verify"   # drop TikTok's tiktok*.txt verification files here
+
+
+def _contact_email():
+    return (os.environ.get("DUBLAB_CONTACT_EMAIL") or MAIL_TO or "").strip()
+
+
+@app.get("/terms")
+def terms():
+    return render_template("legal.html", page="terms", email=_contact_email(),
+                           app_name=os.environ.get("DUBLAB_APP_NAME") or "DubLab")
+
+
+@app.get("/privacy")
+def privacy():
+    return render_template("legal.html", page="privacy", email=_contact_email(),
+                           app_name=os.environ.get("DUBLAB_APP_NAME") or "DubLab")
+
+
+@app.get("/<fname>.txt")
+def verify_file(fname):
+    if not re.fullmatch(r"tiktok[A-Za-z0-9_-]{1,80}", fname):
+        return "not found", 404
+    p = VERIFY_DIR / f"{fname}.txt"
+    if not p.exists():
+        return "not found", 404
+    return send_file(p, mimetype="text/plain", max_age=0)
+
+
+# ---------------- TikTok: connect account + post ----------------
+@app.get("/api/tiktok")
+def tiktok_state():
+    if not tiktok.configured():
+        return jsonify(configured=False)
+    if not _admin_ok():
+        return jsonify(configured=True, authorized=False)
+    try:
+        user = tiktok.user_info()
+    except tiktok.TikTokError:
+        user = None
+    return jsonify(configured=True, authorized=True, connected=bool(user), user=user)
+
+
+@app.get("/tiktok/login")
+def tiktok_login():
+    if not tiktok.configured() or not _admin_ok():
+        return "not found", 404
+    return redirect(tiktok.auth_url())
+
+
+@app.get("/tiktok/callback")
+def tiktok_callback():
+    err = request.args.get("error")
+    if err:
+        msg = f"TikTok login cancelled ({err})"
+    else:
+        try:
+            tiktok.finish_login(request.args.get("code", ""), request.args.get("state", ""))
+            msg = ""
+        except tiktok.TikTokError as e:
+            msg = str(e)
+    return render_template("tiktok_done.html", error=msg)
+
+
+@app.post("/api/tiktok/disconnect")
+def tiktok_disconnect():
+    if not _admin_ok():
+        return jsonify(error="not found"), 404
+    tiktok.disconnect()
+    return jsonify(ok=True)
+
+
+@app.get("/api/tiktok/creator")
+def tiktok_creator():
+    if not _admin_ok():
+        return jsonify(error="not found"), 404
+    try:
+        return jsonify(tiktok.creator_info())
+    except tiktok.TikTokError as e:
+        return jsonify(error=str(e)), 400
+
+
+def _tiktok_upload(job, opts):
+    tt = job["tiktok"]
+    try:
+        jlog(job, f"TikTok upload started ({opts['mode']})")
+        def prog(i, n):
+            tt["progress"] = int(100 * i / n)
+        tt["publish_id"] = tiktok.upload(job["dir"] / "dubbed.mp4", progress=prog, **opts)
+        tt["state"] = "processing"
+        for _ in range(120):                       # up to ~10 minutes
+            time.sleep(5)
+            st = tiktok.status(tt["publish_id"])
+            tt["tiktok_status"] = st.get("status", "")
+            if st.get("status") in ("PUBLISH_COMPLETE", "SEND_TO_USER_INBOX"):
+                tt["state"] = "done"
+                jlog(job, f"TikTok: {st.get('status')}")
+                return
+            if st.get("status") == "FAILED":
+                raise tiktok.TikTokError(st.get("fail_reason") or "TikTok processing failed")
+        tt["state"] = "done"   # still processing on TikTok's side; it will finish there
+    except Exception as e:  # noqa: BLE001 - shown in the UI
+        tt.update(state="failed", error=str(e)[:300])
+        jlog(job, f"TikTok upload failed: {e}")
+
+
+@app.post("/api/jobs/<jid>/tiktok")
+def tiktok_post(jid):
+    if not _admin_ok():
+        return jsonify(error="admin password လိုတယ်"), 403
+    job = jobs.get(jid)
+    if not job or job["status"] != "done":
+        return jsonify(error="ဗီဒီယို အဆင်သင့် မဖြစ်သေးဘူး"), 404
+    if job.get("tiktok", {}).get("state") in ("uploading", "processing"):
+        return jsonify(error="တင်နေဆဲပါ"), 409
+    d = request.get_json(force=True, silent=True) or {}
+    mode = "direct" if d.get("mode") == "direct" else "draft"
+    opts = {"mode": mode}
+    if mode == "direct":
+        privacy = str(d.get("privacy") or "")
+        if not privacy:
+            return jsonify(error="ဘယ်သူတွေ မြင်ရမလဲ (privacy) ရွေးပါ"), 400
+        opts.update(title=str(d.get("title") or "")[:2200], privacy=privacy,
+                    disable_comment=not d.get("allow_comment"),
+                    disable_duet=not d.get("allow_duet"),
+                    disable_stitch=not d.get("allow_stitch"))
+    job["tiktok"] = {"state": "uploading", "progress": 0, "error": "", "mode": mode}
+    threading.Thread(target=_tiktok_upload, args=(job, opts), daemon=True).start()
+    return jsonify(ok=True)
+
+
+@app.get("/api/jobs/<jid>/tiktok")
+def tiktok_job_status(jid):
+    job = jobs.get(jid)
+    if not job:
+        return jsonify(error="job မတွေ့ဘူး"), 404
+    return jsonify(job.get("tiktok") or {"state": "none"})
 
 
 @app.get("/r/<jid>.srt")

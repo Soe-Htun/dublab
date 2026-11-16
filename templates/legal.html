@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ app_name }} · {{ "Terms of Service" if page == "terms" else "Privacy Policy" }}</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  .legal{max-width:760px;margin:0 auto;line-height:1.7;font-size:15px}
+  .legal h1{font-size:24px;margin:0 0 4px}
+  .legal h2{font-size:17px;margin:22px 0 6px}
+  .legal p,.legal li{color:var(--txt);opacity:.92}
+  .legal ul{padding-left:20px;margin:6px 0}
+  .legal .dim{font-size:13px}
+  .legal a{color:var(--p2)}
+</style>
+</head>
+<body>
+<main>
+<section class="card legal">
+{% if page == "terms" %}
+  <h1>Terms of Service</h1>
+  <p class="dim">{{ app_name }} · last updated 2026-11-16</p>
+
+  <h2>1. What the service does</h2>
+  <p>{{ app_name }} is a personal video-dubbing tool. You give it a video you have the right to use;
+  it transcribes the speech, translates it into Burmese, generates a Burmese voice track and
+  optional captions, and returns the finished video. If you connect a TikTok account, you can
+  choose to send a finished video to that account.</p>
+
+  <h2>2. Your content</h2>
+  <ul>
+    <li>Only upload or link videos you own or are allowed to use, translate and repost.</li>
+    <li>You are responsible for the videos you create and for anything you post to TikTok,
+      including following TikTok's Terms of Service and Community Guidelines.</li>
+    <li>Do not use the service for illegal, harmful or infringing content.</li>
+  </ul>
+
+  <h2>3. TikTok posting</h2>
+  <p>Nothing is posted to TikTok unless you press the post button for a specific video after
+  choosing its caption, privacy and interaction settings. You can disconnect your TikTok account
+  at any time from the site, or remove access in the TikTok app (Settings → Security →
+  Apps and services).</p>
+
+  <h2>4. Availability</h2>
+  <p>The service is provided as is, without warranties. It may be unavailable at times, and
+  processed files are deleted automatically after 24 hours.</p>
+
+  <h2>5. Contact</h2>
+  <p>{% if email %}Questions: <a href="mailto:{{ email }}">{{ email }}</a>{% else %}Contact the site owner.{% endif %}</p>
+{% else %}
+  <h1>Privacy Policy</h1>
+  <p class="dim">{{ app_name }} · last updated 2026-11-16</p>
+
+  <h2>1. Data we process</h2>
+  <ul>
+    <li><b>Videos you provide</b> (uploads or links) and the files made from them (audio, transcript,
+      translation, dubbed video, captions). They are stored on the server only to produce your
+      result and are deleted automatically after 24 hours.</li>
+    <li><b>Speech-to-text</b> runs on the server itself. The transcript text is sent to Google's
+      Gemini API for translation, and the Burmese text to a text-to-speech service to create the voice.</li>
+    <li><b>Feedback</b> you choose to send (rating, message) together with your IP address and time.</li>
+    <li><b>Basic logs</b> (IP address, time) for rate limiting and abuse protection.</li>
+  </ul>
+
+  <h2>2. TikTok data</h2>
+  <p>If the site owner connects a TikTok account, we receive from TikTok, with permission:
+  the account's open ID, display name and avatar (<code>user.info.basic</code>), and the right to
+  upload videos to that account (<code>video.upload</code>, <code>video.publish</code>). The access
+  and refresh tokens are stored only on this server, are used only to post videos the user
+  explicitly chooses to post, and are deleted when the account is disconnected. We do not read
+  other TikTok content, and we do not sell or share TikTok data with anyone.</p>
+
+  <h2>3. Sharing</h2>
+  <p>We do not sell personal data. Data is shared only with the services needed to do the work
+  described above (translation, text-to-speech, and TikTok when you post).</p>
+
+  <h2>4. Your choices</h2>
+  <ul>
+    <li>Do not upload videos containing personal data you do not want processed.</li>
+    <li>Disconnect TikTok at any time on the site or in the TikTok app.</li>
+    <li>Ask us to delete feedback you sent{% if email %} by writing to <a href="mailto:{{ email }}">{{ email }}</a>{% endif %}.</li>
+  </ul>
+
+  <h2>5. Contact</h2>
+  <p>{% if email %}<a href="mailto:{{ email }}">{{ email }}</a>{% else %}Contact the site owner.{% endif %}</p>
+{% endif %}
+  <p class="dim"><a href="/">← {{ app_name }}</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></p>
+</section>
+</main>
+</body>
+</html>
