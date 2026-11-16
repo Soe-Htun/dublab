@@ -3,6 +3,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import threading
 import time
 import uuid
@@ -11,12 +12,13 @@ from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request, send_file
 
-from dub import (build_dub_track, configure_tts, demucs_available, download_url, extract_audio,
+from dub import (build_dub_track, configure_tts, demucs_available, detect_gender,
+                 download_url, extract_audio,
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
                  mux, probe_duration, probe_url, separate_music, transcribe)
 from gemini import translate_lines
 
-# Gemini TTS key rotation (same 5-key pool style as the SRT site).
+# Gemini TTS key rotation.
 # GEMINI_TTS_API_KEYS is comma-separated; falls back to the single GEMINI_API_KEY.
 _tts_keys = [k.strip() for k in
              os.environ.get("GEMINI_TTS_API_KEYS",
@@ -28,9 +30,31 @@ BASE = Path(__file__).parent
 JOBS = BASE / "jobs"
 JOBS.mkdir(exist_ok=True)
 
-MAX_MINUTES = int(os.environ.get("DUBLAB_MAX_MINUTES") or 30)
-MAX_DURATION = MAX_MINUTES * 60   # seconds
-MAX_MB = int(os.environ.get("DUBLAB_MAX_MB") or 1000)  # run.sh raises waitress's body limit to match
+# Longest video accepted. .env gives the default; the admin page can change it
+# at runtime (saved to settings.json so it survives restarts).
+SETTINGS_FILE = BASE / "settings.json"
+MAX_MINUTES_LIMIT = 180
+_settings = {"max_minutes": int(os.environ.get("DUBLAB_MAX_MINUTES") or 30)}
+try:
+    _saved = json.loads(SETTINGS_FILE.read_text())
+    if isinstance(_saved.get("max_minutes"), int) and 1 <= _saved["max_minutes"] <= MAX_MINUTES_LIMIT:
+        _settings["max_minutes"] = _saved["max_minutes"]
+except (OSError, ValueError, AttributeError):
+    pass
+
+# Largest upload / link download, set in .env only (run.sh sizes waitress's
+# request-body limit from the same value).
+MAX_MB = int(os.environ.get("DUBLAB_MAX_MB") or 3000)
+
+
+def max_minutes():
+    return _settings["max_minutes"]
+
+
+def max_mb():
+    return MAX_MB
+
+
 # background music/effects (original voices removed by Demucs) kept under the
 # dub at this volume, 0-1; 0 = no background at all
 BG_VOLUME = float(os.environ.get("DUBLAB_BG_VOLUME") or 0.8)
@@ -50,14 +74,26 @@ MAINTENANCE_MSG = ("🔧 DubLab ခေတ္တ ရပ်ထားပါတယ�
 
 # ---- reviews ----
 REVIEWS = BASE / "reviews.jsonl"
+# Optional e-mail for each new review / feedback (Gmail: use an App Password).
+MAIL_TO = os.environ.get("DUBLAB_MAIL_TO", "").strip()
+SMTP_HOST = os.environ.get("DUBLAB_SMTP_HOST", "").strip() or "smtp.gmail.com"
+SMTP_PORT = int(os.environ.get("DUBLAB_SMTP_PORT") or 465)
+SMTP_USER = os.environ.get("DUBLAB_SMTP_USER", "").strip()
+SMTP_PASSWORD = os.environ.get("DUBLAB_SMTP_PASSWORD", "").replace(" ", "")
 ADMIN_KEY = os.environ.get("DUBLAB_ADMIN_KEY", "")
 
 VOICES = {
     "en2mm": {"female": "my-MM-NilarNeural", "male": "my-MM-ThihaNeural"},
     "mm2en": {"female": "en-US-AvaNeural", "male": "en-US-AndrewNeural"},
     "zh2mm": {"female": "my-MM-NilarNeural", "male": "my-MM-ThihaNeural"},
+    # default: detect the spoken language automatically, always dub to Burmese
+    "auto2mm": {"female": "my-MM-NilarNeural", "male": "my-MM-ThihaNeural"},
 }
-SRC_LANG = {"en2mm": "en", "mm2en": "my", "zh2mm": "zh"}  # whisper language
+SRC_LANG = {"en2mm": "en", "mm2en": "my", "zh2mm": "zh", "auto2mm": None}  # whisper language
+LANG_NAMES = {"zh": "Chinese (Mandarin)", "yue": "Cantonese", "en": "English",
+              "ja": "Japanese", "ko": "Korean", "th": "Thai", "hi": "Hindi",
+              "vi": "Vietnamese", "id": "Indonesian", "ms": "Malay",
+              "ru": "Russian", "es": "Spanish", "fr": "French", "de": "German"}
 MAX_LINE = 500          # chars per edited line
 STAGE_LABEL = {
     "queue": "တန်းစီနေတယ်",
@@ -73,7 +109,7 @@ STAGE_LABEL = {
 }
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = MAX_MB * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = max_mb() * 1024 * 1024
 
 jobs = {}
 queue = []
@@ -168,7 +204,7 @@ def _transcribe_and_translate(jid, job):
         job.update(stage="download", pct=2)
         jlog(job, "downloading video from link…")
         try:
-            download_url(job["url"], d, MAX_MB)
+            download_url(job["url"], d, max_mb())
         except Exception as e:  # noqa: BLE001
             jlog(job, f"download error: {str(e)[:300]}")
             raise ValueError("ဗီဒီယို ဒေါင်းမရဘူး — link စစ်ပါ၊ "
@@ -189,15 +225,30 @@ def _transcribe_and_translate(jid, job):
 
     job.update(stage="transcribe", pct=8)
     jlog(job, "transcribing with whisper…")
-    segs = transcribe(wav, SRC_LANG[direction])
+    segs, lang = transcribe(wav, SRC_LANG[direction])
     if not segs:
         raise ValueError("အသံထဲမှာ စကားပြောသံ မတွေ့ဘူး")
+    if direction == "auto2mm":
+        jlog(job, f"detected language: {lang}")
+        if lang == "my":
+            raise ValueError("ဒီဗီဒီယိုက မြန်မာလို ပြောထားပြီးသားပါ — "
+                             "တရုတ်/English စတဲ့ တခြားဘာသာ ဗီဒီယိုပဲ dub လို့ရတယ်")
+        direction = {"zh": "zh2mm", "en": "en2mm"}.get(lang, "any2mm")
     utter = merge_segments(segs)
     jlog(job, f"transcribed {len(segs)} segments → {len(utter)} utterances")
+    if job["voice"] == "auto":
+        try:
+            g, f0 = detect_gender(wav, segs)
+        except Exception as e:  # noqa: BLE001 - never fail a job over this
+            g, f0 = "female", 0.0
+            jlog(job, f"voice detection error: {e}")
+        job["voice"] = g
+        jlog(job, f"auto voice: {g} (speaker pitch ≈ {f0:.0f} Hz)")
 
     job.update(stage="translate", pct=45)
     jlog(job, "translating with gemini…")
-    texts = translate_lines([u["text"] for u in utter], direction, api_key)
+    texts = translate_lines([u["text"] for u in utter], direction, api_key,
+                            LANG_NAMES.get(lang, lang))
     for u, t in zip(utter, texts):
         u["orig"] = u["text"]
         u["text"] = t or u["text"]
@@ -238,6 +289,19 @@ def _voice_and_mux(job):
     jlog(job, "done ✅")
 
 
+def _stay_awake():
+    """macOS: keep the machine from sleeping while a job runs (a sleeping
+    laptop pauses the job and its network calls time out). Returns the
+    caffeinate process to stop afterwards, or None elsewhere."""
+    if not shutil.which("caffeinate"):
+        return None
+    try:
+        # -i: no idle sleep; -s: no system sleep while on AC power
+        return subprocess.Popen(["caffeinate", "-i", "-s"])
+    except OSError:
+        return None
+
+
 def worker():
     while True:
         with lock:
@@ -245,7 +309,12 @@ def worker():
                 lock.wait()
             jid = queue.pop(0)
         jobs[jid]["status"] = "processing"
-        process_job(jid)
+        awake = _stay_awake()
+        try:
+            process_job(jid)
+        finally:
+            if awake:
+                awake.terminate()
         sweep_old()
 
 
@@ -254,9 +323,14 @@ threading.Thread(target=worker, daemon=True).start()
 
 @app.get("/")
 def index():
-    return render_template("index.html", max_minutes=MAX_MINUTES,
+    return render_template("index.html", max_minutes=max_minutes(), max_mb=max_mb(),
                            maintenance=MAINTENANCE,
                            maintenance_msg=MAINTENANCE_MSG)
+
+
+@app.errorhandler(413)
+def too_large(_e):
+    return jsonify(error=f"ဖိုင်က {max_mb()} MB ထက် ကြီးနေတယ်"), 413
 
 
 @app.get("/health")
@@ -274,13 +348,14 @@ def create_job():
         return jsonify(error="ခဏခဏ တင်နေတယ် — ၁ နာရီနေမှ ပြန်စမ်းပါ"), 429
     f = request.files.get("video")
     url = (request.form.get("url") or "").strip()
-    direction = request.form.get("direction", "en2mm")
-    voice = request.form.get("voice", "female")
+    direction = request.form.get("direction", "auto2mm")
+    voice = request.form.get("voice", "auto")
     review = request.form.get("review") == "1"
     keep_bg = request.form.get("keep_bg", "1") == "1"
-    if direction not in VOICES or voice not in ("female", "male"):
+    if direction not in VOICES or voice not in ("auto", "female", "male"):
         return jsonify(error="ရွေးချယ်မှု မှားနေတယ်"), 400
-    too_long = f"{MAX_MINUTES} မိနစ်ထက် ရှည်တဲ့ ဗီဒီယို လက်မခံဘူး"
+    max_sec = max_minutes() * 60
+    too_long = f"{max_minutes()} မိနစ်ထက် ရှည်တဲ့ ဗီဒီယို လက်မခံဘူး"
     if url:
         if len(url) > 300 or not is_supported_url(url):
             return jsonify(error="YouTube / TikTok link ပဲ လက်ခံတယ်"), 400
@@ -291,7 +366,7 @@ def create_job():
                                  "(private/အသက်ကန့်သတ် ဗီဒီယို မရဘူး)"), 400
         if live:
             return jsonify(error="Live stream မရဘူး"), 400
-        if dur > MAX_DURATION:
+        if dur > max_sec:
             return jsonify(error=too_long), 400
         ext, label = ".mp4", f"{title} · {url}"
     else:
@@ -308,7 +383,7 @@ def create_job():
             src = d / ("input" + ext)
             f.save(src)
             # fail fast on bad files — nothing reaches the worker queue
-            if probe_duration(src) > MAX_DURATION:
+            if probe_duration(src) > max_sec:
                 raise ValueError(too_long)
             if not has_video_stream(src):
                 raise ValueError("ဗီဒီယိုဖိုင် မဟုတ်ဘူး")
@@ -388,6 +463,31 @@ def job_log(jid):
     return jsonify(log=p.read_text() if p.exists() else "")
 
 
+def _mail_review(rec):
+    """E-mail a new review to MAIL_TO (runs in a background thread)."""
+    if not (MAIL_TO and SMTP_USER and SMTP_PASSWORD):
+        return
+    import smtplib
+    from email.message import EmailMessage
+    stars = "⭐" * rec["stars"] if rec["stars"] else "no rating"
+    m = EmailMessage()
+    m["Subject"] = f"DubLab feedback · {stars}"
+    m["From"] = SMTP_USER
+    m["To"] = MAIL_TO
+    m.set_content(
+        f"Stars: {stars}\n"
+        f"Message: {rec['message'] or '—'}\n\n"
+        f"Time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(rec['ts']))}\n"
+        f"IP: {rec['ip']}\n"
+        f"Job: {rec['job_id'] or '—'}\n")
+    try:
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=20) as s:
+            s.login(SMTP_USER, SMTP_PASSWORD)
+            s.send_message(m)
+    except Exception as e:  # noqa: BLE001 - the review is already saved
+        print(f"[mail] review e-mail failed: {type(e).__name__}: {e}")
+
+
 @app.post("/api/reviews")
 def add_review():
     if not _rate_ok(_client_ip()):
@@ -409,6 +509,7 @@ def add_review():
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except OSError:
         return jsonify(error="သိမ်းမရဘူး"), 500
+    threading.Thread(target=_mail_review, args=(rec,), daemon=True).start()
     return jsonify(ok=True)
 
 
@@ -452,6 +553,37 @@ def admin_api_reviews():
         "total": len(rows), "rated": rated,
         "avg": round(total_stars / rated, 1) if rated else 0,
         "dist": dist})
+
+
+@app.get("/admin/api/settings")
+def admin_get_settings():
+    if not _admin_ok():
+        return jsonify(error="not found"), 404
+    du = shutil.disk_usage(JOBS)
+    jobs_bytes = sum(f.stat().st_size for f in JOBS.rglob("*") if f.is_file())
+    return jsonify(max_minutes=max_minutes(), max_minutes_limit=MAX_MINUTES_LIMIT,
+                   max_mb=max_mb(),
+                   disk_free_gb=round(du.free / 1e9, 1), disk_total_gb=round(du.total / 1e9, 1),
+                   jobs_gb=round(jobs_bytes / 1e9, 2))
+
+
+@app.post("/admin/api/settings")
+def admin_set_settings():
+    if not _admin_ok():
+        return jsonify(error="not found"), 404
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        mins = int(data.get("max_minutes"))
+    except (TypeError, ValueError):
+        return jsonify(error="ဂဏန်း ထည့်ပါ"), 400
+    if not 1 <= mins <= MAX_MINUTES_LIMIT:
+        return jsonify(error=f"1 မှ {MAX_MINUTES_LIMIT} မိနစ်အတွင်း ထည့်ပါ"), 400
+    _settings["max_minutes"] = mins
+    try:
+        SETTINGS_FILE.write_text(json.dumps(_settings))
+    except OSError:
+        return jsonify(error="သိမ်းမရဘူး"), 500
+    return jsonify(ok=True, **_settings)
 
 
 @app.delete("/admin/api/reviews/<rid>")

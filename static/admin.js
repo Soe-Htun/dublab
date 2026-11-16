@@ -84,5 +84,35 @@ $('#filters').querySelectorAll('button').forEach((b) => b.addEventListener('clic
 }));
 $('#refresh').addEventListener('click', load);
 
+// ---- settings ----
+async function loadSettings() {
+  try {
+    const r = await fetch('/admin/api/settings?key=' + encodeURIComponent(key));
+    if (!r.ok) return;
+    const j = await r.json();
+    $('#maxmin').value = j.max_minutes;
+    $('#maxmin').max = j.max_minutes_limit;
+    $('#setnote').textContent = `🖴 Disk: ${j.disk_free_gb} GB လွတ်သေး / ${j.disk_total_gb} GB · ` +
+      `jobs ဖိုင်တွေ ${j.jobs_gb} GB (၂၄ နာရီနေရင် အလိုလို ဖျက်တယ်) · ဖိုင်အရွယ်အစား အများဆုံး ${j.max_mb} MB (.env ထဲက DUBLAB_MAX_MB)`;
+  } catch (e) { /* ignore */ }
+}
+$('#setsave').addEventListener('click', async () => {
+  const btn = $('#setsave'), msg = $('#setmsg');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/admin/api/settings?key=' + encodeURIComponent(key), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ max_minutes: +$('#maxmin').value }),
+    });
+    const j = await r.json().catch(() => ({}));
+    msg.textContent = r.ok ? `✅ သိမ်းပြီးပြီ — ${j.max_minutes} မိနစ်အထိ လက်ခံမယ်` : (j.error || 'သိမ်းမရဘူး');
+    if (r.ok) loadSettings();
+  } catch (e) { msg.textContent = 'သိမ်းမရဘူး'; }
+  msg.hidden = false;
+  btn.disabled = false;
+  setTimeout(() => (msg.hidden = true), 5000);
+});
+loadSettings();
+
 load();
 setInterval(() => { if (!document.hidden) load(); }, 30000);

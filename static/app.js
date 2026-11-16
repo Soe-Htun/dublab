@@ -1,6 +1,7 @@
 const $ = (s) => document.querySelector(s);
 const drop = $('#drop'), fileInput = $('#file'), preview = $('#preview');
-let direction = 'zh2mm', voice = 'female', pollTimer = null, lastJid = null, ytUrl = '';
+const direction = 'auto2mm';  // language is detected on the server
+let voice = 'auto', pollTimer = null, lastJid = null, ytUrl = '';
 
 function selectGrid(gridSel, attr, cb) {
   document.querySelectorAll(gridSel + ' .opt').forEach((b) => {
@@ -11,7 +12,6 @@ function selectGrid(gridSel, attr, cb) {
     });
   });
 }
-selectGrid('#dirgrid', 'dir', (v) => (direction = v));
 selectGrid('#voicegrid', 'voice', (v) => (voice = v));
 
 drop.addEventListener('click', () => fileInput.click());
@@ -23,7 +23,7 @@ drop.addEventListener('drop', (ev) => {
 fileInput.addEventListener('change', () => { if (fileInput.files.length) handleFile(fileInput.files[0]); });
 
 function handleFile(f) {
-  ytUrl = ''; $('#urlin').value = '';
+  ytUrl = ''; $('#urlin').value = ''; syncUrlBtn();
   if (!/^video\//.test(f.type) && !/\.(mp4|mov|mkv|webm|m4v)$/i.test(f.name)) {
     alert('ဗီဒီယိုဖိုင်ပဲ တင်လို့ရတယ်'); return;
   }
@@ -52,8 +52,11 @@ function useUrl() {
   $('#card-opts').hidden = false;
   $('#card-opts').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
+const syncUrlBtn = () => { $('#urlbtn').disabled = !$('#urlin').value.trim(); };
+$('#urlin').addEventListener('input', syncUrlBtn);
+syncUrlBtn();  // browser may restore a value after reload
 $('#urlbtn').addEventListener('click', useUrl);
-$('#urlin').addEventListener('keydown', (e) => { if (e.key === 'Enter') useUrl(); });
+$('#urlin').addEventListener('keydown', (e) => { if (e.key === 'Enter' && $('#urlin').value.trim()) useUrl(); });
 
 $('#go').addEventListener('click', () => {
   const f = fileInput.files[0];
@@ -251,32 +254,4 @@ document.querySelectorAll('#speedrow button').forEach((b) => b.addEventListener(
 (function () {
   const slider = $('#speedslider');
   if (slider) slider.addEventListener('input', () => setSpeed(parseFloat(slider.value)));
-})();
-
-// ---- update notice box (show once per device) ----
-(function () {
-  const KEY = 'dublab_notice_karaoke_v1';
-  const notice = $('#updatenotice');
-  if (!notice) return;
-  let seen = false;
-  try { seen = localStorage.getItem(KEY) === '1'; } catch (e) { /* private mode */ }
-  if (!seen) notice.hidden = false;
-  const okBtn = $('#noticeok');
-  if (okBtn) okBtn.addEventListener('click', () => {
-    try { if ($('#noshowagain') && $('#noshowagain').checked) localStorage.setItem(KEY, '1'); } catch (e) {}
-    notice.hidden = true;
-  });
-})();
-
-// ---- tabs: Dubbing / SRT translator ----
-(function () {
-  const tabs = document.querySelectorAll('#tabs .tab');
-  if (!tabs.length) return;
-  const panels = { dub: document.getElementById('tab-dub'), srt: document.getElementById('tab-srt') };
-  tabs.forEach(btn => btn.addEventListener('click', () => {
-    tabs.forEach(b => b.classList.toggle('on', b === btn));
-    const name = btn.dataset.tab;
-    if (panels.dub) panels.dub.hidden = name !== 'dub';
-    if (panels.srt) panels.srt.hidden = name !== 'srt';
-  }));
 })();

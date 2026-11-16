@@ -25,8 +25,9 @@ for this pair and runs in production for Myanmar content creators.
 
 - 🎬 **Video dubbing** — upload a video (≤ 30 min, ≤ 1 GB by default) **or paste a YouTube / TikTok link**, download the dubbed MP4
 - 🎵 **Keeps the background, drops the original voices** — [Demucs](https://github.com/facebookresearch/demucs) strips the original speech so only music and sound effects stay under the new voice (dipped slightly while it speaks); runs on Apple GPU / CUDA when available; can be switched off per video
-- 🇨🇳 **Chinese → Burmese** — dub Chinese (Mandarin) videos and recaps into spoken Burmese
+- 🌐 **Auto language detection → Burmese** — no language to pick: whisper detects the spoken language (Chinese, English, Japanese, Korean, …) and the video is dubbed into spoken Burmese, with tuned prompts for Chinese recaps
 - ✏️ **Check the translation before voicing** — review and edit every Burmese line (or blank it to skip) before the voice is generated
+- 🤖 **Auto voice** — picks the male or female Burmese voice from the original speaker's pitch (or choose one yourself)
 - 🗣️ **Burmese + English voices** — male and female voices both directions
   (`my-MM-ThihaNeural`, `my-MM-NilarNeural`, `en-US-AndrewNeural`, `en-US-AvaNeural`)
 - 🎙️ **Local transcription** — [faster-whisper](https://github.com/SYSTRAN/faster-whisper) on your own machine, no audio leaves your server for STT
@@ -39,8 +40,6 @@ for this pair and runs in production for Myanmar content creators.
 - 💧 **Credit watermark** — small lower-right watermark (configurable text)
 - 🛡️ **Abuse protection built in** — job queue cap, per-IP upload rate limit,
   24 h result retention, optional admin page for user reviews
-- 📝 **SRT translator tab** — the UI ships with a tab that embeds a companion
-  SRT translation service at `/srt/` (optional; the dubbing app works without it)
 
 ## How it works
 
@@ -104,10 +103,12 @@ All configuration is via environment variables (see `.env.example`):
 |---|---|---|
 | `GEMINI_API_KEY` | ✅ | Translation (and TTS fallback if no TTS keys set) |
 | `GEMINI_TTS_API_KEYS` | — | Comma-separated keys for Gemini TTS rotation |
-| `DUBLAB_ADMIN_KEY` | — | Password for the `/admin` reviews page |
+| `DUBLAB_MAIL_TO` | — | E-mail address that receives every new review/feedback |
+| `DUBLAB_SMTP_USER` / `DUBLAB_SMTP_PASSWORD` | — | SMTP login for sending it (Gmail: address + [App Password](https://myaccount.google.com/apppasswords)); `DUBLAB_SMTP_HOST` / `DUBLAB_SMTP_PORT` default to Gmail SSL |
+| `DUBLAB_ADMIN_KEY` | — | Password for the admin page (`/admin/reviews?key=…`): reviews + settings |
 | `DUBLAB_WATERMARK` | — | Watermark text (default: `made with DubLab`) |
-| `DUBLAB_MAX_MINUTES` | — | Longest video accepted, in minutes (default `30`) |
-| `DUBLAB_MAX_MB` | — | Largest upload/download, in MB (default `1000`; `run.sh` raises waitress's upload limit to match — when starting waitress yourself, pass `--max-request-body-size`) |
+| `DUBLAB_MAX_MINUTES` | — | Default longest video, in minutes (default `30`); can be changed live on the admin page (saved to `settings.json`) |
+| `DUBLAB_MAX_MB` | — | Largest upload/download, in MB (default `3000`); `run.sh` sizes waitress's upload limit from it — when starting waitress yourself, pass `--max-request-body-size` |
 | `DUBLAB_BG_VOLUME` | — | Volume of the background music/effects under the dub, `0`–`1` (default `0.8`; `0` = none) |
 | `DUBLAB_DEMUCS_DEVICE` | — | Force Demucs device: `mps` / `cuda` / `cpu` (default: auto) |
 | `DUBLAB_WHISPER_MODEL` | — | faster-whisper model: `base` (default, fast) · `small` / `medium` / `large-v3-turbo` (better accuracy, esp. Chinese; slower, more RAM) |

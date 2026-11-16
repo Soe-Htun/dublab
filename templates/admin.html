@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>DubLab · Reviews Dashboard</title>
+<title>DubLab · Admin</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Noto+Sans+Myanmar:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -22,10 +22,21 @@
     </span>
     <span class="logo-name">DubLab</span>
   </div>
-  <p class="tagline">💬 reviews dashboard</p>
+  <p class="tagline">⚙️ admin · 💬 reviews</p>
 </header>
 
 <main>
+  <section class="card">
+    <h2>⚙️ Settings</h2>
+    <label class="setrow" for="maxmin">
+      <span>⏱️ ဗီဒီယို အရှည် အများဆုံး</span>
+      <span class="setinput"><input type="number" id="maxmin" min="1" max="180" step="1" inputmode="numeric"> မိနစ်</span>
+    </label>
+    <p class="note left" id="setnote">–</p>
+    <button class="cta" id="setsave">💾 သိမ်းမယ်</button>
+    <p class="note" id="setmsg" hidden></p>
+  </section>
+
   <section class="card">
     <div class="statgrid" id="stats">
       <div class="stat"><span class="stat-num" id="st-total">–</span><span class="stat-label">reviews</span></div>

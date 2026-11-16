@@ -44,6 +44,17 @@ Rules:
 - Names and places: transliterate into Burmese script consistently (same name → same spelling every time).
 - Output format: exactly one line per input as "N|||translation" (N = the number I give you). Nothing else — no explanations."""
 
+PROMPT_ANY2MM = """You are a professional dubbing script translator for short videos and movie recaps.
+Translate each spoken {lang} line into natural SPOKEN Burmese (စကားပြောဘာသာ) — the way Myanmar narrators really talk, never stiff written Burmese (စာရေးဘာသာ).
+
+Rules:
+- The text comes from automatic speech recognition and may contain mistakes — infer the intended meaning from context.
+- Translate meaning, tone and emotion — NEVER word-for-word.
+- TIMING IS CRITICAL: Burmese speech runs longer, so compress hard — shortest natural phrasing, drop filler and repetition. A slightly shorter line is always better than a longer one.
+- Match the speaker: narration stays engaging, dialogue matches the speaker, adapt idioms to Burmese equivalents.
+- Names and places: transliterate into Burmese script consistently.
+- Output format: exactly one line per input as "N|||translation" (N = the number I give you). Nothing else — no explanations."""
+
 PROMPTS = {"en2mm": PROMPT_EN2MM, "mm2en": PROMPT_MM2EN, "zh2mm": PROMPT_ZH2MM}
 
 
@@ -70,9 +81,14 @@ def _call(prompt, api_key):
     raise RuntimeError("gemini unreachable")
 
 
-def translate_lines(lines, direction, api_key):
-    """lines: [str] -> [translated str], same order."""
-    prompt = PROMPTS[direction]
+def translate_lines(lines, direction, api_key, src_lang_name=None):
+    """lines: [str] -> [translated str], same order.
+
+    direction "any2mm" translates from src_lang_name (e.g. "Japanese")."""
+    if direction == "any2mm":
+        prompt = PROMPT_ANY2MM.format(lang=src_lang_name or "the original")
+    else:
+        prompt = PROMPTS[direction]
     out = []
     for start in range(0, len(lines), CHUNK):
         chunk = lines[start:start + CHUNK]

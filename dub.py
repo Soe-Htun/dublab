@@ -67,18 +67,65 @@ def configure_tts(keys):
 _model = None
 
 
-def transcribe(wav, lang_hint):
-    """Return [{start, end, text}]. lang_hint: 'en', 'my' or 'zh'."""
+def transcribe(wav, lang_hint=None):
+    """Return ([{start, end, text}], language).
+
+    lang_hint: 'en', 'my', 'zh'… or None to let whisper detect the
+    language; the returned language is the hint or the detected code."""
     global _model
     from faster_whisper import WhisperModel
     if _model is None:
         _model = WhisperModel(os.environ.get("DUBLAB_WHISPER_MODEL") or "base",
                               device="cpu", compute_type="int8")
-    segments, _info = _model.transcribe(
+    segments, info = _model.transcribe(
         str(wav), language=lang_hint, vad_filter=True,
         vad_parameters=dict(min_silence_duration_ms=400))
-    return [{"start": float(s.start), "end": float(s.end), "text": s.text.strip()}
+    segs = [{"start": float(s.start), "end": float(s.end), "text": s.text.strip()}
             for s in segments if s.text and s.text.strip()]
+    return segs, (lang_hint or info.language)
+
+
+def detect_gender(wav, segs, max_speech=120.0):
+    """Guess the main speaker's gender from voice pitch.
+
+    Looks at up to max_speech seconds of the speech segments in a 16 kHz mono
+    wav, estimates the pitch of each voiced 40 ms frame by autocorrelation and
+    compares the median with ~165 Hz (typical male 85-155 Hz, female
+    165-255 Hz). Returns ("male" | "female", median_hz); falls back to
+    ("female", 0) when too little voiced speech is found.
+    """
+    import wave
+    import numpy as np
+    with wave.open(str(wav), "rb") as w:
+        sr = w.getframerate()
+        if w.getsampwidth() != 2 or w.getnchannels() != 1:
+            return "female", 0.0
+        audio = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
+    audio = audio.astype(np.float32) / 32768.0
+    frame, hop = int(0.04 * sr), int(0.02 * sr)
+    lo, hi = int(sr / 400), int(sr / 70)          # pitch search range 70-400 Hz
+    pitches, used = [], 0.0
+    for s in segs:
+        if used >= max_speech:
+            break
+        a, b = int(s["start"] * sr), int(s["end"] * sr)
+        used += s["end"] - s["start"]
+        for i in range(a, max(a, b - frame), hop):
+            x = audio[i:i + frame]
+            if len(x) < frame or np.sqrt(np.mean(x * x)) < 0.01:
+                continue                          # silence
+            x = x - x.mean()
+            ac = np.correlate(x, x, "full")[frame - 1:]
+            if ac[0] <= 0:
+                continue
+            ac = ac / ac[0]
+            lag = lo + int(np.argmax(ac[lo:hi]))
+            if ac[lag] > 0.45:                    # clearly voiced frame
+                pitches.append(sr / lag)
+    if len(pitches) < 20:
+        return "female", 0.0
+    f0 = float(np.median(pitches))
+    return ("male" if f0 < 165 else "female"), f0
 
 
 def merge_segments(segs, max_gap=0.6, max_len=10.0):

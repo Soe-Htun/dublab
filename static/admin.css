@@ -27,3 +27,9 @@
 .rev .del{background:none;border:none;color:var(--dim);cursor:pointer;font-size:14px;padding:2px 4px}
 .rev .del:hover{color:#f87171}
 .empty{text-align:center;color:var(--dim);padding:20px 0}
+.card h2{font-size:16px;font-weight:700;margin-bottom:14px}
+.setrow{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:14px;margin-bottom:8px;flex-wrap:wrap}
+.setinput{display:flex;align-items:center;gap:8px;color:var(--dim)}
+.setinput input{width:90px;background:rgba(255,255,255,.05);border:1px solid var(--card-br);border-radius:10px;
+  color:var(--txt);padding:8px 10px;font:inherit;font-size:15px;text-align:right}
+.setinput input:focus{outline:none;border-color:var(--p1)}
