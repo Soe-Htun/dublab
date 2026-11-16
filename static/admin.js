@@ -1,5 +1,7 @@
 /* DubLab reviews dashboard */
 const key = new URLSearchParams(location.search).get('key') || '';
+// remember it so the ⚙️ link and the main page's Telegram box skip the password
+try { if (key) localStorage.setItem('dublab_admin_key', key); } catch (e) { /* ignore */ }
 let allReviews = [];
 let filter = 'all';
 

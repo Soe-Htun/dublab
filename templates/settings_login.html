@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="my">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DubLab · Settings</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Noto+Sans+Myanmar:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <p class="tagline"><a href="/" style="color:inherit">← DubLab</a></p>
+</header>
+<main>
+  <section class="card">
+    <h2>⚙️ Settings</h2>
+    <p class="note left">Admin password ထည့်ပါ (ဒီ browser မှာ မှတ်ထားမယ်)</p>
+    <form class="urlrow" id="f">
+      <input type="password" id="k" placeholder="Admin password" autocomplete="current-password" required autofocus>
+      <button class="ghost" type="submit">ဝင်မယ်</button>
+    </form>
+    <p class="note left" id="err" hidden>Password မှားနေတယ်</p>
+  </section>
+</main>
+<script>
+const STORE = 'dublab_admin_key';
+const get = () => { try { return localStorage.getItem(STORE) || ''; } catch (e) { return ''; } };
+const set = (v) => { try { v ? localStorage.setItem(STORE, v) : localStorage.removeItem(STORE); } catch (e) {} };
+async function tryKey(k, quiet) {
+  const r = await fetch('/admin/api/settings', { headers: { 'X-Admin-Key': k } }).catch(() => null);
+  if (r && r.ok) { set(k); location.href = '/admin/reviews?key=' + encodeURIComponent(k); return; }
+  set('');
+  if (!quiet) document.getElementById('err').hidden = false;
+}
+if (get()) tryKey(get(), true);
+document.getElementById('f').addEventListener('submit', (e) => {
+  e.preventDefault();
+  tryKey(document.getElementById('k').value.trim(), false);
+});
+</script>
+</body>
+</html>

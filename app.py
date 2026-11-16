@@ -10,7 +10,7 @@ import uuid
 from collections import deque
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import Flask, jsonify, redirect, render_template, request, send_file
 
 import telegram
 
@@ -622,10 +622,16 @@ def add_review():
     return jsonify(ok=True)
 
 
+@app.get("/settings")
+def settings_login():
+    """Password box for the ⚙️ link; it opens the admin page with the key."""
+    return render_template("settings_login.html")
+
+
 @app.get("/admin/reviews")
 def admin_reviews():
-    if not ADMIN_KEY or request.args.get("key") != ADMIN_KEY:
-        return "not found", 404
+    if not _admin_ok():
+        return redirect("/settings")
     return render_template("admin.html")
 
 
