@@ -55,8 +55,13 @@
     <div class="drop" id="drop">
       <div class="drop-icon">📤</div>
       <p class="drop-title">နှိပ်၍ ရွေးပါ <span class="dim">သို့မဟုတ် ဖိုင်ဆွဲချပါ</span></p>
-      <p class="drop-sub">MP4 / MOV · အများဆုံး ၅ မိနစ်</p>
+      <p class="drop-sub">MP4 / MOV · အများဆုံး {{ max_minutes }} မိနစ်</p>
       <input type="file" id="file" accept="video/mp4,video/quicktime,video/webm,.mkv" hidden>
+    </div>
+    <div class="ordiv"><span>သို့မဟုတ်</span></div>
+    <div class="urlrow">
+      <input type="url" id="urlin" placeholder="🔗 YouTube / TikTok link ထည့်ပါ" inputmode="url" autocomplete="off">
+      <button class="ghost" id="urlbtn">သုံးမယ်</button>
     </div>
     <video id="preview" controls playsinline hidden></video>
     <p id="filemeta" class="filemeta" hidden></p>
@@ -65,8 +70,12 @@
   <!-- STEP 2: options -->
   <section class="card" id="card-opts" hidden>
     <h2>၂ · ဘာသာစကားရွေးပါ</h2>
-    <div class="optgrid" id="dirgrid">
-      <button class="opt selected" data-dir="en2mm">
+    <div class="optgrid three" id="dirgrid">
+      <button class="opt selected" data-dir="zh2mm">
+        <span class="opt-flag">🇨🇳 → 🇲🇲</span>
+        <span class="opt-label">တရုတ် → မြန်မာ</span>
+      </button>
+      <button class="opt" data-dir="en2mm">
         <span class="opt-flag">🇬🇧 → 🇲🇲</span>
         <span class="opt-label">English → မြန်မာ</span>
       </button>
@@ -86,8 +95,16 @@
         <span class="opt-label">အမျိုးသား</span>
       </button>
     </div>
+    <label class="checkrow">
+      <input type="checkbox" id="bgchk" checked>
+      <span>🎵 နောက်ခံ music / sound effect ချန်ထားမယ် <span class="dim">(မူရင်းစကားသံ ဖယ်ပြီး)</span></span>
+    </label>
+    <label class="checkrow">
+      <input type="checkbox" id="reviewchk" checked>
+      <span>✏️ အသံမဖော်ခင် ဘာသာပြန်စာကို ကြည့်ပြီး ပြင်မယ်</span>
+    </label>
     <button class="cta" id="go" {% if maintenance %}disabled title="ခေတ္တ ရပ်ထားပါတယ်"{% endif %}>✨ Dub စလုပ်မယ်</button>
-    <p class="note">ဗီဒီယိုတိုလေးဆို ၁–၃ မိနစ်လောက် ကြာမယ်</p>
+    <p class="note">ဗီဒီယိုတိုလေးဆို ၁–၃ မိနစ်၊ ၁၀–၃၀ မိနစ် ဗီဒီယိုဆို အချိန်အတော်ကြာမယ်</p>
   </section>
 
   <!-- STEP 3: progress -->
@@ -96,9 +113,12 @@
     <div class="bar"><span id="barfill"></span></div>
     <p class="stage" id="stagelabel">တန်းစီနေတယ်</p>
     <ul class="stages" id="stages">
+      <li data-s="download">ဗီဒီယို ဒေါင်းခြင်း</li>
       <li data-s="audio">အသံထုတ်ယူခြင်း</li>
       <li data-s="transcribe">စကားပြောမှတ်သားခြင်း</li>
       <li data-s="translate">ဘာသာပြန်ခြင်း</li>
+      <li data-s="review">ဘာသာပြန်စာ စစ်ခြင်း</li>
+      <li data-s="music">နောက်ခံ music ခွဲထုတ်ခြင်း</li>
       <li data-s="voice">အသံဖော်ခြင်း</li>
       <li data-s="mux">ဗီဒီယိုပေါင်းစပ်ခြင်း</li>
     </ul>
@@ -107,6 +127,14 @@
       <summary>📋 Live logs</summary>
       <pre id="livelog"></pre>
     </details>
+  </section>
+
+  <!-- STEP 3b: check / edit translation -->
+  <section class="card" id="card-review" hidden>
+    <h2>✏️ ဘာသာပြန်စာ စစ်ပါ</h2>
+    <p class="note left">ကိုယ့်စတိုင်နဲ့ ပြင်လို့ရတယ်။ မလိုတဲ့ စာကြောင်းကို ဖျက်ထားရင် (အလွတ်) အသံမဖော်ဘူး။ တိုလေ အချိန်ကိုက်လေ။</p>
+    <div class="lines" id="lines"></div>
+    <button class="cta" id="voicego">🎙️ အသံဖော်မယ်</button>
   </section>
 
   <!-- STEP 4: result -->

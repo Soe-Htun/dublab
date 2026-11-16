@@ -1,6 +1,6 @@
 const $ = (s) => document.querySelector(s);
 const drop = $('#drop'), fileInput = $('#file'), preview = $('#preview');
-let direction = 'en2mm', voice = 'female', pollTimer = null, lastJid = null;
+let direction = 'zh2mm', voice = 'female', pollTimer = null, lastJid = null, ytUrl = '';
 
 function selectGrid(gridSel, attr, cb) {
   document.querySelectorAll(gridSel + ' .opt').forEach((b) => {
@@ -23,6 +23,7 @@ drop.addEventListener('drop', (ev) => {
 fileInput.addEventListener('change', () => { if (fileInput.files.length) handleFile(fileInput.files[0]); });
 
 function handleFile(f) {
+  ytUrl = ''; $('#urlin').value = '';
   if (!/^video\//.test(f.type) && !/\.(mp4|mov|mkv|webm|m4v)$/i.test(f.name)) {
     alert('ဗီဒီယိုဖိုင်ပဲ တင်လို့ရတယ်'); return;
   }
@@ -36,13 +37,33 @@ function handleFile(f) {
   $('#card-opts').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
+// ---- YouTube / TikTok link instead of a file ----
+const YT_RE = /^https?:\/\/((www|m|music|vm|vt)\.)?(youtube\.com|youtu\.be|tiktok\.com)\//i;
+function useUrl() {
+  const u = $('#urlin').value.trim();
+  if (!YT_RE.test(u)) { alert('YouTube / TikTok link ပဲ ထည့်လို့ရတယ်'); return; }
+  ytUrl = u;
+  fileInput.value = '';
+  preview.hidden = true; preview.removeAttribute('src');
+  const meta = $('#filemeta');
+  meta.hidden = false;
+  meta.textContent = '🔗 ' + u;
+  drop.querySelector('.drop-title').innerHTML = 'နှိပ်၍ ရွေးပါ <span class="dim">သို့မဟုတ် ဖိုင်ဆွဲချပါ</span>';
+  $('#card-opts').hidden = false;
+  $('#card-opts').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+$('#urlbtn').addEventListener('click', useUrl);
+$('#urlin').addEventListener('keydown', (e) => { if (e.key === 'Enter') useUrl(); });
+
 $('#go').addEventListener('click', () => {
   const f = fileInput.files[0];
-  if (!f) return;
+  if (!f && !ytUrl) return;
   const btn = $('#go');
-  btn.disabled = true; btn.textContent = '⏳ တင်နေတယ်…';
+  btn.disabled = true; btn.textContent = ytUrl ? '⏳ link စစ်နေတယ်…' : '⏳ တင်နေတယ်…';
   const fd = new FormData();
-  fd.append('video', f); fd.append('direction', direction); fd.append('voice', voice);
+  if (ytUrl) fd.append('url', ytUrl); else fd.append('video', f); fd.append('direction', direction); fd.append('voice', voice);
+  fd.append('review', $('#reviewchk').checked ? '1' : '0');
+  fd.append('keep_bg', $('#bgchk').checked ? '1' : '0');
   // NOTE: iOS Safari's fetch() throws "The string did not match the expected
   // pattern" on FormData POST uploads (WebKit bug) — XHR works reliably.
   const xhr = new XMLHttpRequest();
@@ -60,10 +81,13 @@ $('#go').addEventListener('click', () => {
 });
 
 function showProgress(jid) {
-  ['card-upload', 'card-opts', 'card-result', 'card-error'].forEach((id) => ($('#' + id).hidden = true));
+  ['card-upload', 'card-opts', 'card-review', 'card-result', 'card-error'].forEach((id) => ($('#' + id).hidden = true));
   $('#card-progress').hidden = false;
   $('#card-progress').scrollIntoView({ behavior: 'smooth' });
-  const order = ['audio', 'transcribe', 'translate', 'voice', 'mux'];
+  const isUrl = !!ytUrl;
+  const dl = document.querySelector('#stages li[data-s="download"]');
+  if (dl) dl.hidden = !isUrl;
+  const order = ['download', 'audio', 'transcribe', 'translate', 'review', 'music', 'voice', 'mux'];
   const stopLog = startLiveLog(jid);
   const stopAll = () => { clearInterval(pollTimer); stopLog(); };
   pollTimer = setInterval(async () => {
@@ -79,6 +103,7 @@ function showProgress(jid) {
         if (j.stage === 'done' || order.indexOf(s) < order.indexOf(j.stage)) li.classList.add('done');
         else if (s === j.stage) li.classList.add('active');
       });
+      if (j.status === 'review') { stopAll(); showReview(jid); }
       if (j.status === 'done') { stopAll(); showResult(jid); }
       if (j.status === 'failed') { stopAll(); showError(j.error || 'အမှားရှိတယ်'); }
     } catch (e) { stopAll(); showError(e.message); }
@@ -102,6 +127,53 @@ function startLiveLog(jid) {
   return () => clearInterval(t);
 }
 
+// ---- check / edit translation before voicing ----
+function fmtTime(s) {
+  const m = Math.floor(s / 60), sec = Math.floor(s % 60);
+  return m + ':' + String(sec).padStart(2, '0');
+}
+async function showReview(jid) {
+  $('#card-progress').hidden = true;
+  const box = $('#lines');
+  box.textContent = '';
+  try {
+    const r = await fetch('/api/jobs/' + jid + '/lines');
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'load failed');
+    j.lines.forEach((ln) => {
+      const row = document.createElement('div');
+      row.className = 'line';
+      const meta = document.createElement('div');
+      meta.className = 'line-meta';
+      meta.textContent = `${fmtTime(ln.start)}–${fmtTime(ln.end)} · ${ln.orig}`;
+      const ta = document.createElement('textarea');
+      ta.rows = 2; ta.maxLength = 500; ta.value = ln.text;
+      row.append(meta, ta);
+      box.append(row);
+    });
+  } catch (e) { showError(e.message); return; }
+  $('#card-review').hidden = false;
+  $('#card-review').scrollIntoView({ behavior: 'smooth' });
+  const btn = $('#voicego');
+  btn.disabled = false;
+  btn.onclick = () => {
+    const texts = [...box.querySelectorAll('textarea')].map((t) => t.value);
+    btn.disabled = true; btn.textContent = '⏳ ပို့နေတယ်…';
+    const xhr = new XMLHttpRequest();  // XHR, not fetch (iOS Safari POST bug)
+    xhr.open('POST', '/api/jobs/' + jid + '/lines');
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.onload = () => {
+      btn.textContent = '🎙️ အသံဖော်မယ်';
+      let j = {};
+      try { j = JSON.parse(xhr.responseText); } catch (e) { /* ignore */ }
+      if (xhr.status < 300 && j.ok) showProgress(jid);
+      else { btn.disabled = false; alert(j.error || 'ပို့မရဘူး'); }
+    };
+    xhr.onerror = () => { btn.disabled = false; btn.textContent = '🎙️ အသံဖော်မယ်'; alert('ပို့မရဘူး'); };
+    xhr.send(JSON.stringify({ texts: texts }));
+  };
+}
+
 function showResult(jid) {
   $('#card-progress').hidden = true;
   $('#card-result').hidden = false;
@@ -114,7 +186,7 @@ function showResult(jid) {
 
 function showError(msg) {
   if (pollTimer) clearInterval(pollTimer);
-  ['card-upload', 'card-opts', 'card-progress', 'card-result'].forEach((id) => ($('#' + id).hidden = true));
+  ['card-upload', 'card-opts', 'card-progress', 'card-review', 'card-result'].forEach((id) => ($('#' + id).hidden = true));
   $('#card-error').hidden = false;
   $('#errmsg').textContent = msg;
 }

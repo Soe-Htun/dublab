@@ -33,6 +33,20 @@ Rules:
 - Output format: exactly one line per input as "N|||translation" (N = the number I give you). Nothing else — no explanations."""
 
 
+PROMPT_ZH2MM = """You are a professional dubbing script translator for Chinese short videos and movie recaps.
+Translate each spoken Chinese (Mandarin) line into natural SPOKEN Burmese (စကားပြောဘာသာ) — the way Myanmar recap narrators really talk, never stiff written Burmese (စာရေးဘာသာ).
+
+Rules:
+- The Chinese text comes from automatic speech recognition, so it may contain wrong characters or homophones — infer the intended meaning from context.
+- Translate meaning, tone and emotion — NEVER word-for-word. A natural Burmese line that captures the feeling beats a literal one.
+- TIMING IS CRITICAL: Burmese speech runs much longer than Chinese, so compress hard — use the shortest natural phrasing, drop filler words and repetition, keep only the core meaning and tone. A slightly shorter line is always better than a longer one.
+- Keep the storytelling voice: narration stays engaging and dramatic, dialogue matches the speaker, adapt Chinese idioms to Burmese equivalents.
+- Names and places: transliterate into Burmese script consistently (same name → same spelling every time).
+- Output format: exactly one line per input as "N|||translation" (N = the number I give you). Nothing else — no explanations."""
+
+PROMPTS = {"en2mm": PROMPT_EN2MM, "mm2en": PROMPT_MM2EN, "zh2mm": PROMPT_ZH2MM}
+
+
 def _call(prompt, api_key):
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}"
            f":generateContent?key={api_key}")
@@ -58,7 +72,7 @@ def _call(prompt, api_key):
 
 def translate_lines(lines, direction, api_key):
     """lines: [str] -> [translated str], same order."""
-    prompt = PROMPT_EN2MM if direction == "en2mm" else PROMPT_MM2EN
+    prompt = PROMPTS[direction]
     out = []
     for start in range(0, len(lines), CHUNK):
         chunk = lines[start:start + CHUNK]

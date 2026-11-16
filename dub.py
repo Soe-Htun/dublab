@@ -68,11 +68,12 @@ _model = None
 
 
 def transcribe(wav, lang_hint):
-    """Return [{start, end, text}]. lang_hint: 'en' or 'my'."""
+    """Return [{start, end, text}]. lang_hint: 'en', 'my' or 'zh'."""
     global _model
     from faster_whisper import WhisperModel
     if _model is None:
-        _model = WhisperModel("base", device="cpu", compute_type="int8")
+        _model = WhisperModel(os.environ.get("DUBLAB_WHISPER_MODEL") or "base",
+                              device="cpu", compute_type="int8")
     segments, _info = _model.transcribe(
         str(wav), language=lang_hint, vad_filter=True,
         vad_parameters=dict(min_silence_duration_ms=400))
@@ -231,23 +232,145 @@ def cleanup_segments(job_dir):
 
 WATERMARK_TEXT = os.environ.get("DUBLAB_WATERMARK", "made with DubLab")
 _WM_FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+_has_drawtext = None
 
 
-def mux(src_video, dub_wav, out_mp4):
-    # Burned-in credit watermark, bottom-right (always on): re-encode video
-    # with drawtext; scale guard keeps even dims for yuv420p.
-    vf = (f"scale=trunc(iw/2)*2:trunc(ih/2)*2,"
-          f"drawtext=fontfile={_WM_FONT}:text='{WATERMARK_TEXT}':"
-          "fontsize=h/40:fontcolor=white@0.72:"
-          "shadowcolor=black@0.55:shadowx=1:shadowy=1:"
-          "x=w-text_w-h/40:y=h-text_h-h/56,"
-          "format=yuv420p")
+def _drawtext_ok():
+    """Some ffmpeg builds (e.g. Homebrew without freetype) lack drawtext."""
+    global _has_drawtext
+    if _has_drawtext is None:
+        p = subprocess.run(["ffmpeg", "-hide_banner", "-filters"],
+                           capture_output=True, text=True)
+        _has_drawtext = " drawtext " in p.stdout
+        if not _has_drawtext:
+            print("[mux] ffmpeg has no drawtext filter — watermark skipped")
+    return _has_drawtext
+
+
+# ---- background music: remove the original voices with Demucs ----
+def demucs_available():
+    import importlib.util
+    return importlib.util.find_spec("demucs") is not None
+
+
+def _demucs_devices():
+    forced = os.environ.get("DUBLAB_DEMUCS_DEVICE")
+    if forced:
+        return [forced]
+    import platform
+    import shutil
+    if platform.system() == "Darwin" and platform.machine() == "arm64":
+        return ["mps", "cpu"]          # Apple GPU, ~4x faster than CPU
+    if shutil.which("nvidia-smi"):
+        return ["cuda", "cpu"]
+    return ["cpu"]
+
+
+def separate_music(src_video, job_dir):
+    """Return a wav of the original audio with all voices removed
+    (music + sound effects only), or None if Demucs isn't installed."""
+    import sys
+    if not demucs_available():
+        return None
+    d = Path(job_dir)
+    wav = d / "orig_stereo.wav"
+    run(["ffmpeg", "-y", "-v", "error", "-i", str(src_video),
+         "-vn", "-ac", "2", "-ar", "44100", str(wav)])
+    err = None
+    for dev in _demucs_devices():
+        try:
+            run([sys.executable, "-m", "demucs", "--two-stems=vocals",
+                 "-n", "htdemucs", "-d", dev, "-o", str(d / "sep"), str(wav)])
+            out = d / "sep" / "htdemucs" / "orig_stereo" / "no_vocals.wav"
+            if out.exists():
+                return out
+        except RuntimeError as e:
+            err = e
+    raise RuntimeError(f"music separation failed: {err}")
+
+
+def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8):
+    """Combine picture + dub track.
+
+    bg_wav: music/effects with the original voices removed (separate_music).
+    It goes under the dub at bg_volume and dips a little whenever the dub
+    voice speaks (sidechain compressor) so the new voice stays clear.
+    Without bg_wav the original audio is dropped entirely — the original
+    voices are never mixed in.
+    """
+    # Burned-in credit watermark, bottom-right; scale guard keeps even dims
+    # for yuv420p.
+    vf = "scale=trunc(iw/2)*2:trunc(ih/2)*2,"
+    if WATERMARK_TEXT and _drawtext_ok():
+        font = f"fontfile={_WM_FONT}:" if os.path.exists(_WM_FONT) else ""
+        text = WATERMARK_TEXT.replace("\\", "").replace("'", "").replace(":", "\\:")
+        vf += (f"drawtext={font}text='{text}':"
+               "fontsize=h/40:fontcolor=white@0.72:"
+               "shadowcolor=black@0.55:shadowx=1:shadowy=1:"
+               "x=w-text_w-h/40:y=h-text_h-h/56,")
+    vf += "format=yuv420p"
+    bg_in = []
+    if bg_wav and bg_volume > 0:
+        bg_in = ["-i", str(bg_wav)]
+        fc = (f"[0:v]{vf}[v];"
+              "[1:a]aformat=sample_rates=44100:channel_layouts=stereo,asplit=2[dub][sc];"
+              f"[2:a]aformat=sample_rates=44100:channel_layouts=stereo,volume={bg_volume:.2f}[bg];"
+              "[bg][sc]sidechaincompress=threshold=0.02:ratio=4:attack=20:release=400[duck];"
+              "[duck][dub]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[a]")
+        maps = ["-filter_complex", fc, "-map", "[v]", "-map", "[a]"]
+    else:
+        maps = ["-vf", vf, "-map", "0:v:0", "-map", "1:a:0"]
     run(["ffmpeg", "-y", "-v", "error", "-i", str(src_video), "-i", str(dub_wav),
-         "-vf", vf,
+         *bg_in, *maps,
          "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-         "-map", "0:v:0", "-map", "1:a:0",
          "-c:a", "aac", "-b:a", "128k",
          # No -shortest: the finish-the-sentence rule lets the tail of the
          # last utterance run a little past the video end; -shortest would
          # cut it off again.
          "-movflags", "+faststart", str(out_mp4)])
+
+
+# ---- download from a YouTube / TikTok link (yt-dlp) ----
+URL_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com",
+             "music.youtube.com", "youtu.be",
+             "tiktok.com", "www.tiktok.com", "m.tiktok.com",
+             "vm.tiktok.com", "vt.tiktok.com"}
+
+
+def is_supported_url(url):
+    from urllib.parse import urlparse
+    try:
+        u = urlparse(url.strip())
+    except ValueError:
+        return False
+    return u.scheme in ("http", "https") and (u.hostname or "").lower() in URL_HOSTS
+
+
+def _ydl_opts(**extra):
+    return {"quiet": True, "no_warnings": True, "noprogress": True, "noplaylist": True,
+            "socket_timeout": 30, "retries": 3, **extra}
+
+
+def probe_url(url):
+    """Return (title, duration_seconds, is_live) without downloading."""
+    import yt_dlp
+    with yt_dlp.YoutubeDL(_ydl_opts()) as ydl:
+        info = ydl.extract_info(url, download=False)
+    return (info.get("title") or "?", float(info.get("duration") or 0),
+            bool(info.get("is_live")))
+
+
+def download_url(url, job_dir, max_mb):
+    """Download the video (≤720p) into job_dir as input.mp4; return its path."""
+    import yt_dlp
+    out = Path(job_dir) / "input.mp4"
+    opts = _ydl_opts(
+        format="bv*[height<=720]+ba/b[height<=720]/bv*+ba/b",
+        merge_output_format="mp4",
+        outtmpl=str(Path(job_dir) / "input.%(ext)s"),
+        max_filesize=max_mb * 1024 * 1024)
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        ydl.download([url])
+    if not out.exists():
+        raise RuntimeError("video download failed")
+    return out

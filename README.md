@@ -23,7 +23,10 @@ for this pair and runs in production for Myanmar content creators.
 
 ## Features
 
-- 🎬 **Video dubbing** — upload a video (≤ 5 min, ≤ 250 MB), download the dubbed MP4
+- 🎬 **Video dubbing** — upload a video (≤ 30 min, ≤ 1 GB by default) **or paste a YouTube / TikTok link**, download the dubbed MP4
+- 🎵 **Keeps the background, drops the original voices** — [Demucs](https://github.com/facebookresearch/demucs) strips the original speech so only music and sound effects stay under the new voice (dipped slightly while it speaks); runs on Apple GPU / CUDA when available; can be switched off per video
+- 🇨🇳 **Chinese → Burmese** — dub Chinese (Mandarin) videos and recaps into spoken Burmese
+- ✏️ **Check the translation before voicing** — review and edit every Burmese line (or blank it to skip) before the voice is generated
 - 🗣️ **Burmese + English voices** — male and female voices both directions
   (`my-MM-ThihaNeural`, `my-MM-NilarNeural`, `en-US-AndrewNeural`, `en-US-AvaNeural`)
 - 🎙️ **Local transcription** — [faster-whisper](https://github.com/SYSTRAN/faster-whisper) on your own machine, no audio leaves your server for STT
@@ -66,12 +69,17 @@ cd dublab
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # put your GEMINI_API_KEY in .env
-set -a; source .env; set +a
-waitress-serve --listen=127.0.0.1:8092 --threads=8 app:app
+./run.sh              # loads .env, starts waitress on 127.0.0.1:8092
 ```
+
+Override defaults if needed: `PORT=9000 THREADS=4 ./run.sh`.
 
 Open http://127.0.0.1:8092, drop in a short video, pick a direction and a
 voice, and download the dubbed result.
+
+> 🔗 Link input uses [yt-dlp](https://github.com/yt-dlp/yt-dlp). Sites change often — run
+> `pip install -U yt-dlp` when downloads start failing. YouTube may block
+> datacenter/cloud IPs; a home connection works more reliably.
 
 > ⚠️ Dependency pins matter: `requirements.txt` pins `av==15.1.0` and
 > `huggingface_hub<1` — newer versions break faster-whisper 1.2.x.
@@ -98,6 +106,11 @@ All configuration is via environment variables (see `.env.example`):
 | `GEMINI_TTS_API_KEYS` | — | Comma-separated keys for Gemini TTS rotation |
 | `DUBLAB_ADMIN_KEY` | — | Password for the `/admin` reviews page |
 | `DUBLAB_WATERMARK` | — | Watermark text (default: `made with DubLab`) |
+| `DUBLAB_MAX_MINUTES` | — | Longest video accepted, in minutes (default `30`) |
+| `DUBLAB_MAX_MB` | — | Largest upload/download, in MB (default `1000`; `run.sh` raises waitress's upload limit to match — when starting waitress yourself, pass `--max-request-body-size`) |
+| `DUBLAB_BG_VOLUME` | — | Volume of the background music/effects under the dub, `0`–`1` (default `0.8`; `0` = none) |
+| `DUBLAB_DEMUCS_DEVICE` | — | Force Demucs device: `mps` / `cuda` / `cpu` (default: auto) |
+| `DUBLAB_WHISPER_MODEL` | — | faster-whisper model: `base` (default, fast) · `small` / `medium` / `large-v3-turbo` (better accuracy, esp. Chinese; slower, more RAM) |
 
 ## မြန်မာဘာသာ အကျဉ်းချုပ်
 

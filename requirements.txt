@@ -7,3 +7,8 @@ edge-tts>=7.0
 av==15.1.0
 huggingface_hub<1
 gtts>=2.5
+# removes the original voices so only background music/effects stay under the dub
+# (pulls in torch; ~1 GB). Without it, background audio is simply dropped.
+demucs>=4.0
+# YouTube link input; keep updated (pip install -U yt-dlp) — sites change often
+yt-dlp>=2026.10

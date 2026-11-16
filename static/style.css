@@ -123,3 +123,21 @@ textarea:focus{outline:none;border-color:var(--p1)}
 .tab.on{background:linear-gradient(135deg,#7c3aed,#4f46e5);color:#fff;border-color:transparent}
 .srt-card{padding:8px}
 #srtframe{width:100%;height:78vh;min-height:560px;border:0;border-radius:12px;background:#fff}
+
+/* language grid with 3 choices + translation review */
+.optgrid.three{grid-template-columns:repeat(3,1fr)}
+@media (max-width:480px){.optgrid.three{grid-template-columns:1fr}}
+.checkrow{display:flex;align-items:center;gap:10px;margin:4px 0 14px;font-size:14px;cursor:pointer}
+.checkrow input{width:18px;height:18px;accent-color:var(--p1)}
+.note.left{text-align:left;margin:0 0 12px}
+.lines{display:flex;flex-direction:column;gap:12px;max-height:60vh;overflow-y:auto;margin-bottom:14px;padding-right:4px}
+.line-meta{font-size:12px;color:var(--dim);margin-bottom:4px;word-break:break-word}
+
+/* YouTube link input */
+.ordiv{display:flex;align-items:center;gap:10px;color:var(--dim);font-size:13px;margin:14px 0 10px}
+.ordiv::before,.ordiv::after{content:"";flex:1;height:1px;background:var(--card-br)}
+.urlrow{display:flex;gap:8px}
+.urlrow input{flex:1;min-width:0;box-sizing:border-box;background:rgba(255,255,255,.05);border:1px solid var(--card-br);
+  border-radius:12px;color:var(--txt);padding:12px;font:inherit;font-size:14px}
+.urlrow input:focus{outline:none;border-color:var(--p1)}
+.urlrow .ghost{width:auto;margin-top:0;padding:0 18px;white-space:nowrap}
