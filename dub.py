@@ -281,7 +281,7 @@ def synthesize(text, voice, out_path):
         raise err
 
 
-def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None):
+def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=None):
     """TTS each utterance, time-fit into its slot, mix into one dub track.
 
     Finish-the-sentence rule (2026-10-25, user order): an utterance is
@@ -330,8 +330,17 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None):
         atempo = 1.0 if ratio <= 1.0 else min(ratio, MAX_ATEMPO)
         fitted = tts_dur / atempo
         start = max(u["start"], cursor)
-        plan.append((i, atempo, start))
+        plan.append((tmpdir / f"u{i}.mp3", atempo, start))
         cursor = start + fitted + GAP
+
+    # Channel outro ("like and follow…") in the same voice: after the last
+    # line, ending right at the video end when there is room; if the speech
+    # runs to the end it plays just after (players hold the last frame).
+    if outro:
+        op = tmpdir / "outro.mp3"
+        synthesize(outro, voice, op)
+        odur = probe_duration(op)
+        plan.append((op, 1.0, max(cursor + 0.5, total_dur - odur - 0.3)))
 
     # Decode + time-fit every line to raw samples in parallel, then add them
     # into one in-memory track. (The old way wrote one wav per line padded
@@ -340,8 +349,8 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None):
     SR = 44100
 
     def _fit(item):
-        i, atempo, start = item
-        cmd = ["ffmpeg", "-v", "error", "-i", str(tmpdir / f"u{i}.mp3")]
+        path, atempo, start = item
+        cmd = ["ffmpeg", "-v", "error", "-i", str(path)]
         if atempo > 1.001:
             cmd += ["-af", f"atempo={atempo:.3f}"]
         cmd += ["-ac", "1", "-ar", str(SR), "-f", "f32le", "-"]
@@ -380,7 +389,7 @@ def cleanup_segments(job_dir):
         return 0
     d = Path(job_dir)
     removed = 0
-    for pat in ("u*.mp3", "p*.wav"):
+    for pat in ("u*.mp3", "p*.wav", "outro.mp3"):
         for f in d.glob(pat):
             try:
                 f.unlink()
@@ -449,7 +458,7 @@ def separate_music(src_video, job_dir):
     raise RuntimeError(f"music separation failed: {err}")
 
 
-def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8):
+def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None):
     """Combine picture + dub track.
 
     bg_wav: music/effects with the original voices removed (separate_music).
@@ -457,6 +466,8 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8):
     voice speaks (sidechain compressor) so the new voice stays clear.
     Without bg_wav the original audio is dropped entirely — the original
     voices are never mixed in.
+    logo: optional dict(path=PNG, position="top-right"|"top-left"|
+    "bottom-right"|"bottom-left", size=fraction of video width).
     """
     # Burned-in credit watermark, bottom-right; scale guard keeps even dims
     # for yuv420p.
@@ -470,6 +481,12 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8):
                "shadowcolor=black@0.55:shadowx=1:shadowy=1:"
                "x=w-text_w-h/40:y=h-text_h-h/56,")
     vf += "format=yuv420p"
+    if logo:
+        vw = _video_width(src_video)
+        lw = max(16, int(vw * float(logo.get("size", 0.12))) // 2 * 2)
+        m = max(8, int(vw * 0.02))                 # margin from the edges
+        x = f"{m}" if "left" in logo.get("position", "") else f"W-w-{m}"
+        y = f"H-h-{m}" if "bottom" in logo.get("position", "") else f"{m}"
     bg_in = []
     if bg_wav and bg_volume > 0:
         bg_in = ["-i", str(bg_wav)]
@@ -481,27 +498,70 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8):
     else:
         afc, amap = None, ["-map", "1:a:0"]
 
-    def _cmd(copy_video):
+    logo_in = ["-i", str(logo["path"])] if logo else []
+    logo_idx = 2 + (1 if bg_in else 0)
+
+    def _cmd(copy_video, encoder="libx264"):
         if copy_video:   # nothing to draw: keep the original picture, no re-encode
             fc = ["-filter_complex", afc] if afc else []
             vid = ["-map", "0:v:0", "-c:v", "copy"]
         else:
-            fc = ["-filter_complex", f"[0:v]{vf}[v]" + (";" + afc if afc else "")]
-            vid = ["-map", "[v]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
+            if logo:
+                vfc = (f"[{logo_idx}:v]scale={lw}:-1,format=rgba[lg];"
+                       f"[0:v]{vf.replace(',format=yuv420p', '')}[base];"
+                       f"[base][lg]overlay={x}:{y},format=yuv420p[v]")
+            else:
+                vfc = f"[0:v]{vf}[v]"
+            fc = ["-filter_complex", vfc + (";" + afc if afc else "")]
+            if encoder == "h264_videotoolbox":     # Apple hardware encoder: ~5x faster
+                enc = ["-c:v", "h264_videotoolbox", "-q:v", "65", "-allow_sw", "1"]
+            else:
+                enc = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
+            vid = ["-map", "[v]", *enc]
         return ["ffmpeg", "-y", "-v", "error", "-i", str(src_video), "-i", str(dub_wav),
-                *bg_in, *fc, *vid, *amap, "-c:a", "aac", "-b:a", "128k",
+                *bg_in, *logo_in, *fc, *vid, *amap, "-c:a", "aac", "-b:a", "128k",
                 # No -shortest: the finish-the-sentence rule lets the tail of the
                 # last utterance run a little past the video end; -shortest would
                 # cut it off again.
                 "-movflags", "+faststart", str(out_mp4)]
 
-    if not watermark:
+    if not watermark and not logo:
         try:
             run(_cmd(copy_video=True))
             return
         except RuntimeError as e:   # codec not allowed in MP4 etc. — re-encode
             print(f"[mux] stream copy failed ({e}); re-encoding")
+    if _has_encoder("h264_videotoolbox"):
+        try:
+            run(_cmd(copy_video=False, encoder="h264_videotoolbox"))
+            return
+        except RuntimeError as e:
+            print(f"[mux] hardware encoder failed ({e}); using libx264")
     run(_cmd(copy_video=False))
+
+
+_encoders = None
+
+
+def _has_encoder(name):
+    global _encoders
+    if _encoders is None:
+        p = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"],
+                           capture_output=True, text=True)
+        _encoders = p.stdout
+    return f" {name} " in _encoders
+
+
+def _video_width(path):
+    p = run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width", "-of", "csv=p=0", str(path)])
+    return int(p.stdout.strip().split(",")[0])
+
+
+def normalize_logo(src, dst):
+    """Convert an uploaded image to PNG (alpha kept), at most 1000 px wide."""
+    run(["ffmpeg", "-y", "-v", "error", "-i", str(src),
+         "-vf", "scale='min(1000,iw)':-1", "-frames:v", "1", "-pix_fmt", "rgba", str(dst)])
 
 
 # ---- download from a YouTube / TikTok link (yt-dlp) ----

@@ -7,3 +7,4 @@ reviews.jsonl
 *.log
 .edge_primary
 settings.json
+brand/

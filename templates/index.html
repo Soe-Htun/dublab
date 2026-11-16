@@ -88,6 +88,18 @@
       <input type="checkbox" id="bgchk">
       <span>🎵 နောက်ခံ music / sound effect ချန်ထားမယ် <span class="dim">(မူရင်းစကားသံ ဖယ်ပြီး · အချိန် ပိုကြာမယ်)</span></span>
     </label>
+    {% if has_logo %}
+    <label class="checkrow">
+      <input type="checkbox" id="logochk" checked>
+      <span>🏷️ Channel logo ထည့်မယ် <span class="dim">(admin Settings က နေရာအတိုင်း)</span></span>
+    </label>
+    {% endif %}
+    {% if outro %}
+    <label class="checkrow">
+      <input type="checkbox" id="outrochk" checked>
+      <span>📢 အဆုံးမှာ ပြောမယ် <span class="dim">— “{{ outro }}”</span></span>
+    </label>
+    {% endif %}
     <label class="checkrow">
       <input type="checkbox" id="reviewchk" checked>
       <span>✏️ အသံမဖော်ခင် ဘာသာပြန်စာကို ကြည့်ပြီး ပြင်မယ်</span>

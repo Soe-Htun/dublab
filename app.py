@@ -13,6 +13,7 @@ from pathlib import Path
 from flask import Flask, jsonify, render_template, request, send_file
 
 from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tts,
+                 normalize_logo,
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
@@ -35,11 +36,26 @@ JOBS.mkdir(exist_ok=True)
 # at runtime (saved to settings.json so it survives restarts).
 SETTINGS_FILE = BASE / "settings.json"
 MAX_MINUTES_LIMIT = 180
-_settings = {"max_minutes": int(os.environ.get("DUBLAB_MAX_MINUTES") or 30)}
+OUTRO_MAX = 200   # chars
+# channel logo burned into the video corner (uploaded on the admin page)
+BRAND_DIR = BASE / "brand"
+LOGO_FILE = BRAND_DIR / "logo.png"
+LOGO_POSITIONS = ("top-right", "top-left", "bottom-right", "bottom-left")
+_settings = {"max_minutes": int(os.environ.get("DUBLAB_MAX_MINUTES") or 30),
+             # spoken at the end of every dub (in the chosen voice); "" = off
+             "outro": (os.environ.get("DUBLAB_OUTRO") or "").strip()[:OUTRO_MAX],
+             "logo_position": "top-right",
+             "logo_size": 12}   # % of the video width
 try:
     _saved = json.loads(SETTINGS_FILE.read_text())
     if isinstance(_saved.get("max_minutes"), int) and 1 <= _saved["max_minutes"] <= MAX_MINUTES_LIMIT:
         _settings["max_minutes"] = _saved["max_minutes"]
+    if isinstance(_saved.get("outro"), str):
+        _settings["outro"] = _saved["outro"].strip()[:OUTRO_MAX]
+    if _saved.get("logo_position") in LOGO_POSITIONS:
+        _settings["logo_position"] = _saved["logo_position"]
+    if isinstance(_saved.get("logo_size"), int) and 5 <= _saved["logo_size"] <= 30:
+        _settings["logo_size"] = _saved["logo_size"]
 except (OSError, ValueError, AttributeError):
     pass
 
@@ -285,11 +301,19 @@ def _voice_and_mux(job):
         job.update(pct=60 + int(30 * i / max(n, 1)))
         if i % 5 == 0 or i == n:
             jlog(job, f"tts {i}/{n}")
-    dub_wav = build_dub_track(utter, voice_name, d, job["total"], tts_prog)
+    outro = _settings["outro"] if job.get("outro") else ""
+    if outro:
+        jlog(job, f"adding outro: {outro}")
+    dub_wav = build_dub_track(utter, voice_name, d, job["total"], tts_prog, outro or None)
 
     job.update(stage="mux", pct=93)
     jlog(job, "muxing dubbed audio with video…")
-    mux(src, dub_wav, d / "dubbed.mp4", bg_wav=bg_wav, bg_volume=BG_VOLUME)
+    logo = None
+    if job.get("logo") and LOGO_FILE.exists():
+        logo = {"path": LOGO_FILE, "position": _settings["logo_position"],
+                "size": _settings["logo_size"] / 100}
+        jlog(job, f"adding logo ({_settings['logo_position']}, {_settings['logo_size']}%)")
+    mux(src, dub_wav, d / "dubbed.mp4", bg_wav=bg_wav, bg_volume=BG_VOLUME, logo=logo)
     shutil.rmtree(d / "sep", ignore_errors=True)
     cleanup_segments(d)
     (d / "dub.wav").unlink(missing_ok=True)
@@ -336,7 +360,8 @@ threading.Thread(target=worker, daemon=True).start()
 @app.get("/")
 def index():
     return render_template("index.html", max_minutes=max_minutes(), max_mb=max_mb(),
-                           default_model=default_whisper_model(),
+                           default_model=default_whisper_model(), outro=_settings["outro"],
+                           has_logo=LOGO_FILE.exists(),
                            maintenance=MAINTENANCE,
                            maintenance_msg=MAINTENANCE_MSG)
 
@@ -365,6 +390,8 @@ def create_job():
     voice = request.form.get("voice", "auto")
     review = request.form.get("review") == "1"
     keep_bg = request.form.get("keep_bg", "0") == "1"
+    outro = request.form.get("outro", "1") == "1"
+    logo = request.form.get("logo", "1") == "1"
     model = request.form.get("model") or default_whisper_model()
     if model not in WHISPER_MODELS:
         model = default_whisper_model()
@@ -412,7 +439,7 @@ def create_job():
     jobs[jid] = {"status": "queued", "stage": "queue", "pct": 0, "error": "",
                  "dir": d, "ext": ext, "direction": direction, "url": url,
                  "voice": voice, "review": review, "keep_bg": keep_bg, "phase": 1,
-                 "model": model,
+                 "model": model, "outro": outro, "logo": logo,
                  "created": time.time()}
     jlog(jobs[jid], "uploaded " + re.sub(r"[\r\n]", " ", label)[:160])
     with lock:
@@ -587,7 +614,9 @@ def admin_get_settings():
     du = shutil.disk_usage(JOBS)
     jobs_bytes = sum(f.stat().st_size for f in JOBS.rglob("*") if f.is_file())
     return jsonify(max_minutes=max_minutes(), max_minutes_limit=MAX_MINUTES_LIMIT,
-                   max_mb=max_mb(),
+                   max_mb=max_mb(), outro=_settings["outro"], outro_max=OUTRO_MAX,
+                   has_logo=LOGO_FILE.exists(), logo_position=_settings["logo_position"],
+                   logo_size=_settings["logo_size"],
                    disk_free_gb=round(du.free / 1e9, 1), disk_total_gb=round(du.total / 1e9, 1),
                    jobs_gb=round(jobs_bytes / 1e9, 2))
 
@@ -604,11 +633,61 @@ def admin_set_settings():
     if not 1 <= mins <= MAX_MINUTES_LIMIT:
         return jsonify(error=f"1 မှ {MAX_MINUTES_LIMIT} မိနစ်အတွင်း ထည့်ပါ"), 400
     _settings["max_minutes"] = mins
+    if "outro" in data:
+        _settings["outro"] = re.sub(r"\s+", " ", str(data.get("outro") or "")).strip()[:OUTRO_MAX]
+    if data.get("logo_position") in LOGO_POSITIONS:
+        _settings["logo_position"] = data["logo_position"]
+    if "logo_size" in data:
+        try:
+            _settings["logo_size"] = max(5, min(30, int(data["logo_size"])))
+        except (TypeError, ValueError):
+            pass
     try:
-        SETTINGS_FILE.write_text(json.dumps(_settings))
+        SETTINGS_FILE.write_text(json.dumps(_settings, ensure_ascii=False))
     except OSError:
         return jsonify(error="သိမ်းမရဘူး"), 500
     return jsonify(ok=True, **_settings)
+
+
+@app.get("/admin/api/logo")
+def admin_get_logo():
+    if not _admin_ok() or not LOGO_FILE.exists():
+        return jsonify(error="not found"), 404
+    return send_file(LOGO_FILE, mimetype="image/png", max_age=0)
+
+
+@app.post("/admin/api/logo")
+def admin_upload_logo():
+    if not _admin_ok():
+        return jsonify(error="not found"), 404
+    f = request.files.get("logo")
+    if not f or not f.filename:
+        return jsonify(error="ပုံ ရွေးပါ"), 400
+    if os.path.splitext(f.filename)[1].lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+        return jsonify(error="PNG/JPG ပုံပဲ လက်ခံတယ် (နောက်ခံ ကြည်လင်တဲ့ PNG အကောင်းဆုံး)"), 400
+    BRAND_DIR.mkdir(exist_ok=True)
+    tmp = BRAND_DIR / ("upload" + os.path.splitext(f.filename)[1].lower())
+    try:
+        f.save(tmp)
+        if tmp.stat().st_size > 10 * 1024 * 1024:
+            raise ValueError("ပုံက 10 MB ထက် ကြီးနေတယ်")
+        normalize_logo(tmp, BRAND_DIR / "logo.new.png")
+        (BRAND_DIR / "logo.new.png").replace(LOGO_FILE)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except Exception:  # noqa: BLE001 - not an image ffmpeg can read
+        return jsonify(error="ပုံဖိုင် ဖွင့်မရဘူး"), 400
+    finally:
+        tmp.unlink(missing_ok=True)
+    return jsonify(ok=True)
+
+
+@app.delete("/admin/api/logo")
+def admin_delete_logo():
+    if not _admin_ok():
+        return jsonify(error="not found"), 404
+    LOGO_FILE.unlink(missing_ok=True)
+    return jsonify(ok=True)
 
 
 @app.delete("/admin/api/reviews/<rid>")

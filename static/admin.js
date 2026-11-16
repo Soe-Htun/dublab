@@ -92,6 +92,11 @@ async function loadSettings() {
     const j = await r.json();
     $('#maxmin').value = j.max_minutes;
     $('#maxmin').max = j.max_minutes_limit;
+    $('#outroin').value = j.outro || '';
+    $('#logopos').value = j.logo_position;
+    $('#logosize').value = j.logo_size;
+    $('#logosizev').textContent = j.logo_size + '%';
+    showLogo(j.has_logo);
     $('#setnote').textContent = `🖴 Disk: ${j.disk_free_gb} GB လွတ်သေး / ${j.disk_total_gb} GB · ` +
       `jobs ဖိုင်တွေ ${j.jobs_gb} GB (၂၄ နာရီနေရင် အလိုလို ဖျက်တယ်) · ဖိုင်အရွယ်အစား အများဆုံး ${j.max_mb} MB (.env ထဲက DUBLAB_MAX_MB)`;
   } catch (e) { /* ignore */ }
@@ -102,7 +107,8 @@ $('#setsave').addEventListener('click', async () => {
   try {
     const r = await fetch('/admin/api/settings?key=' + encodeURIComponent(key), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ max_minutes: +$('#maxmin').value }),
+      body: JSON.stringify({ max_minutes: +$('#maxmin').value, outro: $('#outroin').value,
+        logo_position: $('#logopos').value, logo_size: +$('#logosize').value }),
     });
     const j = await r.json().catch(() => ({}));
     msg.textContent = r.ok ? `✅ သိမ်းပြီးပြီ — ${j.max_minutes} မိနစ်အထိ လက်ခံမယ်` : (j.error || 'သိမ်းမရဘူး');
@@ -113,6 +119,30 @@ $('#setsave').addEventListener('click', async () => {
   setTimeout(() => (msg.hidden = true), 5000);
 });
 loadSettings();
+
+// ---- channel logo ----
+function showLogo(has) {
+  const img = $('#logoimg');
+  img.hidden = !has; $('#logonone').hidden = has; $('#logodel').hidden = !has;
+  if (has) img.src = '/admin/api/logo?key=' + encodeURIComponent(key) + '&t=' + Date.now();
+}
+$('#logosize').addEventListener('input', () => ($('#logosizev').textContent = $('#logosize').value + '%'));
+$('#logofile').addEventListener('change', async () => {
+  const f = $('#logofile').files[0];
+  if (!f) return;
+  const fd = new FormData(); fd.append('logo', f);
+  try {
+    const r = await fetch('/admin/api/logo?key=' + encodeURIComponent(key), { method: 'POST', body: fd });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) showLogo(true); else alert(j.error || 'တင်မရဘူး');
+  } catch (e) { alert('တင်မရဘူး'); }
+  $('#logofile').value = '';
+});
+$('#logodel').addEventListener('click', async () => {
+  if (!confirm('Logo ကို ဖျက်မလား?')) return;
+  const r = await fetch('/admin/api/logo?key=' + encodeURIComponent(key), { method: 'DELETE' });
+  if (r.ok) showLogo(false);
+});
 
 load();
 setInterval(() => { if (!document.hidden) load(); }, 30000);

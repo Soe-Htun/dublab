@@ -33,3 +33,13 @@
 .setinput input{width:90px;background:rgba(255,255,255,.05);border:1px solid var(--card-br);border-radius:10px;
   color:var(--txt);padding:8px 10px;font:inherit;font-size:15px;text-align:right}
 .setinput input:focus{outline:none;border-color:var(--p1)}
+.setcol{display:flex;flex-direction:column;gap:6px;font-size:14px;margin:6px 0 8px}
+.logorow{display:flex;align-items:center;gap:12px}
+.logobox{width:96px;height:96px;flex:none;border-radius:12px;border:1px dashed var(--card-br);display:flex;align-items:center;justify-content:center;
+  text-align:center;font-size:11px;padding:6px;background:repeating-conic-gradient(rgba(255,255,255,.06) 0 25%,transparent 0 50%) 0 0/16px 16px}
+.logobox img{max-width:100%;max-height:100%}
+.logobtns{display:flex;flex-direction:column;gap:6px}
+.filebtn{display:inline-block;cursor:pointer;font-size:13px}
+.setselect{background:rgba(255,255,255,.05);border:1px solid var(--card-br);border-radius:10px;color:var(--txt);padding:8px 10px;font:inherit;font-size:14px}
+.setselect option{background:#141420}
+#logosize{accent-color:var(--p1);width:140px}

@@ -32,6 +32,33 @@
       <span>⏱️ ဗီဒီယို အရှည် အများဆုံး</span>
       <span class="setinput"><input type="number" id="maxmin" min="1" max="180" step="1" inputmode="numeric"> မိနစ်</span>
     </label>
+    <label class="setcol" for="outroin">
+      <span>📢 ဗီဒီယို အဆုံးမှာ ပြောမယ့်စာ <span class="dim">(အလွတ်ထားရင် မပြောဘူး)</span></span>
+      <textarea id="outroin" rows="2" maxlength="200" placeholder="ဥပမာ — ကျွန်တော့်ရဲ့ channel လေးကို like and follow လေး လုပ်ခဲ့ပေးပါဦး"></textarea>
+    </label>
+    <div class="setcol">
+      <span>🏷️ Channel logo <span class="dim">(နောက်ခံ ကြည်လင်တဲ့ PNG အကောင်းဆုံး)</span></span>
+      <div class="logorow">
+        <div class="logobox" id="logobox"><span class="dim" id="logonone">logo မရှိသေးဘူး</span><img id="logoimg" alt="logo" hidden></div>
+        <div class="logobtns">
+          <label class="mini filebtn">📤 ပုံတင်မယ်<input type="file" id="logofile" accept="image/png,image/jpeg,image/webp" hidden></label>
+          <button class="mini" id="logodel" hidden>🗑️ ဖျက်မယ်</button>
+        </div>
+      </div>
+    </div>
+    <label class="setrow" for="logopos">
+      <span>📍 Logo နေရာ</span>
+      <select id="logopos" class="setselect">
+        <option value="top-right">↗️ ညာ အပေါ်</option>
+        <option value="top-left">↖️ ဘယ် အပေါ်</option>
+        <option value="bottom-right">↘️ ညာ အောက်</option>
+        <option value="bottom-left">↙️ ဘယ် အောက်</option>
+      </select>
+    </label>
+    <label class="setrow" for="logosize">
+      <span>📏 Logo အရွယ်အစား</span>
+      <span class="setinput"><input type="range" id="logosize" min="5" max="30" step="1"> <b id="logosizev">12%</b></span>
+    </label>
     <p class="note left" id="setnote">–</p>
     <button class="cta" id="setsave">💾 သိမ်းမယ်</button>
     <p class="note" id="setmsg" hidden></p>
