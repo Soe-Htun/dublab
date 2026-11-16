@@ -94,6 +94,15 @@ add your authtoken (`ngrok config add-authtoken …`), put your free static
 domain in `.env` as `NGROK_DOMAIN=…`, then run `./run.sh` and, in a second
 terminal, `./ngrok`.
 
+### Terms / Privacy site on Netlify (optional)
+
+TikTok's app review needs Terms of Service and Privacy Policy URLs that are always
+online. `netlify.toml` builds them as a static site from `templates/legal.html`
+(the same pages the app serves at `/terms` and `/privacy`): connect the repo in
+Netlify and set `CONTACT_EMAIL` and `APP_NAME` as environment variables there.
+TikTok URL-verification files (`tiktok….txt`) go in `site_static/`.
+Build locally with `python scripts/build_site.py`.
+
 ### Docker
 
 ```bash

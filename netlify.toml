@@ -1,0 +1,9 @@
+# Static Terms/Privacy site (for the TikTok app review), built from
+# templates/legal.html. The dubbing app itself does not run on Netlify.
+# Set CONTACT_EMAIL and APP_NAME in Netlify → Site configuration → Environment variables.
+[build]
+  command = "pip install jinja2 && python3 scripts/build_site.py"
+  publish = "site_dist"
+
+[build.environment]
+  PYTHON_VERSION = "3.12"
