@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Expose the local DubLab server on your fixed ngrok domain (HTTPS).
+# Usage: ./ngrok        (needs NGROK_DOMAIN in .env, e.g. NGROK_DOMAIN=myname.ngrok-free.app)
+# Start the app first with ./run.sh in another terminal.
+set -e
+cd "$(dirname "$0")"
+
+# read NGROK_DOMAIN / PORT from .env (plain KEY=value lines, same as run.sh)
+if [ -f .env ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|\#*) continue ;; esac
+    key="${line%%=*}"; val="${line#*=}"
+    case "$key" in NGROK_DOMAIN|PORT) ;; *) continue ;; esac
+    if [[ "$val" == \"*\" || "$val" == \'*\' ]]; then val="${val:1:${#val}-2}"; fi
+    [ -z "${!key}" ] && export "$key=$val"
+  done < .env
+fi
+
+if [ -z "$NGROK_DOMAIN" ]; then
+  echo "NGROK_DOMAIN is not set — add e.g. NGROK_DOMAIN=myname.ngrok-free.app to .env" >&2
+  exit 1
+fi
+
+# the real ngrok binary on PATH (not this script, which has the same name)
+self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+bin=""
+IFS=: read -ra dirs <<< "$PATH"
+for d in "${dirs[@]}"; do
+  if [ -x "$d/ngrok" ] && [ "$(cd "$d" 2>/dev/null && pwd)/ngrok" != "$self" ]; then bin="$d/ngrok"; break; fi
+done
+if [ -z "$bin" ]; then
+  echo "ngrok is not installed — run: brew install ngrok" >&2
+  exit 1
+fi
+
+echo "DubLab → https://$NGROK_DOMAIN  (forwarding to port ${PORT:-8092})"
+exec "$bin" http --url="$NGROK_DOMAIN" "${PORT:-8092}"

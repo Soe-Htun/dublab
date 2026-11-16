@@ -86,6 +86,13 @@ voice, and download the dubbed result.
 > ⚠️ Dependency pins matter: `requirements.txt` pins `av==15.1.0` and
 > `huggingface_hub<1` — newer versions break faster-whisper 1.2.x.
 
+### Public HTTPS link (optional, ngrok)
+
+Needed e.g. for TikTok login redirects. Install ngrok (`brew install ngrok`),
+add your authtoken (`ngrok config add-authtoken …`), put your free static
+domain in `.env` as `NGROK_DOMAIN=…`, then run `./run.sh` and, in a second
+terminal, `./ngrok`.
+
 ### Docker
 
 ```bash
