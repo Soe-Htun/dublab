@@ -135,29 +135,114 @@ def big_available():
         return False
 
 
-def send_big_video(chat_id, path, filename, caption="", duration=0, width=0, height=0,
-                   thumb=None, progress=None):
-    """Upload a video of up to 2 GB to chat_id as the bot (blocking)."""
+UPLOAD_WORKERS = int(os.environ.get("TELEGRAM_UPLOAD_WORKERS") or 8)
+PART = 512 * 1024                         # Telegram's largest upload part
+
+
+async def _parallel_upload(client, path, filename, progress=None):
+    """Upload the file in 512 KB parts, several at once (Telethon's own
+    upload sends one part at a time, which is slow for big videos)."""
     import asyncio
+    import random
+    from telethon.tl.functions.upload import SaveBigFilePartRequest
+    from telethon.tl.types import InputFileBig
+
+    size = os.path.getsize(path)
+    total = (size + PART - 1) // PART
+    file_id = random.getrandbits(63)
+    done = [0]
+    queue = asyncio.Queue()
+    for i in range(total):
+        queue.put_nowait(i)
+
+    async def worker(fh):
+        while True:
+            try:
+                i = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            fh.seek(i * PART)
+            data = fh.read(PART)
+            for attempt in range(5):
+                try:
+                    if await client(SaveBigFilePartRequest(file_id, i, total, data)):
+                        break
+                except Exception:  # noqa: BLE001 - retry a few times, then give up
+                    if attempt == 4:
+                        raise
+                    await asyncio.sleep(1 + attempt * 2)
+            done[0] += 1
+            if progress:
+                progress(done[0] / total)
+
+    handles = [open(path, "rb") for _ in range(UPLOAD_WORKERS)]
+    try:
+        await asyncio.gather(*(worker(fh) for fh in handles))
+    finally:
+        for fh in handles:
+            fh.close()
+    return InputFileBig(file_id, total, filename)
+
+
+def _client():
     from telethon import TelegramClient
-    from telethon.tl.types import DocumentAttributeFilename, DocumentAttributeVideo, PeerUser
+    return TelegramClient(SESSION, int(os.environ["TELEGRAM_API_ID"]),
+                          os.environ["TELEGRAM_API_HASH"].strip())
+
+
+def upload_parts(path, filename, progress=None):
+    """Upload the file to Telegram without sending it yet; returns a token for
+    send_big_video(prepared=...) so the send itself takes only a second."""
+    import asyncio
 
     async def run():
-        client = TelegramClient(SESSION, int(os.environ["TELEGRAM_API_ID"]),
-                                os.environ["TELEGRAM_API_HASH"].strip())
+        client = _client()
+        await client.start(bot_token=token())
+        try:
+            f = await _parallel_upload(client, path, filename, progress)
+            return (f.id, f.parts, f.name)
+        finally:
+            await client.disconnect()
+
+    with _big_lock:
+        try:
+            return asyncio.run(run())
+        except Exception as e:  # noqa: BLE001
+            raise TelegramError(str(e)[:300]) from None
+
+
+def send_big_video(chat_id, path, filename, caption="", duration=0, width=0, height=0,
+                   thumb=None, progress=None, prepared=None):
+    """Send a video of up to 2 GB to chat_id as the bot (blocking). With
+    `prepared` (from upload_parts) the file is already on Telegram's side;
+    if Telegram has dropped it meanwhile, it is uploaded again."""
+    import asyncio
+    from telethon.tl.types import (DocumentAttributeFilename, DocumentAttributeVideo,
+                                   InputFileBig, PeerUser)
+
+    async def run():
+        client = _client()
         await client.start(bot_token=token())
         try:
             try:
                 peer = await client.get_input_entity(chat_id)
             except ValueError:            # not cached yet: look the user up
                 peer = await client.get_input_entity(PeerUser(chat_id))
-            cb = (lambda sent, total: progress(sent / max(total, 1))) if progress else None
-            await client.send_file(
-                peer, str(path), caption=caption[:1000], supports_streaming=True,
-                thumb=str(thumb) if thumb else None, part_size_kb=512, progress_callback=cb,
-                attributes=[DocumentAttributeVideo(duration=int(duration), w=int(width),
-                                                   h=int(height), supports_streaming=True),
-                            DocumentAttributeFilename(filename)])
+            async def send(uploaded):
+                await client.send_file(
+                    peer, uploaded, caption=caption[:1000], supports_streaming=True,
+                    thumb=str(thumb) if thumb else None,
+                    attributes=[DocumentAttributeVideo(duration=int(duration), w=int(width),
+                                                       h=int(height), supports_streaming=True),
+                                DocumentAttributeFilename(filename)])
+            if prepared:
+                try:
+                    await send(InputFileBig(*prepared))
+                    return
+                except Exception as e:  # noqa: BLE001
+                    if "FILE_PART" not in str(e).upper():
+                        raise
+            await send(await _parallel_upload(client, path, filename, progress))
         finally:
             await client.disconnect()
 

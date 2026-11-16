@@ -375,6 +375,8 @@ def _voice_and_mux(job):
     jlog(job, "done ✅")
     if job.get("telegram"):
         threading.Thread(target=_telegram_send, args=(job,), daemon=True).start()
+    elif _should_preupload(job):
+        threading.Thread(target=_telegram_prepare, args=(job,), daemon=True).start()
 
 
 def _stay_awake():
@@ -497,7 +499,7 @@ def create_job():
                  "dir": d, "ext": ext, "direction": direction, "url": url,
                  "voice": voice, "review": review, "keep_bg": keep_bg, "phase": 1,
                  "model": model, "outro": outro, "logo": logo, "name": name,
-                 "id": jid, "telegram": send_tg,
+                 "id": jid, "telegram": send_tg, "owner": _admin_ok(),
                  "captions": captions, "blur": blur,
                  "created": time.time()}
     jlog(jobs[jid], "uploaded " + re.sub(r"[\r\n]", " ", label)[:160])
@@ -871,7 +873,48 @@ def _video_thumb(video, out):
         return None
 
 
+_tg_lock = threading.Lock()
+
+
+def _should_preupload(job):
+    """Owner's big video, Telegram set up: upload it in the background right
+    away so pressing "send" later is instant."""
+    try:
+        size = (job["dir"] / "dubbed.mp4").stat().st_size
+    except OSError:
+        return False
+    return (job.get("owner") and _settings.get("telegram_chat_id")
+            and telegram.MAX_UPLOAD < size <= telegram.BIG_MAX and telegram.big_available())
+
+
+def _telegram_prepare(job):
+    pre = job["tg_pre"] = {"state": "uploading", "pct": 0}
+    def prog(f):
+        pre["pct"] = int(f * 100)
+        if job.get("tg_want"):
+            job["tg"]["pct"] = pre["pct"]
+    try:
+        jlog(job, "uploading to Telegram in the background…")
+        pre["file"] = telegram.upload_parts(job["dir"] / "dubbed.mp4",
+                                            _download_name(job, ".mp4"), prog)
+        pre["state"] = "ready"
+        jlog(job, "Telegram upload ready")
+    except Exception as e:  # noqa: BLE001 - a normal send will upload again
+        pre["state"] = "failed"
+        jlog(job, f"Telegram background upload failed: {e}")
+    with _tg_lock:
+        want = job.pop("tg_want", False)
+    if want:
+        _telegram_send(job)
+
+
 def _telegram_send(job):
+    with _tg_lock:                    # still uploading in the background → send when it ends
+        pre = job.get("tg_pre") or {}
+        if pre.get("state") == "uploading":
+            job["tg_want"] = True
+            job["tg"] = {"state": "sending", "error": "", "pct": pre.get("pct", 0)}
+            return
     tg = job["tg"] = {"state": "sending", "error": "", "pct": 0}
     try:
         chat = _settings.get("telegram_chat_id")
@@ -890,9 +933,11 @@ def _telegram_send(job):
             thumb = _video_thumb(video, job["dir"] / "tg_thumb.jpg")
             def prog(f):
                 tg["pct"] = int(f * 100)
+            ready = (job.get("tg_pre") or {}).get("state") == "ready"
             telegram.send_big_video(chat, video, name, caption=f"🎬 {name[:-4]}",
                                     duration=probe_duration(video), width=w, height=h,
-                                    thumb=thumb, progress=prog)
+                                    thumb=thumb, progress=prog,
+                                    prepared=job["tg_pre"]["file"] if ready else None)
             tg["how"] = "file"
         else:
             link = _public_url()
@@ -934,7 +979,11 @@ def telegram_job_status(jid):
     job = jobs.get(jid)
     if not job:
         return jsonify(error="job မတွေ့ဘူး"), 404
-    return jsonify(job.get("tg") or {"state": "none"})
+    out = dict(job.get("tg") or {"state": "none"})
+    pre = job.get("tg_pre") or {}
+    out["pre"] = pre.get("state", "")       # background upload: uploading / ready / failed
+    out["pre_pct"] = pre.get("pct", 0)
+    return jsonify(out)
 
 
 def _download_name(job, ext):

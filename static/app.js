@@ -352,6 +352,8 @@ function pollTelegram() {
       $('#tg-btn').firstChild.textContent = '📨 ထပ်ပို့မယ် ';
       $('#tg-btn').disabled = false; clearInterval(tgTimer);
     } else if (t.state === 'failed') { s.textContent = '⚠️ ' + (t.error || 'မအောင်မြင်ဘူး'); $('#tg-btn').disabled = false; clearInterval(tgTimer); }
+    else if (t.pre === 'uploading') { s.textContent = '⬆️ Telegram အတွက် ကြိုတင် တင်ထားနေတယ် ' + (t.pre_pct || 0) + '% — နှိပ်ထားရင် ပြီးတာနဲ့ ပို့မယ်'; }
+    else if (t.pre === 'ready') { s.textContent = '⚡ အဆင်သင့် — နှိပ်တာနဲ့ ချက်ချင်း ပို့မယ်'; clearInterval(tgTimer); }
     else { s.textContent = ''; clearInterval(tgTimer); }
   };
   show();
