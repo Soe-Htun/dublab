@@ -109,3 +109,60 @@ def send_file(chat_id, path, filename, caption="", kind="video"):
         params["supports_streaming"] = "true"
     ctype = "video/mp4" if kind == "video" else "application/octet-stream"
     return _call(method, params, files={field: (filename, data, ctype)}, timeout=600)
+
+
+# ---- big files (> 50 MB) through MTProto, still as the same bot ----
+# The Bot HTTP API caps uploads at 50 MB, but a bot logged in over MTProto
+# (Telethon) can upload up to 2 GB. Needs TELEGRAM_API_ID / TELEGRAM_API_HASH
+# from https://my.telegram.org → API development tools, and `pip install telethon`.
+SESSION = os.path.join(os.path.dirname(os.path.abspath(__file__)), "telegram_bot")
+BIG_MAX = 2000 * 1024 * 1024
+_big_lock = __import__("threading").Lock()
+
+
+def big_configured():
+    return bool(token() and os.environ.get("TELEGRAM_API_ID", "").strip().isdigit()
+                and os.environ.get("TELEGRAM_API_HASH", "").strip())
+
+
+def big_available():
+    if not big_configured():
+        return False
+    try:
+        import telethon  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def send_big_video(chat_id, path, filename, caption="", duration=0, width=0, height=0,
+                   thumb=None, progress=None):
+    """Upload a video of up to 2 GB to chat_id as the bot (blocking)."""
+    import asyncio
+    from telethon import TelegramClient
+    from telethon.tl.types import DocumentAttributeFilename, DocumentAttributeVideo, PeerUser
+
+    async def run():
+        client = TelegramClient(SESSION, int(os.environ["TELEGRAM_API_ID"]),
+                                os.environ["TELEGRAM_API_HASH"].strip())
+        await client.start(bot_token=token())
+        try:
+            try:
+                peer = await client.get_input_entity(chat_id)
+            except ValueError:            # not cached yet: look the user up
+                peer = await client.get_input_entity(PeerUser(chat_id))
+            cb = (lambda sent, total: progress(sent / max(total, 1))) if progress else None
+            await client.send_file(
+                peer, str(path), caption=caption[:1000], supports_streaming=True,
+                thumb=str(thumb) if thumb else None, part_size_kb=512, progress_callback=cb,
+                attributes=[DocumentAttributeVideo(duration=int(duration), w=int(width),
+                                                   h=int(height), supports_streaming=True),
+                            DocumentAttributeFilename(filename)])
+        finally:
+            await client.disconnect()
+
+    with _big_lock:                       # one session file → one upload at a time
+        try:
+            asyncio.run(run())
+        except Exception as e:  # noqa: BLE001
+            raise TelegramError(str(e)[:300]) from None

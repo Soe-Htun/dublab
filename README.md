@@ -127,6 +127,7 @@ All configuration is via environment variables (see `.env.example`):
 | `DUBLAB_MAIL_TO` | — | E-mail address that receives every new review/feedback |
 | `DUBLAB_SMTP_USER` / `DUBLAB_SMTP_PASSWORD` | — | SMTP login for sending it (Gmail: address + [App Password](https://myaccount.google.com/apppasswords)); `DUBLAB_SMTP_HOST` / `DUBLAB_SMTP_PORT` default to Gmail SSL |
 | `TELEGRAM_BOT_TOKEN` | — | Token of your bot from @BotFather; then send `/start` to the bot and press Connect on the admin page |
+| `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` | — | Optional, from https://my.telegram.org → API development tools: with these (and `telethon` installed) the bot sends videos over 50 MB, up to 2 GB, as files instead of a download link |
 | `PUBLIC_URL` | — | Public address used in Telegram download links for files over 50 MB (defaults to `https://$NGROK_DOMAIN`) |
 | `DUBLAB_ADMIN_KEY` | — | Password for the admin page (`/admin/reviews?key=…`): reviews + settings |
 | `DUBLAB_WATERMARK` | — | Watermark text (default: `made with DubLab`) |

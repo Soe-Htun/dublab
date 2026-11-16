@@ -10,3 +10,5 @@ settings.json
 brand/
 verify/
 site_dist/
+*.session
+*.session-journal

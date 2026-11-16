@@ -16,3 +16,4 @@ yt-dlp>=2026.10
 certifi
 # Burmese caption rendering; needs libraqm for shaping (macOS: brew install libraqm, Debian: apt install libraqm0)
 pillow>=11
+telethon

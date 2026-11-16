@@ -369,6 +369,8 @@ def _voice_and_mux(job):
     for tmp in ("orig_stereo.wav",):
         (d / tmp).unlink(missing_ok=True)
 
+    if job.get("telegram"):          # mark before "done" so the page never offers a 2nd send
+        job["tg"] = {"state": "sending", "error": "", "pct": 0}
     job.update(status="done", stage="done", pct=100)
     jlog(job, "done ✅")
     if job.get("telegram"):
@@ -857,18 +859,40 @@ def telegram_disconnect():
     return jsonify(ok=True)
 
 
+def _video_thumb(video, out):
+    """A frame from 10% in, 320 px wide, for Telegram's preview."""
+    try:
+        t = max(1.0, probe_duration(video) * 0.1)
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{t:.1f}", "-i", str(video),
+                        "-frames:v", "1", "-vf", "scale=320:-2", "-q:v", "4", str(out)],
+                       check=True, timeout=60)
+        return out if out.exists() else None
+    except Exception:  # noqa: BLE001 - a missing preview is fine
+        return None
+
+
 def _telegram_send(job):
-    tg = job["tg"] = {"state": "sending", "error": ""}
+    tg = job["tg"] = {"state": "sending", "error": "", "pct": 0}
     try:
         chat = _settings.get("telegram_chat_id")
         if not chat:
             raise telegram.TelegramError("Telegram not connected (admin page → Telegram)")
         video = job["dir"] / "dubbed.mp4"
         name = _download_name(job, ".mp4")
-        size_mb = video.stat().st_size / 1048576
+        size = video.stat().st_size
+        size_mb = size / 1048576
         jlog(job, f"sending to Telegram ({size_mb:.0f} MB)…")
-        if video.stat().st_size <= telegram.MAX_UPLOAD:
+        if size <= telegram.MAX_UPLOAD:
             telegram.send_file(chat, video, name, caption=f"🎬 {name[:-4]}")
+            tg["how"] = "file"
+        elif size <= telegram.BIG_MAX and telegram.big_available():
+            w, h = video_size(video)
+            thumb = _video_thumb(video, job["dir"] / "tg_thumb.jpg")
+            def prog(f):
+                tg["pct"] = int(f * 100)
+            telegram.send_big_video(chat, video, name, caption=f"🎬 {name[:-4]}",
+                                    duration=probe_duration(video), width=w, height=h,
+                                    thumb=thumb, progress=prog)
             tg["how"] = "file"
         else:
             link = _public_url()
@@ -881,9 +905,6 @@ def _telegram_send(job):
                         f"bot (50 MB limit); download it from DubLab.")
             telegram.send_message(chat, text)
             tg["how"] = "link"
-        srt = job["dir"] / "captions.srt"
-        if srt.exists():
-            telegram.send_file(chat, srt, _download_name(job, ".srt"), kind="document")
         tg["state"] = "done"
         jlog(job, f"sent to Telegram ({tg['how']})")
     except Exception as e:  # noqa: BLE001 - shown in the UI
@@ -898,8 +919,12 @@ def telegram_send(jid):
     job = jobs.get(jid)
     if not job or job["status"] != "done":
         return jsonify(error="ဗီဒီယို အဆင်သင့် မဖြစ်သေးဘူး"), 404
-    if job.get("tg", {}).get("state") == "sending":
+    state = (job.get("tg") or {}).get("state")
+    if state == "sending":
         return jsonify(error="ပို့နေဆဲပါ"), 409
+    if state == "done" and request.args.get("again") != "1":
+        return jsonify(error="ပို့ပြီးသားပါ"), 409
+    job["tg"] = {"state": "sending", "error": "", "pct": 0}
     threading.Thread(target=_telegram_send, args=(job,), daemon=True).start()
     return jsonify(ok=True)
 

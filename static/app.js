@@ -325,10 +325,13 @@ $('#tg-keybtn').addEventListener('click', () => {
   try { localStorage.setItem(ADMKEY, $('#tg-key').value.trim()); } catch (e) {}
   initTelegram(tgJid);
 });
+let tgSent = false;
 $('#tg-btn').addEventListener('click', async () => {
+  if (tgSent && !confirm('Telegram ကို ပို့ပြီးသားပါ — ထပ်ပို့မလား?')) return;
   $('#tg-btn').disabled = true;
   try {
-    const r = await fetch('/api/jobs/' + tgJid + '/telegram', { method: 'POST', headers: { 'X-Admin-Key': admKey() } });
+    const r = await fetch('/api/jobs/' + tgJid + '/telegram' + (tgSent ? '?again=1' : ''),
+      { method: 'POST', headers: { 'X-Admin-Key': admKey() } });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { alert(j.error || 'ပို့မရဘူး'); $('#tg-btn').disabled = false; return; }
   } catch (e) { alert('ပို့မရဘူး'); $('#tg-btn').disabled = false; return; }
@@ -340,9 +343,13 @@ function pollTelegram() {
     let t;
     try { t = await (await fetch('/api/jobs/' + tgJid + '/telegram')).json(); } catch (e) { return; }
     const s = $('#tg-status');
-    if (t.state === 'sending') { s.textContent = '⏳ Telegram ကို ပို့နေတယ်…'; $('#tg-btn').disabled = true; }
-    else if (t.state === 'done') {
-      s.textContent = t.how === 'link' ? '✅ ပို့ပြီးပြီ — ဖိုင်က 50 MB ထက်ကြီးလို့ download link + caption ဖိုင် ပို့ထားတယ်' : '✅ Telegram ကို ဗီဒီယို ပို့ပြီးပြီ';
+    if (t.state === 'sending') {
+      s.textContent = '⏳ Telegram ကို ပို့နေတယ်…' + (t.pct ? ' ' + t.pct + '%' : '');
+      $('#tg-btn').disabled = true;
+    } else if (t.state === 'done') {
+      tgSent = true;
+      s.textContent = t.how === 'link' ? '✅ ပို့ပြီးပြီ — ဖိုင်ကြီးလို့ download link ပို့ထားတယ်' : '✅ Telegram ကို ဗီဒီယို ပို့ပြီးပြီ';
+      $('#tg-btn').firstChild.textContent = '📨 ထပ်ပို့မယ် ';
       $('#tg-btn').disabled = false; clearInterval(tgTimer);
     } else if (t.state === 'failed') { s.textContent = '⚠️ ' + (t.error || 'မအောင်မြင်ဘူး'); $('#tg-btn').disabled = false; clearInterval(tgTimer); }
     else { s.textContent = ''; clearInterval(tgTimer); }
