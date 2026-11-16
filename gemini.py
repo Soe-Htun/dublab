@@ -2,11 +2,26 @@
 import json
 import re
 import time
+import ssl
 import urllib.request
+
+def _ssl_context():
+    """python.org's macOS Python ships without CA certificates
+    (CERTIFICATE_VERIFY_FAILED); use certifi's bundle when available."""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
+_SSL = _ssl_context()
+
 
 MODEL = "gemini-3.5-flash-lite"
 MAX_RETRIES = 4
 CHUNK = 25
+PARALLEL = 4     # chunks translated at the same time
 
 
 PROMPT_EN2MM = """You are a professional dubbing script translator for short videos.
@@ -67,7 +82,7 @@ def _call(prompt, api_key):
         try:
             req = urllib.request.Request(url, data=json.dumps(body).encode(),
                                          headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=180) as r:
+            with urllib.request.urlopen(req, timeout=180, context=_SSL) as r:
                 data = json.loads(r.read().decode())
             parts = data["candidates"][0].get("content", {}).get("parts", [])
             text = "".join(p.get("text", "") for p in parts)
@@ -89,8 +104,7 @@ def translate_lines(lines, direction, api_key, src_lang_name=None):
         prompt = PROMPT_ANY2MM.format(lang=src_lang_name or "the original")
     else:
         prompt = PROMPTS[direction]
-    out = []
-    for start in range(0, len(lines), CHUNK):
+    def _chunk(start):
         chunk = lines[start:start + CHUNK]
         numbered = "\n".join(f"{i + 1}|||{t}" for i, t in enumerate(chunk))
         raw = _call(prompt + "\n\nTranslate these lines:\n" + numbered, api_key)
@@ -99,6 +113,10 @@ def translate_lines(lines, direction, api_key, src_lang_name=None):
             m = re.match(r"(\d+)\|\|\|(.+)", line.strip())
             if m:
                 results[int(m.group(1))] = m.group(2).strip()
-        for i, orig in enumerate(chunk, 1):
-            out.append(results.get(i, orig))
-    return out
+        return [results.get(i, orig) for i, orig in enumerate(chunk, 1)]
+
+    # chunks are independent: send a few at once (a 24-min video is ~10 chunks)
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(PARALLEL) as ex:
+        parts = list(ex.map(_chunk, range(0, len(lines), CHUNK)))
+    return [t for part in parts for t in part]

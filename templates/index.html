@@ -71,16 +71,29 @@
         <span class="opt-label">အမျိုးသား</span>
       </button>
     </div>
+    <h2>၃ · အမြန်နှုန်း ရွေးပါ</h2>
+    <div class="optgrid" id="modelgrid">
+      <button class="opt{% if default_model != 'base' %} selected{% endif %}" data-model="small">
+        <span class="opt-flag">🎯</span>
+        <span class="opt-label">တိကျ <span class="dim">(small)</span></span>
+        <span class="opt-sub">တရုတ်ဗီဒီယိုအတွက် အကောင်းဆုံး · အချိန် နည်းနည်းပိုကြာ</span>
+      </button>
+      <button class="opt{% if default_model == 'base' %} selected{% endif %}" data-model="base">
+        <span class="opt-flag">⚡</span>
+        <span class="opt-label">မြန် <span class="dim">(base)</span></span>
+        <span class="opt-sub">~2 ဆ မြန် · English အတွက် အဆင်ပြေ၊ တရုတ်စကား မှားတာ ပိုများ</span>
+      </button>
+    </div>
     <label class="checkrow">
-      <input type="checkbox" id="bgchk" checked>
-      <span>🎵 နောက်ခံ music / sound effect ချန်ထားမယ် <span class="dim">(မူရင်းစကားသံ ဖယ်ပြီး)</span></span>
+      <input type="checkbox" id="bgchk">
+      <span>🎵 နောက်ခံ music / sound effect ချန်ထားမယ် <span class="dim">(မူရင်းစကားသံ ဖယ်ပြီး · အချိန် ပိုကြာမယ်)</span></span>
     </label>
     <label class="checkrow">
       <input type="checkbox" id="reviewchk" checked>
       <span>✏️ အသံမဖော်ခင် ဘာသာပြန်စာကို ကြည့်ပြီး ပြင်မယ်</span>
     </label>
     <button class="cta" id="go" {% if maintenance %}disabled title="ခေတ္တ ရပ်ထားပါတယ်"{% endif %}>✨ Dub စလုပ်မယ်</button>
-    <p class="note">ဗီဒီယိုတိုလေးဆို ၁–၃ မိနစ်၊ ၁၀–၃၀ မိနစ် ဗီဒီယိုဆို အချိန်အတော်ကြာမယ်</p>
+    <p class="note">၂၀ မိနစ် ဗီဒီယိုဆို ⚡ မြန် ~၃ မိနစ်၊ 🎯 တိကျ ~၄ မိနစ်လောက် ကြာမယ် (🎵 ဖွင့်ရင် ပိုကြာမယ်)</p>
   </section>
 
   <!-- STEP 3: progress -->

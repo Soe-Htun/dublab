@@ -111,7 +111,7 @@ All configuration is via environment variables (see `.env.example`):
 | `DUBLAB_MAX_MB` | — | Largest upload/download, in MB (default `3000`); `run.sh` sizes waitress's upload limit from it — when starting waitress yourself, pass `--max-request-body-size` |
 | `DUBLAB_BG_VOLUME` | — | Volume of the background music/effects under the dub, `0`–`1` (default `0.8`; `0` = none) |
 | `DUBLAB_DEMUCS_DEVICE` | — | Force Demucs device: `mps` / `cuda` / `cpu` (default: auto) |
-| `DUBLAB_WHISPER_MODEL` | — | faster-whisper model: `base` (default, fast) · `small` / `medium` / `large-v3-turbo` (better accuracy, esp. Chinese; slower, more RAM) |
+| `DUBLAB_WHISPER_MODEL` | — | Speech model preselected in the UI: `small` (default — accurate, best for Chinese) or `base` (~2× faster); users can switch per video. Runs on Apple GPU / CUDA when available |
 
 ## မြန်မာဘာသာ အကျဉ်းချုပ်
 

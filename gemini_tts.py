@@ -14,8 +14,22 @@ import json
 import threading
 import time
 import urllib.error
+import ssl
 import urllib.request
 import wave
+
+def _ssl_context():
+    """python.org's macOS Python ships without CA certificates
+    (CERTIFICATE_VERIFY_FAILED); use certifi's bundle when available."""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
+_SSL = _ssl_context()
+
 
 MODEL = "gemini-3.1-flash-tts-preview"
 COOLDOWN = 60          # seconds a rate-limited key rests
@@ -94,7 +108,7 @@ def _request(text, voice, lang, api_key):
         url, data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+        with urllib.request.urlopen(req, timeout=TIMEOUT, context=_SSL) as r:
             data = json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         raise _HttpError(e.code, e.read().decode(errors="replace")[:200])

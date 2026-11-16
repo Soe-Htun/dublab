@@ -13,6 +13,8 @@ function selectGrid(gridSel, attr, cb) {
   });
 }
 selectGrid('#voicegrid', 'voice', (v) => (voice = v));
+let model = (document.querySelector('#modelgrid .opt.selected') || {}).dataset?.model || 'small';
+selectGrid('#modelgrid', 'model', (v) => (model = v));
 
 drop.addEventListener('click', () => fileInput.click());
 ['dragover', 'dragenter'].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.add('over'); }));
@@ -67,6 +69,7 @@ $('#go').addEventListener('click', () => {
   if (ytUrl) fd.append('url', ytUrl); else fd.append('video', f); fd.append('direction', direction); fd.append('voice', voice);
   fd.append('review', $('#reviewchk').checked ? '1' : '0');
   fd.append('keep_bg', $('#bgchk').checked ? '1' : '0');
+  fd.append('model', model);
   // NOTE: iOS Safari's fetch() throws "The string did not match the expected
   // pattern" on FormData POST uploads (WebKit bug) — XHR works reliably.
   const xhr = new XMLHttpRequest();
@@ -91,6 +94,7 @@ function showProgress(jid) {
   const dl = document.querySelector('#stages li[data-s="download"]');
   if (dl) dl.hidden = !isUrl;
   const order = ['download', 'audio', 'transcribe', 'translate', 'review', 'music', 'voice', 'mux'];
+  addRings();
   const stopLog = startLiveLog(jid);
   const stopAll = () => { clearInterval(pollTimer); stopLog(); };
   pollTimer = setInterval(async () => {
@@ -102,15 +106,40 @@ function showProgress(jid) {
       $('#stagelabel').textContent = j.label + (j.pct ? ` · ${j.pct}%` : '');
       document.querySelectorAll('#stages li').forEach((li) => {
         const s = li.dataset.s;
-        li.classList.remove('active', 'done');
-        if (j.stage === 'done' || order.indexOf(s) < order.indexOf(j.stage)) li.classList.add('done');
-        else if (s === j.stage) li.classList.add('active');
+        li.classList.remove('active', 'done', 'spin');
+        let p = 0;
+        if (j.stage === 'done' || order.indexOf(s) < order.indexOf(j.stage)) { li.classList.add('done'); p = 100; }
+        else if (s === j.stage) {
+          li.classList.add('active');
+          if (j.stage_pct == null) li.classList.add('spin'); else p = j.stage_pct;
+        }
+        setRing(li, p, s === j.stage && j.stage_pct != null);
       });
       if (j.status === 'review') { stopAll(); showReview(jid); }
       if (j.status === 'done') { stopAll(); showResult(jid); }
       if (j.status === 'failed') { stopAll(); showError(j.error || 'အမှားရှိတယ်'); }
     } catch (e) { stopAll(); showError(e.message); }
   }, 2000);
+}
+
+// ---- circular progress ring on each stage row ----
+const RING_C = 2 * Math.PI * 15;  // circumference for r=15
+function addRings() {
+  document.querySelectorAll('#stages li').forEach((li) => {
+    if (li.querySelector('.ring')) return;
+    li.insertAdjacentHTML('beforeend',
+      '<span class="ring" aria-hidden="true"><svg viewBox="0 0 36 36">' +
+      '<circle class="trk" cx="18" cy="18" r="15"/>' +
+      `<circle class="val" cx="18" cy="18" r="15" stroke-dasharray="${RING_C}" stroke-dashoffset="${RING_C}"/>` +
+      '</svg><b></b></span>');
+  });
+}
+function setRing(li, pct, showNum) {
+  const ring = li.querySelector('.ring');
+  if (!ring) return;
+  const val = ring.querySelector('.val');
+  if (!li.classList.contains('spin')) val.setAttribute('stroke-dashoffset', RING_C * (1 - pct / 100));
+  ring.querySelector('b').textContent = li.classList.contains('done') ? '✓' : (showNum ? pct + '%' : '');
 }
 
 // Live job logs — polls /api/jobs/<jid>/log, auto-scrolls.

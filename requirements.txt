@@ -12,3 +12,5 @@ gtts>=2.5
 demucs>=4.0
 # YouTube link input; keep updated (pip install -U yt-dlp) — sites change often
 yt-dlp>=2026.10
+# CA bundle for HTTPS on python.org macOS builds
+certifi

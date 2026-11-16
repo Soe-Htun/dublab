@@ -12,7 +12,8 @@ from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request, send_file
 
-from dub import (build_dub_track, configure_tts, demucs_available, detect_gender,
+from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tts,
+                 default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
                  mux, probe_duration, probe_url, separate_music, transcribe)
@@ -107,6 +108,7 @@ STAGE_LABEL = {
     "mux": "ဗီဒီယိုပေါင်းနေတယ်",
     "done": "ပြီးပြီ",
 }
+STAGE_RANGE = {"transcribe": (8, 44), "voice": (60, 90)}  # overall pct span
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = max_mb() * 1024 * 1024
@@ -225,7 +227,14 @@ def _transcribe_and_translate(jid, job):
 
     job.update(stage="transcribe", pct=8)
     jlog(job, "transcribing with whisper…")
-    segs, lang = transcribe(wav, SRC_LANG[direction])
+    last_log = [0]
+    def stt_prog(frac):  # 8% → 44% while whisper works through the audio
+        job.update(pct=8 + int(36 * frac))
+        if frac * 100 >= last_log[0] + 10:
+            last_log[0] = int(frac * 10) * 10
+            jlog(job, f"transcribing… {last_log[0]}%")
+    jlog(job, f"speech model: {job.get('model') or default_whisper_model()}")
+    segs, lang = transcribe(wav, SRC_LANG[direction], stt_prog, job.get("model"))
     if not segs:
         raise ValueError("အသံထဲမှာ စကားပြောသံ မတွေ့ဘူး")
     if direction == "auto2mm":
@@ -282,6 +291,9 @@ def _voice_and_mux(job):
     jlog(job, "muxing dubbed audio with video…")
     mux(src, dub_wav, d / "dubbed.mp4", bg_wav=bg_wav, bg_volume=BG_VOLUME)
     shutil.rmtree(d / "sep", ignore_errors=True)
+    cleanup_segments(d)
+    (d / "dub.wav").unlink(missing_ok=True)
+    (d / "audio.wav").unlink(missing_ok=True)
     for tmp in ("orig_stereo.wav",):
         (d / tmp).unlink(missing_ok=True)
 
@@ -324,6 +336,7 @@ threading.Thread(target=worker, daemon=True).start()
 @app.get("/")
 def index():
     return render_template("index.html", max_minutes=max_minutes(), max_mb=max_mb(),
+                           default_model=default_whisper_model(),
                            maintenance=MAINTENANCE,
                            maintenance_msg=MAINTENANCE_MSG)
 
@@ -351,7 +364,10 @@ def create_job():
     direction = request.form.get("direction", "auto2mm")
     voice = request.form.get("voice", "auto")
     review = request.form.get("review") == "1"
-    keep_bg = request.form.get("keep_bg", "1") == "1"
+    keep_bg = request.form.get("keep_bg", "0") == "1"
+    model = request.form.get("model") or default_whisper_model()
+    if model not in WHISPER_MODELS:
+        model = default_whisper_model()
     if direction not in VOICES or voice not in ("auto", "female", "male"):
         return jsonify(error="ရွေးချယ်မှု မှားနေတယ်"), 400
     max_sec = max_minutes() * 60
@@ -396,6 +412,7 @@ def create_job():
     jobs[jid] = {"status": "queued", "stage": "queue", "pct": 0, "error": "",
                  "dir": d, "ext": ext, "direction": direction, "url": url,
                  "voice": voice, "review": review, "keep_bg": keep_bg, "phase": 1,
+                 "model": model,
                  "created": time.time()}
     jlog(jobs[jid], "uploaded " + re.sub(r"[\r\n]", " ", label)[:160])
     with lock:
@@ -409,7 +426,15 @@ def job_status(jid):
     job = jobs.get(jid)
     if not job:
         return jsonify(error="job မတွေ့ဘူး"), 404
+    # per-stage progress for the stages that report it (overall pct ranges);
+    # None = this stage has no measurable progress (UI shows a spinner)
+    lo_hi = STAGE_RANGE.get(job["stage"])
+    stage_pct = None
+    if lo_hi:
+        lo, hi = lo_hi
+        stage_pct = max(0, min(100, round((job["pct"] - lo) * 100 / (hi - lo))))
     return jsonify(status=job["status"], stage=job["stage"], pct=job["pct"],
+                   stage_pct=stage_pct,
                    label=STAGE_LABEL.get(job["stage"], job["stage"]),
                    error=job["error"])
 

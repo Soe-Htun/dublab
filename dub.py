@@ -53,6 +53,10 @@ EDGE_PRIMARY_FLAG = Path(__file__).parent / ".edge_primary"
 
 
 def _edge_first():
+    """Edge-TTS (free, fast, no daily quota) is primary unless
+    DUBLAB_TTS_PRIMARY=gemini; the .edge_primary flag file also forces Edge."""
+    if (os.environ.get("DUBLAB_TTS_PRIMARY") or "edge").strip().lower() != "gemini":
+        return True
     try:
         return EDGE_PRIMARY_FLAG.exists()
     except OSError:
@@ -64,24 +68,86 @@ def configure_tts(keys):
     _tts_configure(keys)
 
 
-_model = None
+WHISPER_MODELS = ("base", "small")   # offered in the UI: fast / accurate
+_models = {}          # model name -> loaded WhisperModel (kept for reuse)
+_cpu_only = False     # set after a GPU failure
 
 
-def transcribe(wav, lang_hint=None):
+def default_whisper_model():
+    return os.environ.get("DUBLAB_WHISPER_MODEL") or "small"
+
+
+def transcribe(wav, lang_hint=None, progress=None, model_name=None):
     """Return ([{start, end, text}], language).
 
     lang_hint: 'en', 'my', 'zh'… or None to let whisper detect the
-    language; the returned language is the hint or the detected code."""
-    global _model
+    language; the returned language is the hint or the detected code.
+    model_name: 'base' (fast) or 'small' (more accurate); default from .env."""
+    global _cpu_only
+    name = model_name or default_whisper_model()
+    try:
+        return _transcribe(wav, lang_hint, progress, name)
+    except Exception as e:  # noqa: BLE001 - GPU backends are experimental
+        if _cpu_only:
+            raise
+        print(f"[whisper] GPU failed ({type(e).__name__}: {e}); retrying on CPU")
+        _cpu_only = True
+        _models.clear()
+        return _transcribe(wav, lang_hint, progress, name)
+
+
+def _whisper_device():
+    forced = os.environ.get("DUBLAB_WHISPER_DEVICE", "").strip()
+    if forced:
+        return forced
+    import platform
+    import shutil
+    if platform.system() == "Darwin" and platform.machine() == "arm64":
+        return "mps"      # Apple GPU: ~10x faster than CPU on an M1
+    if shutil.which("nvidia-smi"):
+        return "cuda"
+    return "cpu"
+
+
+def _get_model(name):
+    global _cpu_only
+    if name in _models:
+        return _models[name]
     from faster_whisper import WhisperModel
-    if _model is None:
-        _model = WhisperModel(os.environ.get("DUBLAB_WHISPER_MODEL") or "base",
-                              device="cpu", compute_type="int8")
-    segments, info = _model.transcribe(
-        str(wav), language=lang_hint, vad_filter=True,
+    device = "cpu" if _cpu_only else _whisper_device()
+    try:
+        if device == "cpu":
+            m = WhisperModel(name, device="cpu", compute_type="int8",
+                             cpu_threads=os.cpu_count() or 4)
+        else:
+            m = WhisperModel(name, device=device, compute_type="float16")
+    except Exception as e:  # noqa: BLE001
+        if device == "cpu":
+            raise
+        print(f"[whisper] GPU load failed ({e}); using CPU")
+        _cpu_only = True
+        m = WhisperModel(name, device="cpu", compute_type="int8",
+                         cpu_threads=os.cpu_count() or 4)
+        device = "cpu"
+    print(f"[whisper] model {name} on {device}")
+    _models[name] = m
+    return m
+
+
+def _transcribe(wav, lang_hint, progress, name):
+    model = _get_model(name)
+    # beam 1 (greedy) is ~3x faster than the default 5 with near-identical text
+    beam = int(os.environ.get("DUBLAB_WHISPER_BEAM") or 1)
+    segments, info = model.transcribe(
+        str(wav), language=lang_hint, vad_filter=True, beam_size=beam,
         vad_parameters=dict(min_silence_duration_ms=400))
-    segs = [{"start": float(s.start), "end": float(s.end), "text": s.text.strip()}
-            for s in segments if s.text and s.text.strip()]
+    segs = []
+    for s in segments:  # lazy generator: decoding happens while we iterate
+        if s.text and s.text.strip():
+            segs.append({"start": float(s.start), "end": float(s.end),
+                         "text": s.text.strip()})
+        if progress and info.duration:
+            progress(min(float(s.end) / info.duration, 1.0))
     return segs, (lang_hint or info.language)
 
 
@@ -145,27 +211,41 @@ def _synth_gemini(text, voice, lang, out_path):
     _gemini_tts(text, GEMINI_VOICE_FOR.get(voice, "Aoede"), lang, out_path)
 
 
+_edge_urls = None   # [current, other] — the working endpoint moves to the front
+
+
 def _synth_edge(text, voice, out_path):
     import asyncio
     import edge_tts
     import edge_tts.communicate as _comm
     import edge_tts.constants as _C
+    global _edge_urls
 
-    # 2026-10: Microsoft's classic speech.platform.bing.com endpoint answers
-    # 403 in many regions. Use the newer api.msedgeservices.com endpoint for
-    # the same voices (token as Ocp-Apim-Subscription-Key, not
-    # TrustedClientToken). Patched at call time so library updates can't
-    # silently revert it.
-    _new_wss = (
-        "wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1"
-        f"?Ocp-Apim-Subscription-Key={_C.TRUSTED_CLIENT_TOKEN}"
-    )
-    _comm.WSS_URL = _new_wss
-    _C.WSS_URL = _new_wss
+    # Two endpoints serve the same voices: the library's stock
+    # speech.platform.bing.com one, and api.msedgeservices.com (token as
+    # Ocp-Apim-Subscription-Key). 2026-10: stock answered 403 in some regions;
+    # 2026-11: the alternate one answered 429 while stock worked. Try the last
+    # one that worked first, then the other.
+    if _edge_urls is None:
+        _edge_urls = [_C.WSS_URL,
+                      "wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1"
+                      f"?Ocp-Apim-Subscription-Key={_C.TRUSTED_CLIENT_TOKEN}"]
 
     async def _go():
         await edge_tts.Communicate(text, voice).save(str(out_path))
-    asyncio.run(_go())
+
+    err = None
+    for url in list(_edge_urls):
+        _comm.WSS_URL = _C.WSS_URL = url
+        try:
+            asyncio.run(_go())
+            if _edge_urls[0] != url:
+                _edge_urls.remove(url)
+                _edge_urls.insert(0, url)
+            return
+        except Exception as e:  # noqa: BLE001
+            err = e
+    raise err
 
 
 def synthesize(text, voice, out_path):
@@ -214,7 +294,6 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None):
     little past the video end, but no sentence is ever cut off mid-word.
     """
     tmpdir = Path(tmpdir)
-    placed = []
     cursor = 0.0  # earliest start for the next utterance
     # GAP is 0 on purpose: any fixed gap accumulates over dozens of
     # utterances (0.15s x 37 = ~4-5s drift by the end). With 0, the total
@@ -222,36 +301,70 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None):
     # 1.65 on the Oct 25 test video; was ~1.7s at 1.5, ~0.03s at 1.8).
     # The next utterance starts the instant the previous ends.
     GAP = 0.0
+    # Synthesize every line first, several at once (network-bound), then
+    # place them in order — placement depends on the previous line's end.
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    done = [0]
+    done_lock = threading.Lock()
+    n = len(utterances)
+
+    def _tts(i):
+        synthesize(utterances[i]["text"], voice, tmpdir / f"u{i}.mp3")
+        with done_lock:
+            done[0] += 1
+            if progress:
+                progress(done[0], n)
+
+    workers = max(1, int(os.environ.get("DUBLAB_TTS_WORKERS") or 8))
+    with ThreadPoolExecutor(workers) as ex:
+        list(ex.map(_tts, range(n)))   # list() re-raises the first error
+        durs = list(ex.map(lambda i: probe_duration(tmpdir / f"u{i}.mp3"), range(n)))
+
+    # placement (sequential: each start depends on where the previous ended)
+    plan = []
     for i, u in enumerate(utterances):
-        mp3 = tmpdir / f"u{i}.mp3"
-        synthesize(u["text"], voice, mp3)
-        tts_dur = probe_duration(mp3)
+        tts_dur = durs[i]
         slot = max(u["end"] - u["start"], 0.5)
         ratio = tts_dur / slot
         atempo = 1.0 if ratio <= 1.0 else min(ratio, MAX_ATEMPO)
         fitted = tts_dur / atempo
         start = max(u["start"], cursor)
-        start_ms = int(round(start * 1000))
-        wav_i = tmpdir / f"p{i}.wav"
-        af = []
-        if atempo > 1.001:
-            af.append(f"atempo={atempo:.3f}")
-        af.append(f"adelay={start_ms}|{start_ms}")
-        run(["ffmpeg", "-y", "-v", "error", "-i", str(mp3),
-             "-af", ",".join(af), "-ar", "44100", "-ac", "2", str(wav_i)])
-        placed.append(wav_i)
+        plan.append((i, atempo, start))
         cursor = start + fitted + GAP
-        if progress:
-            progress(i + 1, len(utterances))
+
+    # Decode + time-fit every line to raw samples in parallel, then add them
+    # into one in-memory track. (The old way wrote one wav per line padded
+    # with silence from 0:00 — ~25 GB of temp files for a 24-minute video.)
+    import numpy as np
+    SR = 44100
+
+    def _fit(item):
+        i, atempo, start = item
+        cmd = ["ffmpeg", "-v", "error", "-i", str(tmpdir / f"u{i}.mp3")]
+        if atempo > 1.001:
+            cmd += ["-af", f"atempo={atempo:.3f}"]
+        cmd += ["-ac", "1", "-ar", str(SR), "-f", "f32le", "-"]
+        p = subprocess.run(cmd, capture_output=True)
+        if p.returncode != 0:
+            raise RuntimeError((p.stderr.decode(errors="replace") or "ffmpeg failed")[-400:])
+        return int(round(start * SR)), np.frombuffer(p.stdout, dtype=np.float32)
+
+    with ThreadPoolExecutor(workers) as ex:
+        pieces = list(ex.map(_fit, plan))
+    end = max([total_dur * SR] + [s0 + len(x) for s0, x in pieces])
+    track = np.zeros(int(end) + 1, dtype=np.float32)
+    for s0, x in pieces:
+        track[s0:s0 + len(x)] += x
+    pcm = (np.clip(track, -1.0, 1.0) * 32767).astype(np.int16)
+
+    import wave
     dub = tmpdir / "dub.wav"
-    inputs = []
-    for w in placed:
-        inputs += ["-i", str(w)]
-    run(["ffmpeg", "-y", "-v", "error", *inputs,
-         "-filter_complex",
-         f"amix=inputs={len(placed)}:dropout_transition=0:normalize=0,"
-         f"apad=whole_dur={total_dur:.2f}",
-         "-ar", "44100", "-ac", "2", str(dub)])
+    with wave.open(str(dub), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(SR)
+        w.writeframes(pcm.tobytes())
     return dub
 
 
@@ -348,7 +461,8 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8):
     # Burned-in credit watermark, bottom-right; scale guard keeps even dims
     # for yuv420p.
     vf = "scale=trunc(iw/2)*2:trunc(ih/2)*2,"
-    if WATERMARK_TEXT and _drawtext_ok():
+    watermark = bool(WATERMARK_TEXT and _drawtext_ok())
+    if watermark:
         font = f"fontfile={_WM_FONT}:" if os.path.exists(_WM_FONT) else ""
         text = WATERMARK_TEXT.replace("\\", "").replace("'", "").replace(":", "\\:")
         vf += (f"drawtext={font}text='{text}':"
@@ -359,22 +473,35 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8):
     bg_in = []
     if bg_wav and bg_volume > 0:
         bg_in = ["-i", str(bg_wav)]
-        fc = (f"[0:v]{vf}[v];"
-              "[1:a]aformat=sample_rates=44100:channel_layouts=stereo,asplit=2[dub][sc];"
-              f"[2:a]aformat=sample_rates=44100:channel_layouts=stereo,volume={bg_volume:.2f}[bg];"
-              "[bg][sc]sidechaincompress=threshold=0.02:ratio=4:attack=20:release=400[duck];"
-              "[duck][dub]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[a]")
-        maps = ["-filter_complex", fc, "-map", "[v]", "-map", "[a]"]
+        afc = ("[1:a]aformat=sample_rates=44100:channel_layouts=stereo,asplit=2[dub][sc];"
+               f"[2:a]aformat=sample_rates=44100:channel_layouts=stereo,volume={bg_volume:.2f}[bg];"
+               "[bg][sc]sidechaincompress=threshold=0.02:ratio=4:attack=20:release=400[duck];"
+               "[duck][dub]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[a]")
+        amap = ["-map", "[a]"]
     else:
-        maps = ["-vf", vf, "-map", "0:v:0", "-map", "1:a:0"]
-    run(["ffmpeg", "-y", "-v", "error", "-i", str(src_video), "-i", str(dub_wav),
-         *bg_in, *maps,
-         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-         "-c:a", "aac", "-b:a", "128k",
-         # No -shortest: the finish-the-sentence rule lets the tail of the
-         # last utterance run a little past the video end; -shortest would
-         # cut it off again.
-         "-movflags", "+faststart", str(out_mp4)])
+        afc, amap = None, ["-map", "1:a:0"]
+
+    def _cmd(copy_video):
+        if copy_video:   # nothing to draw: keep the original picture, no re-encode
+            fc = ["-filter_complex", afc] if afc else []
+            vid = ["-map", "0:v:0", "-c:v", "copy"]
+        else:
+            fc = ["-filter_complex", f"[0:v]{vf}[v]" + (";" + afc if afc else "")]
+            vid = ["-map", "[v]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
+        return ["ffmpeg", "-y", "-v", "error", "-i", str(src_video), "-i", str(dub_wav),
+                *bg_in, *fc, *vid, *amap, "-c:a", "aac", "-b:a", "128k",
+                # No -shortest: the finish-the-sentence rule lets the tail of the
+                # last utterance run a little past the video end; -shortest would
+                # cut it off again.
+                "-movflags", "+faststart", str(out_mp4)]
+
+    if not watermark:
+        try:
+            run(_cmd(copy_video=True))
+            return
+        except RuntimeError as e:   # codec not allowed in MP4 etc. — re-encode
+            print(f"[mux] stream copy failed ({e}); re-encoding")
+    run(_cmd(copy_video=False))
 
 
 # ---- download from a YouTube / TikTok link (yt-dlp) ----
