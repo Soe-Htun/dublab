@@ -726,8 +726,8 @@ def create_job():
     review = request.form.get("review") == "1"
     keep_bg = request.form.get("keep_bg", "0") == "1"
     outro = request.form.get("outro", "1") == "1"
-    intro = request.form.get("intro", "1") == "1"
-    cover = request.form.get("cover", "1") == "1"
+    intro = request.form.get("intro", "0") == "1"      # off unless ticked
+    cover = True                                          # every video gets a cover
     logo = request.form.get("logo", "1") == "1"
     send_tg = request.form.get("telegram") == "1" and _admin_ok() and telegram.configured()
     captions = request.form.get("captions", "1") == "1"

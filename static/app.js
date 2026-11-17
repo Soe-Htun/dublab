@@ -75,7 +75,7 @@ $('#go').addEventListener('click', () => {
   fd.append('model', model);
   fd.append('outro', $('#outrochk') && $('#outrochk').checked ? '1' : '0');
   fd.append('intro', $('#introchk').checked ? '1' : '0');
-  fd.append('cover', $('#coverchk').checked ? '1' : '0');
+  fd.append('cover', '1');            // every video gets a cover
   fd.append('split', split);
   fd.append('recap', $('#recapchk').checked ? recapLen : '0');
   try { localStorage.setItem('dublab_split', split); } catch (e) {}
