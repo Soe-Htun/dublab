@@ -228,6 +228,51 @@ async def _parallel_upload(client, path, filename, progress=None):
     return InputFileBig(file_id, total, filename)
 
 
+DL_CHUNK = 1024 * 1024        # Telegram serves at most 1 MB per request
+DL_WORKERS = int(os.environ.get("DUBLAB_TG_DL_WORKERS") or 8)
+
+
+async def _parallel_download(client, msg, dest, progress=None):
+    """Download a message's file with several requests at once: worker w
+    fetches chunks w, w+N, w+2N… (Telethon's own download fetches one chunk
+    at a time, ~0.4 MB/s for big videos)."""
+    import asyncio
+    size = msg.file.size if msg.file else 0
+    if not size:
+        if not await client.download_media(msg, file=str(dest)):
+            raise TelegramError("download failed")
+        return
+    total = (size + DL_CHUNK - 1) // DL_CHUNK
+    workers = max(1, min(DL_WORKERS, total))
+    done = [0]
+    with open(dest, "wb") as fh:
+        fh.truncate(size)
+
+    async def worker(w):
+        with open(dest, "r+b") as fh:
+            pos = w * DL_CHUNK
+            for attempt in range(5):
+                try:
+                    async for data in client.iter_download(
+                            msg.media, offset=pos, stride=workers * DL_CHUNK,
+                            request_size=DL_CHUNK, chunk_size=DL_CHUNK, file_size=size):
+                        fh.seek(pos)
+                        fh.write(data)
+                        pos += workers * DL_CHUNK
+                        done[0] += 1
+                        if progress:
+                            progress(min(1.0, done[0] / total))
+                        if pos >= size:
+                            break
+                    return
+                except Exception:  # noqa: BLE001 - resume this stripe where it stopped
+                    if attempt == 4:
+                        raise
+                    await asyncio.sleep(1 + attempt * 2)
+
+    await asyncio.gather(*(worker(w) for w in range(workers)))
+
+
 def _client():
     from telethon import TelegramClient
     return TelegramClient(SESSION, int(os.environ["TELEGRAM_API_ID"]),
@@ -361,11 +406,8 @@ def download_video(chat_id, msg_id, dest, progress=None):
             msg = await client.get_messages(peer, ids=msg_id)
             if not msg or not msg.media:
                 raise TelegramError("message has no video (it may have been deleted)")
-            cb = (lambda got, total: progress(got / max(total, 1))) if progress else None
-            path = await client.download_media(msg, file=str(dest), progress_callback=cb)
-            if not path:
-                raise TelegramError("download failed")
-            return path
+            await _parallel_download(client, msg, dest, progress)
+            return str(dest)
         finally:
             await client.disconnect()
 
