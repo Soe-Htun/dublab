@@ -15,14 +15,14 @@ from flask import Flask, jsonify, redirect, render_template, request, send_file
 import telegram
 
 from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tts,
-                 normalize_logo, render_captions, video_size, write_srt,
+                 normalize_logo, render_captions, sample_frames, video_size, write_srt,
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
                  build_recap_video, make_covers, mux, synthesize, probe_duration, probe_url, separate_music, split_points,
                  split_video, transcribe)
-from gemini import (TTS_CPS, RateLimited, pick_cover_frames, translate_lines, write_intro, write_recap,
-                    write_title)
+from gemini import (TTS_CPS, RateLimited, find_caption_band, pick_cover_frames, translate_lines, write_intro,
+                    write_recap, write_title)
 
 # Gemini TTS key rotation.
 # GEMINI_TTS_API_KEYS is comma-separated; falls back to the single GEMINI_API_KEY.
@@ -182,6 +182,31 @@ def clean_err(e):
         return ("အသံထုတ်တဲ့ service (Microsoft) ခေတ္တ ပျက်နေတယ် — "
                 "ပြန်ကောင်းအောင် ပြင်နေပါတယ်။ ခဏနေမှ ပြန်စမ်းပါ 🙏")
     return s.replace(str(BASE), "[app]").replace(str(JOBS), "[jobs]")[:300]
+
+
+def _find_blur(job, src, sfx):
+    """Where the video's own burned-in captions are, found by Gemini from a
+    few frames: the band to blur (and to put the Burmese captions on), or
+    None when there are none. Falls back to the saved position on errors."""
+    key = os.environ.get("GEMINI_API_KEY")
+    try:
+        if not key:
+            raise RuntimeError("no GEMINI_API_KEY")
+        total = job["total"]
+        band = find_caption_band(sample_frames(src, total * 0.05, total * 0.95, 10), key)
+        if band is None:
+            jlog(job, "no burned-in captions found — nothing to blur")
+            return None
+        top, bot = band
+        pad = 0.012                                      # a little margin around the text
+        top, bot = max(0.0, top - pad), min(1.0, bot + pad)
+        jlog(job, f"original captions found at {top * 100:.0f}–{bot * 100:.0f}% of the height — blurring there")
+        return {"bottom": 1 - bot, "height": bot - top}
+    except Exception as e:  # noqa: BLE001 - never lose the dub over this
+        bb, bh = _settings["blur_bottom" + sfx], _settings["blur_height" + sfx]
+        jlog(job, f"caption search failed ({str(e)[:120]}) — blurring the default area "
+                  f"(bottom {bb}%, {bh}% tall)")
+        return {"bottom": bb / 100, "height": bh / 100}
 
 
 def _client_ip():
@@ -514,10 +539,7 @@ def _voice_and_mux(job):
         vw, vh = 1920, 1080
     sfx = "_v" if vh > vw else ""        # portrait video → its own positions
     if job.get("blur"):
-        bb, bh = _settings["blur_bottom" + sfx], _settings["blur_height" + sfx]
-        blur = {"bottom": bb / 100, "height": bh / 100}
-        jlog(job, f"blurring original captions ({'portrait' if sfx else 'landscape'}: "
-                  f"bottom {bb}%, {bh}% tall)")
+        blur = _find_blur(job, src, sfx)
     if job.get("captions"):
         try:
             lst, strip_h = render_captions(cues, vw, vh, d / "caps", _settings["caption_size"])
@@ -526,22 +548,6 @@ def _voice_and_mux(job):
             jlog(job, f"burning {len(cues)} Burmese captions")
         except Exception as e:  # noqa: BLE001 - never lose the dub over captions
             jlog(job, f"captions skipped: {e}")
-    if job.get("cover") and job.get("title_mm"):
-        # one cover for the whole film — every part uses the same one; made
-        # before the mux so cover 1 can also be the picture under the intro
-        try:
-            key = os.environ.get("GEMINI_API_KEY")
-            covers = make_covers(src, job["title_mm"], d, job["total"] * 0.04, job["total"] * 0.9,
-                                 portrait=bool(sfx), blur=blur,
-                                 logo=LOGO_FILE if job.get("logo") and LOGO_FILE.exists() else None,
-                                 count=1, chooser=(lambda shots: pick_cover_frames(shots, key)) if key else None,
-                                 log=lambda m: jlog(job, m))
-            job["covers"] = [c.name for c in covers]
-            job["cover_pick"] = 1
-            jlog(job, f"made {len(covers)} cover images")
-        except Exception as e:  # noqa: BLE001 - never lose the dub over a cover
-            jlog(job, f"cover skipped: {e}")
-    intro_img = d / job["covers"][0] if lead and job.get("covers") else None
     # the outro (or the last line) can run past the picture: hold the last
     # frame until the voice is done, or players stop before it is heard
     tail = 0.0
@@ -557,6 +563,22 @@ def _voice_and_mux(job):
     if cuts:
         jlog(job, f"splitting into {len(cuts) + 1} parts of ~{job['split']} min "
                   f"(cuts at {', '.join(f'{c / 60:.1f}' for c in cuts)} min)")
+    if job.get("cover") and job.get("title_mm"):
+        # same photos for every part; a split film gets "title - 1", "title - 2"…
+        # made before the mux so part 1's cover is also the picture under the intro
+        try:
+            key = os.environ.get("GEMINI_API_KEY")
+            covers = make_covers(src, job["title_mm"], d, job["total"] * 0.04, job["total"] * 0.9,
+                                 portrait=bool(sfx), blur=blur,
+                                 logo=LOGO_FILE if job.get("logo") and LOGO_FILE.exists() else None,
+                                 parts=len(cuts) + 1 if cuts else 1,
+                                 chooser=(lambda shots: pick_cover_frames(shots, key)) if key else None,
+                                 log=lambda m: jlog(job, m))
+            job["covers"] = [c.name for c in covers]
+            jlog(job, f"made {len(covers)} cover image(s)")
+        except Exception as e:  # noqa: BLE001 - never lose the dub over a cover
+            jlog(job, f"cover skipped: {e}")
+    intro_img = d / job["covers"][0] if lead and job.get("covers") else None
     mux(src, dub_wav, d / "dubbed.mp4", bg_wav=bg_wav, bg_volume=BG_VOLUME, logo=logo,
         captions=captions, blur=blur, keyframes=cuts or None, lead=lead, tail=tail,
         intro_img=intro_img)
@@ -623,7 +645,7 @@ threading.Thread(target=worker, daemon=True).start()
 
 @app.get("/")
 def index():
-    return render_template("index.html", max_minutes=max_minutes(), max_mb=max_mb(),
+    return render_template("index.html", max_minutes=0, max_mb=max_mb(),
                            default_model=default_whisper_model(), outro=_settings["outro"],
                            has_logo=LOGO_FILE.exists(),
                            maintenance=MAINTENANCE,
@@ -676,10 +698,9 @@ def create_job():
     except ValueError:
         recap = 0
     recap = recap if recap in RECAP_CHOICES else 0
-    # the owner (admin password) may dub/recap any length up to OWNER_MAX_MINUTES
-    lim = OWNER_MAX_MINUTES if _admin_ok() else max_minutes()
-    max_sec = lim * 60
-    too_long = f"{lim} မိနစ်ထက် ရှည်တဲ့ ဗီဒီယို လက်မခံဘူး"
+    # no length limit: any video is accepted (long films are split into parts)
+    max_sec = float("inf")
+    too_long = "ဗီဒီယို ရှည်လွန်းတယ်"
     tg_msg = None
     if request.form.get("tg_msg"):          # a video the owner forwarded to the bot
         if not (_admin_ok() and _settings.get("telegram_chat_id") and telegram.big_available()):
@@ -914,40 +935,6 @@ def _admin_ok():
     import hmac
     given = request.args.get("key") or request.headers.get("X-Admin-Key") or ""
     return bool(ADMIN_KEY) and hmac.compare_digest(given, ADMIN_KEY)
-
-
-HISTORY_MAX = 10
-
-
-@app.get("/admin/api/history")
-def admin_api_history():
-    """The newest jobs on the server (finished ones survive restarts for 24 h),
-    so a result lost to a refresh or a dropped connection can be fetched again."""
-    if not _admin_ok():
-        return jsonify(error="not found"), 404
-    rows = []
-    for jid, job in sorted(jobs.items(), key=lambda kv: kv[1].get("created", 0), reverse=True):
-        if len(rows) >= HISTORY_MAX:
-            break
-        done = job["status"] == "done"
-        outs = []
-        if done:
-            try:
-                outs = [{"n": i, "name": name, "mb": round(path.stat().st_size / 1048576)}
-                        for i, (path, name) in enumerate(_outputs(job), 1) if path.exists()]
-            except OSError:
-                outs = []
-        tg = job.get("tg") or {}
-        rows.append({"id": jid, "name": job.get("name") or "", "title": job.get("title_mm") or "",
-                     "url": job.get("url") or "", "created": int(job.get("created", 0)),
-                     "status": job["status"], "pct": job.get("pct", 0),
-                     "label": STAGE_LABEL.get(job["stage"], job["stage"]), "error": job.get("error", ""),
-                     "recap": job.get("recap") or 0, "outputs": outs,
-                     "covers": len(job.get("covers") or []) if done else 0,
-                     "cover_pick": job.get("cover_pick", 1),
-                     "tg": tg.get("state", "none"), "tg_pct": tg.get("pct", 0),
-                     "tg_error": tg.get("error", ""), "gone": bool(job.get("files_gone"))})
-    return jsonify(jobs=rows, ttl_hours=TTL // 3600)
 
 
 @app.get("/admin/api/reviews")
@@ -1190,7 +1177,7 @@ def telegram_videos():
         bot = telegram.bot_info().get("username", "")
     except telegram.TelegramError:
         pass
-    return jsonify(videos=vids, bot=bot, max_minutes=max_minutes())
+    return jsonify(videos=vids, bot=bot, max_minutes=0)
 
 
 @app.post("/api/telegram/disconnect")
@@ -1205,18 +1192,26 @@ def telegram_disconnect():
     return jsonify(ok=True)
 
 
-def _cover_file(job):
-    """The film's one cover (the same for every part), or None."""
+def _cover_n(job, part):
+    """Which cover a part uses: its own ("title - N") or the film's one."""
     covers = job.get("covers") or []
-    return job["dir"] / covers[0] if covers and (job["dir"] / covers[0]).exists() else None
+    return part if 1 <= part <= len(covers) and len(covers) > 1 else 1
 
 
-def _cover_thumb(job):
-    """The cover, shrunk to Telegram's thumbnail size (≤320 px JPEG)."""
+def _cover_file(job, part=1):
     covers = job.get("covers") or []
-    n = 1
     if not covers:
         return None
+    p = job["dir"] / covers[_cover_n(job, part) - 1]
+    return p if p.exists() else None
+
+
+def _cover_thumb(job, part=1):
+    """The part's cover, shrunk to Telegram's thumbnail size (≤320 px JPEG)."""
+    covers = job.get("covers") or []
+    if not covers:
+        return None
+    n = _cover_n(job, part)
     src, out = job["dir"] / covers[n - 1], job["dir"] / f"tg_cover{n}.jpg"
     try:
         if not out.exists():
@@ -1287,10 +1282,10 @@ def _telegram_prepare(job):
         _telegram_send(job)
 
 
-def _send_one(job, chat, path, name, caption, prog):
+def _send_one(job, chat, path, name, caption, prog, part=1):
     size = path.stat().st_size
-    cover = _cover_file(job)
-    thumb = _cover_thumb(job) or _video_thumb(path, job["dir"] / f"tg_thumb_{path.stem}.jpg")
+    cover = _cover_file(job, part)
+    thumb = _cover_thumb(job, part) or _video_thumb(path, job["dir"] / f"tg_thumb_{path.stem}.jpg")
     if size <= telegram.MAX_UPLOAD:
         telegram.send_file(chat, path, name, caption=caption, thumb=thumb, cover=cover)
         return "file"
@@ -1330,7 +1325,7 @@ def _telegram_send(job):
             caption = f"🎬 {name[:-4]}" + (f"  ({i + 1}/{len(outs)})" if len(outs) > 1 else "")
             def prog(f, i=i):
                 tg["pct"] = int((i + f) * 100 / len(outs))
-            hows.append(_send_one(job, chat, path, name, caption, prog))
+            hows.append(_send_one(job, chat, path, name, caption, prog, i + 1))
             tg["pct"] = int((i + 1) * 100 / len(outs))
             tg["sent"] = i + 1
         tg["how"] = "link" if "link" in hows else "file"
@@ -1396,7 +1391,7 @@ def result_cover(jid, n):
     covers = (job or {}).get("covers") or []
     if not job or not 1 <= n <= len(covers):
         return jsonify(error="မရှိဘူး"), 404
-    name = _download_name(job, ".jpg").replace(" - mm.jpg", " - cover.jpg")
+    name = _download_name(job, ".jpg").replace(" - mm.jpg", " - cover" + (f"-{n}" if len(covers) > 1 else "") + ".jpg")
     return send_file(job["dir"] / covers[n - 1], mimetype="image/jpeg",
                      as_attachment=request.args.get("dl") == "1", download_name=name)
 

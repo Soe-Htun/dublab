@@ -388,3 +388,28 @@ def pick_cover_frames(jpegs, api_key):
     if not hero and not others:
         raise ValueError("no cover frames picked")
     return hero, others
+
+
+# ---- find the burned-in captions to blur ----
+CAPTION_BAND_PROMPT = """These frames come from one video. Some videos have subtitles burned into the picture
+(e.g. English or Chinese text lines, usually near the bottom). Look at ALL frames together.
+If there is burned-in subtitle text, give the vertical area that covers it in every frame where it appears,
+on a 0-1000 scale of the frame height measured from the TOP (0 = top edge, 1000 = bottom edge).
+Cover the whole text including its outline/shadow, and both lines when there are two.
+Ignore logos, watermarks, channel names in corners, and text that is part of the scene (signs, posters).
+Answer with JSON only: {"subtitles": true, "top": <number>, "bottom": <number>} or {"subtitles": false}"""
+
+
+def find_caption_band(jpegs, api_key):
+    """Returns (top, bottom) as fractions of the frame height, or None when
+    the video has no burned-in subtitles. Raises on API trouble."""
+    raw = _call(CAPTION_BAND_PROMPT, api_key, max_tokens=256,
+                images=[(f"Frame {i}:", b) for i, b in enumerate(jpegs)])
+    m = re.search(r"\{.*\}", raw, re.S)
+    data = json.loads(m.group(0)) if m else {}
+    if not data.get("subtitles"):
+        return None
+    top, bot = float(data["top"]) / 1000, float(data["bottom"]) / 1000   # Gemini's native 0-1000 scale
+    if not 0 <= top < bot <= 1 or bot - top > 0.4:
+        raise ValueError(f"odd subtitle area {top:.2f}-{bot:.2f}")
+    return top, bot

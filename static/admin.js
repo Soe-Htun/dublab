@@ -123,7 +123,7 @@ $('#setsave').addEventListener('click', async () => {
         caption_bottom_v: +pos.v.capbottom, blur_bottom_v: +pos.v.blurbottom, blur_height_v: +pos.v.blurheight }),
     });
     const j = await r.json().catch(() => ({}));
-    msg.textContent = r.ok ? `✅ သိမ်းပြီးပြီ — ${j.max_minutes} မိနစ်အထိ လက်ခံမယ်` : (j.error || 'သိမ်းမရဘူး');
+    msg.textContent = r.ok ? '✅ သိမ်းပြီးပြီ' : (j.error || 'သိမ်းမရဘူး');
     if (r.ok) loadSettings();
   } catch (e) { msg.textContent = 'သိမ်းမရဘူး'; }
   msg.hidden = false;
@@ -231,65 +231,3 @@ loadTelegram();
 
 load();
 setInterval(() => { if (!document.hidden) load(); }, 30000);
-
-// ---- 🕘 history: recent jobs — download, pick a cover, send to Telegram again ----
-let histTimer = null;
-const histFmt = (ts) => fmtTime(ts).slice(5);
-async function loadHistory() {
-  let j;
-  try {
-    const r = await fetch('/admin/api/history?key=' + encodeURIComponent(key));
-    if (!r.ok) { $('#hist-list').innerHTML = '<p class="empty">not found</p>'; return; }
-    j = await r.json();
-  } catch (e) { $('#hist-list').innerHTML = '<p class="empty">⚠️ ဖွင့်မရဘူး</p>'; return; }
-  $('#hist-note').textContent = `(နောက်ဆုံး ${j.jobs.length} ခု · ${j.ttl_hours} နာရီ သိမ်းထားတယ်)`;
-  const list = $('#hist-list');
-  if (!j.jobs.length) { list.innerHTML = '<p class="empty">job မရှိသေးဘူး</p>'; return; }
-  list.innerHTML = '';
-  let busy = false;
-  for (const x of j.jobs) {
-    const row = document.createElement('div'); row.className = 'rev hjob';
-    let state;
-    if (x.status === 'done') state = '✅ ပြီးပြီ';
-    else if (x.status === 'failed') state = '⚠️ ' + esc(x.error || 'မအောင်မြင်ဘူး');
-    else if (x.status === 'review') state = '✏️ ဘာသာပြန်စာ စစ်ဖို့ စောင့်နေတယ်';
-    else { state = `⏳ ${esc(x.label)} · ${x.pct}%`; busy = true; }
-    const title = x.title || x.name || x.id;
-    let html = `<div class="meta"><span>${histFmt(x.created)}${x.recap ? ' · 🎞️ recap' : ''}</span><span>${state}</span></div>
-      <div class="htitle">${esc(title)}</div>`;
-    if (x.title && x.name && x.name !== x.title) html += `<div class="hsub dim">${esc(x.name)}</div>`;
-    if (x.url) html += `<div class="hsub"><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.url)}</a></div>`;
-    if (x.outputs.length) {
-      html += '<div class="hbtns">' + x.outputs.map((o) =>
-        `<a class="mini" href="/r/${x.id}${x.outputs.length > 1 ? '/' + o.n : ''}" download>⬇️ ${x.outputs.length > 1 ? 'အပိုင်း ' + o.n : 'Download'} <span class="dim">${o.mb} MB</span></a>`).join('')
-        + `<a class="mini" href="/?job=${x.id}">▶️ ဖွင့်ကြည့်မယ်</a></div>`;
-    }
-    if (x.covers) html += `<div class="hcovers"><img src="/r/${x.id}/cover/1" loading="lazy" alt="cover"></div>`;
-    if (x.status === 'done' && x.gone) {
-      html += `<p class="hsub">✅ Telegram ကို ပို့ပြီးပြီ · 🗑️ ဗီဒီယိုဖိုင်ကို ဒီစက်ကနေ ဖျက်ပြီး</p>`;
-    } else if (x.status === 'done') {
-      let tg = '';
-      if (x.tg === 'sending') { tg = `⏳ Telegram ကို ပို့နေတယ် ${x.tg_pct}%`; busy = true; }
-      else if (x.tg === 'done') tg = '✅ Telegram ကို ပို့ပြီးပြီ';
-      else if (x.tg === 'failed') tg = '⚠️ ' + esc(x.tg_error || 'ပို့မရဘူး');
-      html += `<div class="hbtns"><button class="ghost htg" ${x.tg === 'sending' ? 'disabled' : ''}>📨 Telegram ${x.tg === 'done' ? 'ထပ်ပို့မယ်' : 'ပို့မယ်'}</button></div>`
-        + (tg ? `<p class="hsub">${tg}</p>` : '');
-    }
-    row.innerHTML = html;
-    const tgb = row.querySelector('.htg');
-    if (tgb) tgb.addEventListener('click', async () => {
-      if (x.tg === 'done' && !confirm('Telegram ကို ပို့ပြီးသားပါ — ထပ်ပို့မလား?')) return;
-      tgb.disabled = true;
-      const r = await fetch(`/api/jobs/${x.id}/telegram${x.tg === 'done' ? '?again=1' : ''}`,
-        { method: 'POST', headers: { 'X-Admin-Key': key } }).catch(() => null);
-      const res = r ? await r.json().catch(() => ({})) : {};
-      if (!r || !r.ok) { alert(res.error || 'ပို့မရဘူး'); tgb.disabled = false; return; }
-      loadHistory();
-    });
-    list.append(row);
-  }
-  clearTimeout(histTimer);
-  if (busy) histTimer = setTimeout(loadHistory, 4000);     // live while something runs
-}
-$('#hist-refresh').addEventListener('click', loadHistory);
-loadHistory();

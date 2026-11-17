@@ -1093,7 +1093,7 @@ def _layout(n, W, H, portrait):
            [(i * (third + g), top + g, third, H - top - g) for i in range(3)]
 
 
-def _gold_title(img, title, box_w, center_x, center_y, max_lines, size):
+def _gold_title(img, title, box_w, center_x, center_y, max_lines, size, suffix=""):
     """Big gold-gradient title with a dark outline and glow, its ink centred
     on (center_x, center_y)."""
     from PIL import Image, ImageDraw, ImageFilter
@@ -1101,7 +1101,9 @@ def _gold_title(img, title, box_w, center_x, center_y, max_lines, size):
     while True:
         font = _caption_font(size)
         lines = _wrap(d, title, font, box_w)
-        if len(lines) <= max_lines or size < 40:
+        if suffix:          # the part number stays on the last line ("… - 2")
+            lines[-1] += suffix
+        if (len(lines) <= max_lines and _tlen(d, lines[-1], font) <= box_w) or size < 40:
             break
         size = int(size * 0.9)
     line_h = int(size * 1.5)
@@ -1132,7 +1134,7 @@ def _gold_title(img, title, box_w, center_x, center_y, max_lines, size):
     return img
 
 
-def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur=None):
+def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur=None, suffix=""):
     """3–5 frames in panels with a big gold Burmese title across the bottom."""
     from PIL import Image, ImageEnhance, ImageFilter
     W, H = (1080, 1920) if portrait else (1280, 720)
@@ -1160,9 +1162,9 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
     img.alpha_composite(shade, (0, band_y))
     img = img.convert("RGB")
     if portrait:
-        _gold_title(img, title, int(W * 0.88), W // 2, H // 2, 3, int(W * 0.12))
+        _gold_title(img, title, int(W * 0.88), W // 2, H // 2, 3, int(W * 0.12), suffix)
     else:
-        _gold_title(img, title, int(W * 0.86), W // 2, H // 2, 2, int(H * 0.13))
+        _gold_title(img, title, int(W * 0.86), W // 2, H // 2, 2, int(H * 0.13), suffix)
     if logo and Path(logo).exists():
         img = img.convert("RGBA")
         lg = Image.open(logo).convert("RGBA")
@@ -1173,6 +1175,20 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
         img = img.convert("RGB")
     img.save(out_jpg, "JPEG", quality=90)
     return Path(out_jpg)
+
+
+def sample_frames(video, start, end, count=8, width=640):
+    """`count` JPEG frames (bytes) spread between start and end."""
+    span = max(end - start, 1.0)
+    out = []
+    for i in range(count):
+        t = start + span * (i + 0.5) / count
+        r = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.2f}", "-i", str(video), "-frames:v", "1",
+                            "-vf", f"scale={width}:-2", "-q:v", "4", "-f", "image2pipe", "-vcodec", "mjpeg", "-"],
+                           capture_output=True)
+        if not r.returncode and r.stdout:
+            out.append(r.stdout)
+    return out
 
 
 def _cover_times_by_ai(video, start, end, chooser, samples=30):
@@ -1192,37 +1208,31 @@ def _cover_times_by_ai(video, start, end, chooser, samples=30):
     return [times[i] for i in hero], [times[i] for i in others]
 
 
-def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, blur=None, count=3,
+def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, blur=None, parts=1,
                 chooser=None, log=None):
-    """Three collage covers (3, 4 and 5 photos). With `chooser` (Gemini), the
-    big lead photo is the main character and the rest are other key
-    characters / moments; otherwise the sharpest, most colourful frames."""
+    """The film's cover: 4 photos in a 2x2 grid with the title in the middle.
+    With `chooser` (Gemini) the first photo is the main character and the rest
+    show the main scenes / other characters; otherwise the sharpest frames.
+    parts > 1: one cover per part, same photos, titled "title - 1", "title - 2"…"""
     out_dir = Path(out_dir)
+    pick = None
     if chooser:
         try:
             hero, others = _cover_times_by_ai(video, start, end, chooser)
             if log:
                 log(f"cover photos picked by AI: {len(hero)} of the main character, {len(others)} others")
             if hero or others:
-                pool = hero + others
-                covers = []
-                for i, n in enumerate((4, 5, 3)[:count], 1):
-                    lead = (hero or pool)[(i - 1) % len(hero or pool)]
-                    rest = [t for t in others + hero if t != lead]
-                    rest = rest[(i - 1) % max(1, len(rest)):] + rest[:(i - 1) % max(1, len(rest))]
-                    pick = ([lead] + rest)[:n]
-                    covers.append(render_collage(video, pick, title, out_dir / f"cover{i}.jpg",
-                                                 portrait, logo, blur))
-                return covers
+                lead = (hero or others)[0]
+                pick = ([lead] + [t for t in others + hero if t != lead])[:4]
         except Exception as e:  # noqa: BLE001 - fall back to the frame scores
             if log:
                 log(f"AI cover pick failed ({str(e)[:120]}) — using the sharpest frames")
-    times = pick_cover_times(video, start, end, 7, samples=36, tmp=out_dir)
-    covers = []
-    for i, n in enumerate((4, 5, 3)[:count], 1):
-        pick = (times[i - 1:] + times[:i - 1])[:n]          # a different lead photo each time
-        covers.append(render_collage(video, pick, title, out_dir / f"cover{i}.jpg", portrait, logo, blur))
-    return covers
+    if not pick:
+        pick = pick_cover_times(video, start, end, 4, samples=36, tmp=out_dir)
+    if parts <= 1:
+        return [render_collage(video, pick, title, out_dir / "cover1.jpg", portrait, logo, blur)]
+    return [render_collage(video, pick, title, out_dir / f"cover{i}.jpg", portrait, logo, blur,
+                           suffix=f" - {i}") for i in range(1, parts + 1)]
 
 
 # ---- recap version: cut the scenes that go with each narration beat ----

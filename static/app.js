@@ -93,7 +93,6 @@ $('#go').addEventListener('click', () => {
     try {
       const j = JSON.parse(xhr.responseText);
       if (xhr.status >= 200 && xhr.status < 300 && j.job_id) {
-        histAdd(j.job_id, ytUrl || (f && f.name) || 'Telegram video');
         showProgress(j.job_id);
       }
       else showError(j.error || 'upload failed');
@@ -141,7 +140,7 @@ function showProgress(jid) {
       });
       if (j.status === 'review') { stopAll(); showReview(jid); }
       if (j.status === 'done') {
-        stopAll(); histAdd(jid, j.title || j.name);
+        stopAll();
         showResult(jid, j.parts); showCovers(jid, j.covers, j.title);
       }
       if (j.status === 'failed') { stopAll(); showError(j.error || 'အမှားရှိတယ်'); }
@@ -361,7 +360,7 @@ async function loadTgVideos() {
   if (!j.videos.length) { const p = document.createElement('p'); p.className = 'note'; p.textContent = 'ဗီဒီယို မရှိသေးဘူး'; list.append(p); return; }
   j.videos.forEach((v) => {
     const b = document.createElement('button'); b.className = 'ghost tgitem';
-    const long = v.duration > j.max_minutes * 60;
+    const long = j.max_minutes > 0 && v.duration > j.max_minutes * 60;
     b.innerHTML = '';
     const t = document.createElement('b'); t.textContent = '🎬 ' + v.name;
     const m = document.createElement('span'); m.className = 'dim';
@@ -387,9 +386,17 @@ function showCovers(jid, n, title) {
   box.hidden = !n; grid.innerHTML = '';
   if (!n) return;
   $('#covertitle').textContent = title ? '— ' + title : '';
-  const im = document.createElement('img');
-  im.src = `/r/${jid}/cover/1`; im.alt = 'cover';
-  grid.append(im);
+  grid.classList.toggle('many', n > 1);
+  for (let k = 1; k <= n; k++) {      // split film: one cover per part ("title - 1", "title - 2"…)
+    const a = document.createElement('a');
+    a.href = `/r/${jid}/cover/${k}?dl=1`; a.className = 'coverlink'; a.title = 'download';
+    const im = document.createElement('img');
+    im.src = `/r/${jid}/cover/${k}`; im.alt = 'cover ' + k; im.loading = 'lazy';
+    a.append(im);
+    if (n > 1) { const c = document.createElement('span'); c.textContent = `⬇️ အပိုင်း ${k}`; a.append(c); }
+    grid.append(a);
+  }
+  $('#coverdl').hidden = n > 1;
   $('#coverdl').href = `/r/${jid}/cover/1?dl=1`;
 }
 
@@ -528,57 +535,3 @@ try {
   recapLen = localStorage.getItem('dublab_recap_len') || '20';
 } catch (e) { /* ignore */ }
 syncRecap();
-
-// ---- history: the last 5 jobs, so a refresh or a dropped connection never loses a result ----
-const HISTKEY = 'dublab_hist';
-const histGet = () => { try { return JSON.parse(localStorage.getItem(HISTKEY) || '[]'); } catch (e) { return []; } };
-function histAdd(id, name) {
-  const h = histGet().filter((x) => x.id !== id);
-  const old = histGet().find((x) => x.id === id);
-  h.unshift({ id, name: name || (old && old.name) || id, t: (old && old.t) || Date.now() });
-  try { localStorage.setItem(HISTKEY, JSON.stringify(h.slice(0, 5))); } catch (e) {}
-}
-async function renderHistory() {
-  const h = histGet();
-  const box = $('#histbox'), list = $('#histlist');
-  if (!h.length) return;
-  box.hidden = false; list.innerHTML = '';
-  for (const x of h) {
-    const b = document.createElement('button'); b.className = 'ghost histrow'; b.disabled = true;
-    const when = new Date(x.t).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-    const nm = document.createElement('span'); nm.className = 'hname'; nm.textContent = x.name;
-    const st = document.createElement('span'); st.className = 'dim hstate'; st.textContent = when + ' · …';
-    b.append(nm, st); list.append(b);
-    fetch('/api/jobs/' + x.id).then((r) => r.json().then((j) => ({ ok: r.ok, j }))).then(({ ok, j }) => {
-      if (!ok) { st.textContent = when + ' · ⌛ မရှိတော့ဘူး'; return; }
-      if (j.title || j.name) nm.textContent = j.title || j.name;
-      b.disabled = false;
-      if (j.status === 'done' && j.gone) {
-        st.textContent = when + ' · ✅ Telegram ကို ပို့ပြီး · 🗑️ ဖိုင်ဖျက်ပြီး'; b.disabled = true;
-      } else if (j.status === 'done') {
-        st.textContent = when + ' · ✅ ပြီးပြီ' + (j.parts && j.parts.length > 1 ? ` (${j.parts.length} ပိုင်း)` : '');
-        b.onclick = () => {
-          ['card-upload', 'card-opts', 'card-progress', 'card-review', 'card-error'].forEach((id) => ($('#' + id).hidden = true));
-          showResult(x.id, j.parts); showCovers(x.id, j.covers, j.title);
-        };
-      } else if (j.status === 'failed') {
-        st.textContent = when + ' · ⚠️ မအောင်မြင်ဘူး'; b.disabled = true;
-      } else if (j.status === 'review') {
-        st.textContent = when + ' · ✏️ ဘာသာပြန်စာ စစ်ဖို့ စောင့်နေတယ်';
-        b.onclick = () => showProgress(x.id);
-      } else {
-        st.textContent = when + ` · ⏳ လုပ်နေဆဲ ${j.pct || 0}%`;
-        b.onclick = () => showProgress(x.id);
-      }
-    }).catch(() => { st.textContent = when + ' · ⚠️ စစ်မရဘူး'; });
-  }
-}
-renderHistory();
-// /?job=<id> (from the admin history): open that job straight away
-(() => {
-  const jid = new URLSearchParams(location.search).get('job');
-  if (!jid || !/^[0-9a-f]{6,32}$/.test(jid)) return;
-  history.replaceState(null, '', '/');
-  histAdd(jid);
-  showProgress(jid);        // shows the result at once when it is done
-})();

@@ -47,7 +47,7 @@
     <div class="drop" id="drop">
       <div class="drop-icon">📤</div>
       <p class="drop-title">နှိပ်၍ ရွေးပါ <span class="dim">သို့မဟုတ် ဖိုင်ဆွဲချပါ</span></p>
-      <p class="drop-sub">MP4 / MOV · အများဆုံး {{ max_minutes }} မိနစ် · {{ max_mb }} MB</p>
+      <p class="drop-sub">MP4 / MOV · အရှည် ကန့်သတ်ချက် မရှိ · ဖိုင် {{ max_mb }} MB အထိ</p>
       <input type="file" id="file" accept="video/mp4,video/quicktime,video/webm,.mkv" hidden>
     </div>
     <div class="ordiv"><span>သို့မဟုတ်</span></div>
@@ -60,10 +60,6 @@
       <div class="tglist" id="tglist" hidden></div>
     </div>
     <video id="preview" controls playsinline hidden></video>
-    <div class="hist" id="histbox" hidden>
-      <h3>🕘 မကြာသေးခင်က <span class="dim">(နောက်ဆုံး ၅ ခု · ၂၄ နာရီ သိမ်းထားတယ်)</span></h3>
-      <div id="histlist"></div>
-    </div>
     <p id="filemeta" class="filemeta" hidden></p>
   </section>
 
@@ -130,7 +126,7 @@
     </label>
     <label class="checkrow">
       <input type="checkbox" id="blurchk" checked>
-      <span>🌫️ မူရင်း caption ကို blur လုပ်မယ် <span class="dim">(ဗီဒီယိုမှာ တရုတ်/English စာတန်း ပါပြီးသားဆို)</span></span>
+      <span>🌫️ မူရင်း caption ကို blur လုပ်မယ် <span class="dim">(AI က caption နေရာကို အလိုလို ရှာမယ် · မပါရင် မလုပ်ဘူး)</span></span>
     </label>
     <label class="checkrow" id="tgrow" hidden>
       <input type="checkbox" id="tgchk" checked>
@@ -223,7 +219,7 @@
       <h3>🖼️ Cover ပုံ <span class="dim" id="covertitle"></span></h3>
       <div class="covergrid" id="covergrid"></div>
       <a class="ghost center" id="coverdl" href="#">⬇️ Cover ကို download</a>
-      <p class="note">အဓိက ဇာတ်ကောင်နဲ့ ဇာတ်ကားရဲ့ အဓိက မြင်ကွင်းတွေကို AI က ရွေးထားတယ် · Telegram မှာ အပိုင်းအားလုံး ဒီ cover နဲ့ ပို့မယ်</p>
+      <p class="note">အဓိက ဇာတ်ကောင်နဲ့ ဇာတ်ကားရဲ့ အဓိက မြင်ကွင်းတွေကို AI က ရွေးထားတယ် · အပိုင်းခွဲထားရင် အပိုင်းတိုင်းမှာ ကိုယ်ပိုင် cover ("ခေါင်းစဉ် - 1", "- 2"…) နဲ့ Telegram ပို့မယ်</p>
     </div>
     <a class="ghost center" id="dlsrt" href="#">📝 မြန်မာ caption (.srt) download</a>
     <div class="tg" id="tgbox" hidden>

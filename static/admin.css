@@ -65,12 +65,3 @@
 .tgbtns{display:flex;gap:8px}
 .tgbtns .ghost{width:auto;flex:1}
 
-/* 🕘 history */
-.hjob .htitle{font-weight:700;font-size:15px;line-height:1.5;word-break:break-word}
-.hjob .hsub{font-size:12.5px;margin-top:3px;word-break:break-all}
-.hjob .hsub a{color:var(--p2)}
-.hbtns{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
-.hbtns .mini{font-size:13px;text-decoration:none}
-.hbtns .ghost{width:auto;flex:1;margin:0}
-.hcovers{margin-top:10px;max-width:360px}
-.hcovers img{width:100%;border-radius:8px}
