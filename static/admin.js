@@ -180,30 +180,53 @@ $('#logodel').addEventListener('click', async () => {
   if (r.ok) showLogo(false);
 });
 
-// ---- Telegram ----
+// ---- Telegram: paste the bot token, Connect; stays connected (settings.json) ----
+let tgSt = {};
+// connected → bot + chat + [Disconnect]; otherwise → steps + token box + [Connect]
+// (token saved but chat not linked yet → Connect without retyping the token)
+function tgView() {
+  const has = !!tgSt.configured, on = !!tgSt.connected;
+  $('#tg-status').hidden = !has;
+  $('#tg-steps').hidden = on;
+  $('#tg-actions').hidden = !on;
+  $('#tg-form').hidden = on;
+  $('#tg-token').closest('label').hidden = has;
+}
 async function loadTelegram() {
-  let st = {};
-  try { st = await (await fetch('/api/telegram?key=' + encodeURIComponent(key))).json(); } catch (e) { return; }
-  $('#tg-off').hidden = !!st.configured; $('#tg-on').hidden = !st.configured;
-  if (!st.configured) return;
-  $('#tg-bot').textContent = st.bot ? '@' + st.bot.username : (st.error || '–');
-  $('#tg-chat').textContent = st.connected ? st.chat : 'မချိတ်ရသေးဘူး';
-  $('#tg-help').hidden = !!st.connected;
-  $('#tg-connect').textContent = st.connected ? '🔄 Reconnect' : '🔗 Connect';
-  $('#tg-disconnect').hidden = !st.connected;
+  try { tgSt = await (await fetch('/api/telegram?key=' + encodeURIComponent(key))).json(); } catch (e) { return; }
+  $('#tg-bot').textContent = tgSt.bot ? '@' + tgSt.bot.username : (tgSt.error || '–');
+  $('#tg-tok').textContent = tgSt.token ? '· ' + tgSt.token : '';
+  $('#tg-chat').textContent = tgSt.connected ? '✅ ' + tgSt.chat : 'မချိတ်ရသေးဘူး';
+  tgView();
 }
-async function tgAction(path) {
-  const msg = $('#tg-msg');
+function tgSay(html) { const m = $('#tg-msg'); m.innerHTML = html; m.hidden = false; }
+async function tgConnect(token, btn) {
+  btn.disabled = true;
   try {
-    const r = await fetch(path + '?key=' + encodeURIComponent(key), { method: 'POST' });
+    const r = await fetch('/api/telegram/connect?key=' + encodeURIComponent(key), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }),
+    });
     const j = await r.json().catch(() => ({}));
-    msg.textContent = r.ok ? (j.chat ? `✅ ${j.chat} နဲ့ ချိတ်ပြီးပြီ — Telegram မှာ စမ်းသပ်စာ ပို့ထားတယ်` : '✅ ဖြုတ်ပြီးပြီ') : ('⚠️ ' + (j.error || 'မရဘူး'));
-  } catch (e) { msg.textContent = '⚠️ မရဘူး'; }
-  msg.hidden = false;
-  loadTelegram();
+    if (!r.ok) tgSay('⚠️ ' + esc(j.error || 'မရဘူး'));
+    else if (j.need_start) {
+      const u = esc(j.bot && j.bot.username);
+      tgSay(`✅ Token မှန်တယ် — <b>@${u}</b><br>👉 <a href="https://t.me/${u}" target="_blank" rel="noopener">t.me/${u}</a> ကို ဖွင့်ပြီး <b>Start</b> နှိပ်ပါ → ပြီးရင် <b>🔗 Connect</b> ပြန်နှိပ်ပါ`);
+    } else tgSay(`✅ <b>${esc(j.chat)}</b> နဲ့ ချိတ်ပြီးပြီ — Telegram မှာ စမ်းသပ်စာ ပို့ထားတယ်`);
+    if (r.ok) $('#tg-token').value = '';
+  } catch (e) { tgSay('⚠️ မရဘူး'); }
+  btn.disabled = false;
+  await loadTelegram();
 }
-$('#tg-connect').addEventListener('click', () => tgAction('/api/telegram/connect'));
-$('#tg-disconnect').addEventListener('click', () => { if (confirm('Telegram ကို ဖြုတ်မလား?')) tgAction('/api/telegram/disconnect'); });
+$('#tg-connect').addEventListener('click', () => {
+  const t = $('#tg-token').value.trim();
+  if (!t && !tgSt.configured) { tgSay('⚠️ Bot token ထည့်ပါ'); $('#tg-token').focus(); return; }
+  tgConnect(t, $('#tg-connect'));
+});
+$('#tg-disconnect').addEventListener('click', async () => {
+  if (!confirm('Telegram bot ကို Disconnect လုပ်မလား? (ပြန်ချိတ်ရင် token ပြန်ထည့်ရမယ်)')) return;
+  await fetch('/api/telegram/disconnect?key=' + encodeURIComponent(key), { method: 'POST' }).catch(() => {});
+  tgSay('✅ Disconnect လုပ်ပြီးပြီ — ပြန်ချိတ်ချင်ရင် token ထည့်ပြီး Connect နှိပ်ပါ'); loadTelegram();
+});
 loadTelegram();
 
 load();

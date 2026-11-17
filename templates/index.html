@@ -121,6 +121,14 @@
       <span>🏷️ Channel logo ထည့်မယ် <span class="dim">(admin Settings က နေရာအတိုင်း)</span></span>
     </label>
     {% endif %}
+    <label class="checkrow">
+      <input type="checkbox" id="coverchk" checked>
+      <span>🖼️ Cover ပုံ ထုတ်မယ် <span class="dim">— AI က မြန်မာ ခေါင်းစဉ် ရေးပေးမယ် (အပိုင်းအားလုံး cover တူ)</span></span>
+    </label>
+    <label class="checkrow">
+      <input type="checkbox" id="introchk" checked>
+      <span>🎙️ အစမှာ ဇာတ်လမ်း မိတ်ဆက်မယ် <span class="dim">— AI က “ဒီနေ့ ဇာတ်လမ်းက…” ရေးပေးမယ် (ပထမပိုင်းမှာပဲ)</span></span>
+    </label>
     {% if outro %}
     <label class="checkrow">
       <input type="checkbox" id="outrochk" checked>
@@ -162,6 +170,14 @@
   <section class="card" id="card-review" hidden>
     <h2>✏️ ဘာသာပြန်စာ စစ်ပါ</h2>
     <p class="note left">ကိုယ့်စတိုင်နဲ့ ပြင်လို့ရတယ်။ မလိုတဲ့ စာကြောင်းကို ဖျက်ထားရင် (အလွတ်) အသံမဖော်ဘူး။ တိုလေ အချိန်ကိုက်လေ။</p>
+    <div class="introedit" id="titlebox" hidden>
+      <div class="line-meta">🖼️ Cover ခေါင်းစဉ် <span class="dim">(ဖျက်ထားရင် cover မထုတ်ဘူး)</span></div>
+      <input type="text" id="titletext" class="titlein" maxlength="60">
+    </div>
+    <div class="introedit" id="introbox" hidden>
+      <div class="line-meta">🎙️ အစမှာ ပြောမယ့် မိတ်ဆက်စာ <span class="dim">(ဖျက်ထားရင် မပြောဘူး)</span></div>
+      <textarea id="introtext" rows="3" maxlength="300"></textarea>
+    </div>
     <div class="lines" id="lines"></div>
     <button class="cta" id="voicego">🎙️ အသံဖော်မယ်</button>
   </section>
@@ -181,6 +197,12 @@
     </div>
     <a class="cta" id="download" href="#">⬇️ Download</a>
     <div class="parts" id="parts" hidden></div>
+    <div class="covers" id="coverbox" hidden>
+      <h3>🖼️ Cover ပုံ <span class="dim" id="covertitle"></span></h3>
+      <div class="covergrid" id="covergrid"></div>
+      <a class="ghost center" id="coverdl" href="#">⬇️ ရွေးထားတဲ့ cover ကို download</a>
+      <p class="note">ရွေးထားတဲ့ cover ကို Telegram ပို့ရင် အပိုင်းအားလုံးမှာ သုံးမယ်</p>
+    </div>
     <a class="ghost center" id="dlsrt" href="#">📝 မြန်မာ caption (.srt) download</a>
     <div class="tg" id="tgbox" hidden>
       <h3>📨 Telegram</h3>

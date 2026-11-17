@@ -282,8 +282,13 @@ def synthesize(text, voice, out_path):
         raise err
 
 
-def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=None):
+def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=None,
+                    intro=None):
     """TTS each utterance, time-fit into its slot, mix into one dub track.
+
+    intro: spoken before the video starts. Everything after it moves later by
+    `lead` seconds (mux(lead=...) holds the first frame that long).
+    Returns (dub_wav, cues, lead).
 
     Finish-the-sentence rule (2026-10-25, user order): an utterance is
     NEVER trimmed. It plays to completion (after atempo speed-up, capped
@@ -322,16 +327,27 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=N
         list(ex.map(_tts, range(n)))   # list() re-raises the first error
         durs = list(ex.map(lambda i: probe_duration(tmpdir / f"u{i}.mp3"), range(n)))
 
-    # placement (sequential: each start depends on where the previous ended)
     plan = []
     cues = []      # (start, end, text) of each spoken line, for captions
+    lead = 0.0
+    if intro:      # story hook over the held first frame, then the video starts
+        ip = tmpdir / "intro.mp3"
+        synthesize(intro, voice, ip)
+        idur = probe_duration(ip)
+        plan.append((ip, 1.0, 0.3))
+        cues.append((0.3, 0.3 + idur, intro))
+        lead = round(idur + 0.8, 3)
+        total_dur += lead
+        cursor = lead
+
+    # placement (sequential: each start depends on where the previous ended)
     for i, u in enumerate(utterances):
         tts_dur = durs[i]
         slot = max(u["end"] - u["start"], 0.5)
         ratio = tts_dur / slot
         atempo = 1.0 if ratio <= 1.0 else min(ratio, MAX_ATEMPO)
         fitted = tts_dur / atempo
-        start = max(u["start"], cursor)
+        start = max(u["start"] + lead, cursor)
         plan.append((tmpdir / f"u{i}.mp3", atempo, start))
         cues.append((start, start + fitted, u["text"]))
         cursor = start + fitted + GAP
@@ -379,7 +395,7 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=N
         w.setsampwidth(2)
         w.setframerate(SR)
         w.writeframes(pcm.tobytes())
-    return dub, cues
+    return dub, cues, lead
 
 
 # ---- Burmese captions ----
@@ -555,7 +571,7 @@ def cleanup_segments(job_dir):
     removed = 0
     import shutil as _sh
     _sh.rmtree(d / "caps", ignore_errors=True)
-    for pat in ("u*.mp3", "p*.wav", "outro.mp3"):
+    for pat in ("u*.mp3", "p*.wav", "outro.mp3", "intro.mp3"):
         for f in d.glob(pat):
             try:
                 f.unlink()
@@ -625,7 +641,7 @@ def separate_music(src_video, job_dir):
 
 
 def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
-        captions=None, blur=None, keyframes=None):
+        captions=None, blur=None, keyframes=None, lead=0.0):
     """Combine picture + dub track.
 
     bg_wav: music/effects with the original voices removed (separate_music).
@@ -639,10 +655,13 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
     bottom=gap below the text as a fraction of the video height).
     blur: optional dict(bottom=fraction, height=fraction) — blurs a full-width
     band (to hide burned-in original captions); captions are centred on it.
+    lead: seconds to hold the first frame before the video starts (intro).
     """
     # Burned-in credit watermark, bottom-right; scale guard keeps even dims
     # for yuv420p.
     vf = "scale=trunc(iw/2)*2:trunc(ih/2)*2,"
+    if lead:
+        vf = f"tpad=start_duration={lead:.3f}:start_mode=clone," + vf
     watermark = bool(WATERMARK_TEXT and _drawtext_ok())
     if watermark:
         font = f"fontfile={_WM_FONT}:" if os.path.exists(_WM_FONT) else ""
@@ -662,7 +681,8 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
     if bg_wav and bg_volume > 0:
         bg_in = ["-i", str(bg_wav)]
         afc = ("[1:a]aformat=sample_rates=44100:channel_layouts=stereo,asplit=2[dub][sc];"
-               f"[2:a]aformat=sample_rates=44100:channel_layouts=stereo,volume={bg_volume:.2f}[bg];"
+               f"[2:a]aformat=sample_rates=44100:channel_layouts=stereo,volume={bg_volume:.2f}"
+               + (f",adelay={int(lead * 1000)}:all=1" if lead else "") + "[bg];"
                "[bg][sc]sidechaincompress=threshold=0.02:ratio=4:attack=20:release=400[duck];"
                "[duck][dub]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[a]")
         amap = ["-map", "[a]"]
@@ -722,7 +742,7 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
                 # cut it off again.
                 "-movflags", "+faststart", str(out_mp4)]
 
-    if not watermark and not draw and not keyframes:
+    if not watermark and not draw and not keyframes and not lead:
         try:
             run(_cmd(copy_video=True))
             return
@@ -846,3 +866,110 @@ def download_url(url, job_dir, max_mb):
     if not out.exists():
         raise RuntimeError("video download failed")
     return out
+
+
+# ---- cover image: a strong frame + big Burmese title ----
+
+def _frame_scores(video, times, tmp):
+    """Score frames: sharp, contrasty, not too dark/bright. Returns [(score, t)]."""
+    import numpy as np
+    from PIL import Image
+    out = []
+    for i, t in enumerate(times):
+        p = Path(tmp) / f"cand{i}.png"
+        r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{t:.2f}", "-i", str(video),
+                            "-frames:v", "1", "-vf", "scale=320:-2", str(p)], capture_output=True)
+        if r.returncode or not p.exists():
+            continue
+        g = np.asarray(Image.open(p).convert("L"), dtype=np.float32) / 255.0
+        p.unlink(missing_ok=True)
+        bright, contrast = g.mean(), g.std()
+        lap = (g[1:-1, 1:-1] * 4 - g[:-2, 1:-1] - g[2:, 1:-1] - g[1:-1, :-2] - g[1:-1, 2:])
+        sharp = float(lap.var()) ** 0.5
+        light = max(0.0, 1.0 - abs(bright - 0.45) * 2.2)      # best around mid-grey
+        out.append((sharp * contrast * light, t))
+    return out
+
+
+def pick_cover_times(video, start, end, count=3, samples=24, tmp="."):
+    """The best `count` moments between start and end, spread apart."""
+    span = max(end - start, 1.0)
+    times = [start + span * (i + 0.5) / samples for i in range(samples)]
+    scored = sorted(_frame_scores(video, times, tmp), reverse=True)
+    picked = []
+    for s, t in scored:
+        if all(abs(t - u) > span / (count * 2.5) for u in picked):
+            picked.append(t)
+        if len(picked) == count:
+            break
+    return picked or [start + span / 3]
+
+
+def render_cover(video, t, title, out_jpg, portrait=False, logo=None, blur=None):
+    """Frame at t, cropped to 1280x720 (or 1080x1920), darkened at the
+    bottom, with the Burmese title in big outlined yellow/white letters."""
+    from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
+    W, H = (1080, 1920) if portrait else (1280, 720)
+    tmp = Path(out_jpg).with_suffix(".src.png")
+    run(["ffmpeg", "-y", "-v", "error", "-ss", f"{t:.2f}", "-i", str(video), "-frames:v", "1",
+         "-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}", str(tmp)])
+    img = Image.open(tmp).convert("RGB")
+    tmp.unlink(missing_ok=True)
+    if blur:                      # hide burned-in original captions, as in the video
+        b0, bh = float(blur["bottom"]), float(blur["height"])
+        box = (0, int(H * (1 - b0 - bh)), W, int(H * (1 - b0)))
+        img.paste(img.crop(box).filter(ImageFilter.GaussianBlur(18)), box[:2])
+    img = ImageEnhance.Contrast(img).enhance(1.12)
+    img = ImageEnhance.Color(img).enhance(1.15)
+    img = img.convert("RGBA")
+
+    # dark gradient under the title
+    grad_h = int(H * (0.55 if portrait else 0.6))
+    grad = Image.new("L", (1, grad_h))
+    for y in range(grad_h):
+        grad.putpixel((0, y), int(215 * (y / grad_h) ** 1.6))
+    shade = Image.new("RGBA", (W, grad_h), (0, 0, 0, 255))
+    shade.putalpha(grad.resize((W, grad_h)))
+    bottom_y = H - grad_h - (int(H * 0.18) if portrait else 0)   # TikTok UI covers the bottom
+    img.alpha_composite(shade, (0, max(0, bottom_y)))
+    if portrait:                  # keep the band below the title dark too
+        img.alpha_composite(Image.new("RGBA", (W, H - (bottom_y + grad_h)), (0, 0, 0, 215)),
+                            (0, bottom_y + grad_h))
+
+    # title: as big as fits in at most 3 lines
+    d = ImageDraw.Draw(img)
+    max_w = int(W * 0.9)
+    size = int((W * 0.13) if portrait else (H * 0.15))
+    while True:
+        font = _caption_font(size)
+        lines = _wrap(d, title, font, max_w)
+        if len(lines) <= (3 if portrait else 2) or size < 40:
+            break
+        size = int(size * 0.9)
+    line_h = int(size * 1.55)
+    stroke = max(3, size // 11)
+    base = H - (int(H * 0.22) if portrait else int(H * 0.07))
+    y = base - line_h * len(lines)
+    for k, ln in enumerate(lines):
+        w = d.textlength(ln, font=font)
+        x = (W - w) / 2
+        color = (255, 214, 0) if k == 0 else (255, 255, 255)        # first line yellow
+        d.text((x + stroke, y + stroke * 1.5), ln, font=font, fill=(0, 0, 0, 160))   # shadow
+        d.text((x, y), ln, font=font, fill=color, stroke_width=stroke, stroke_fill=(0, 0, 0))
+        y += line_h
+
+    if logo and Path(logo).exists():
+        lg = Image.open(logo).convert("RGBA")
+        lw = int(W * (0.2 if portrait else 0.14))
+        lg = lg.resize((lw, max(1, int(lg.height * lw / lg.width))))
+        m = int(W * 0.03)
+        img.alpha_composite(lg, (W - lw - m, m))
+    img.convert("RGB").save(out_jpg, "JPEG", quality=90)
+    return Path(out_jpg)
+
+
+def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, blur=None, count=3):
+    out_dir = Path(out_dir)
+    times = pick_cover_times(video, start, end, count, tmp=out_dir)
+    return [render_cover(video, t, title, out_dir / f"cover{i}.jpg", portrait, logo, blur)
+            for i, t in enumerate(times, 1)]

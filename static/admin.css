@@ -56,5 +56,11 @@
 .steps{margin:6px 0 4px 18px;font-size:13.5px;line-height:1.8;color:var(--txt)}
 .steps code,.tgline code,#tg-help code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:5px}
 .tgline{font-size:14px;margin:4px 0}
+.tokin{width:100%;box-sizing:border-box;background:rgba(255,255,255,.05);border:1px solid var(--card-br);border-radius:10px;
+  color:var(--txt);padding:10px 12px;font:inherit;font-size:14px}
+.tokin:focus{outline:none;border-color:var(--p1)}
+#tg-msg a{color:var(--p2)}
+.tgbtns{flex-wrap:wrap}
+.ghost.danger:hover{border-color:#e5484d;color:#ff8a8a}
 .tgbtns{display:flex;gap:8px}
 .tgbtns .ghost{width:auto;flex:1}

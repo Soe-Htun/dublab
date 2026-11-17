@@ -30,8 +30,43 @@ class TelegramError(RuntimeError):
     pass
 
 
+_token = None      # set from the admin page (settings.json); None = use .env
+
+
 def token():
+    if _token is not None:
+        return _token
     return (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
+
+
+def set_token(t):
+    """Use this bot token from now on ("" = no bot). A different bot needs a
+    fresh MTProto session, so the old session file is dropped."""
+    global _token
+    t = (t or "").strip()
+    if t != token():
+        for ext in (".session", ".session-journal"):
+            try:
+                os.remove(SESSION + ext)
+            except OSError:
+                pass
+    _token = t
+
+
+def masked():
+    t = token()
+    return f"{t[:4]}…{t[-3:]}" if len(t) > 10 else ""
+
+
+def check_token(t):
+    """getMe with a token that is not saved yet; raises TelegramError if wrong."""
+    global _token
+    old = _token
+    _token = t.strip()
+    try:
+        return bot_info()
+    finally:
+        _token = old
 
 
 def configured():
@@ -99,8 +134,8 @@ def send_message(chat_id, text):
                                  "disable_web_page_preview": True})
 
 
-def send_file(chat_id, path, filename, caption="", kind="video"):
-    """kind 'video' (plays inline) or 'document'."""
+def send_file(chat_id, path, filename, caption="", kind="video", thumb=None):
+    """kind 'video' (plays inline) or 'document'. thumb: JPEG ≤320 px."""
     with open(path, "rb") as fh:
         data = fh.read()
     method, field = ("sendVideo", "video") if kind == "video" else ("sendDocument", "document")
@@ -108,7 +143,11 @@ def send_file(chat_id, path, filename, caption="", kind="video"):
     if kind == "video":
         params["supports_streaming"] = "true"
     ctype = "video/mp4" if kind == "video" else "application/octet-stream"
-    return _call(method, params, files={field: (filename, data, ctype)}, timeout=600)
+    files = {field: (filename, data, ctype)}
+    if thumb and os.path.exists(thumb):
+        with open(thumb, "rb") as fh:
+            files["thumbnail"] = ("thumb.jpg", fh.read(), "image/jpeg")
+    return _call(method, params, files=files, timeout=600)
 
 
 # ---- big files (> 50 MB) through MTProto, still as the same bot ----

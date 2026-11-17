@@ -171,3 +171,55 @@ def translate_lines(lines, direction, api_key, src_lang_name=None, channel=None)
     with ThreadPoolExecutor(PARALLEL) as ex:
         parts = list(ex.map(_chunk, range(0, len(lines), CHUNK)))
     return [t for part in parts for t in part]
+
+
+INTRO_PROMPT = """You write the spoken opening line of a Burmese movie-recap video.
+Below is the Burmese narration/dialogue of the video (it may be cut short).
+
+Write ONE short hook in natural SPOKEN Burmese (စကားပြောဘာသာ) that a Myanmar recap narrator
+would say before the story starts, in the style of "ဒီနေ့ ဇာတ်လမ်းက ရေခဲပင်လယ်ထဲမှာ…".
+
+Rules:
+- 1–2 sentences, at most about 30 words (it is spoken in under ~10 seconds).
+- Start with "ဒီနေ့ ဇာတ်လမ်းက" (or a very close variant).
+- Set up the situation and make people want to keep watching; never reveal the ending or twists.
+- No greetings, no channel names, no "like/follow/subscribe", no emojis, no quotes.
+- Output only the hook text, nothing else."""
+
+
+def write_intro(lines, api_key, max_chars=6000):
+    """A story hook spoken before the video starts, from the translated lines."""
+    text, used = [], 0
+    for ln in lines:
+        if used + len(ln) > max_chars:
+            break
+        text.append(ln)
+        used += len(ln) + 1
+    raw = _call(INTRO_PROMPT + "\n\nVideo text:\n" + "\n".join(text), api_key)
+    hook = re.sub(r"\s+", " ", raw).strip().strip('"“”')
+    return hook[:300]
+
+
+TITLE_PROMPT = """You name Burmese movie-recap videos.
+Below is the Burmese narration/dialogue of a video (it may be cut short).
+
+Write ONE catchy Burmese title for the video cover, like "မှော်မျက်လုံး ရသွားသူ" or
+"ရေခဲပင်လယ်က အသက်လုပွဲ" — short, dramatic, makes people click.
+
+Rules:
+- Burmese only, 2–6 words, at most about 25 characters.
+- About the main hook of the story; no spoilers of the ending.
+- No channel names, no hashtags, no emojis, no quotes, no punctuation at the end.
+- Output only the title."""
+
+
+def write_title(lines, api_key, max_chars=6000):
+    text, used = [], 0
+    for ln in lines:
+        if used + len(ln) > max_chars:
+            break
+        text.append(ln)
+        used += len(ln) + 1
+    raw = _call(TITLE_PROMPT + "\n\nVideo text:\n" + "\n".join(text), api_key)
+    title = re.sub(r"\s+", " ", raw.strip().splitlines()[0]).strip().strip('"“”။')
+    return title[:60]

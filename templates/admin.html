@@ -96,24 +96,29 @@
 
   <section class="card" id="tgcard">
     <h2>📨 Telegram</h2>
-    <div id="tg-off" hidden>
-      <p class="note left">ဗီဒီယိုပြီးတာနဲ့ ခင်ဗျား Telegram ဆီ bot က ပို့ပေးမယ်။ ချိတ်နည်း:</p>
-      <ol class="steps">
-        <li>Telegram မှာ <b>@BotFather</b> ကို ဖွင့် → <code>/newbot</code> → နာမည်ပေး → <b>bot token</b> ရမယ်</li>
-        <li><code>.env</code> ထဲမှာ <code>TELEGRAM_BOT_TOKEN=&lt;token&gt;</code> ထည့်ပြီး <code>./run.sh</code> ပြန်ဖွင့်</li>
-        <li>ဒီစာမျက်နှာကို refresh လုပ်ပါ</li>
-      </ol>
-    </div>
-    <div id="tg-on" hidden>
-      <p class="tgline">🤖 Bot: <b id="tg-bot">–</b></p>
+    <p class="note left">ဗီဒီယိုပြီးတာနဲ့ ခင်ဗျား Telegram ဆီ bot က ပို့ပေးမယ်။</p>
+    <ol class="steps" id="tg-steps">
+      <li>Telegram မှာ <b>@BotFather</b> ကို ဖွင့် → <code>/newbot</code> → နာမည်ပေး → <b>bot token</b> ကူးယူပါ</li>
+      <li>အောက်မှာ token ထည့်ပြီး <b>🔗 Connect</b> နှိပ်ပါ</li>
+      <li>ပြောတဲ့အတိုင်း bot ကို Telegram မှာ <b>Start</b> နှိပ်ပြီး <b>🔗 Connect</b> ပြန်နှိပ်ပါ</li>
+    </ol>
+    <div id="tg-status" hidden>
+      <p class="tgline">🤖 Bot: <b id="tg-bot">–</b> <span class="dim" id="tg-tok"></span></p>
       <p class="tgline">💬 Chat: <b id="tg-chat">မချိတ်ရသေးဘူး</b></p>
-      <p class="note left" id="tg-help">Telegram မှာ bot ကို ဖွင့်ပြီး <code>/start</code> ပို့ → ပြီးရင် <b>🔗 Connect</b> နှိပ်ပါ</p>
+    </div>
+    <div id="tg-form">
+      <label class="setcol" for="tg-token">
+        <span>🔑 Bot token <span class="dim">(@BotFather ပေးတဲ့ token)</span></span>
+        <input type="password" id="tg-token" class="tokin" placeholder="123456789:AAH…" autocomplete="off" spellcheck="false">
+      </label>
       <div class="tgbtns">
         <button class="ghost" id="tg-connect">🔗 Connect</button>
-        <button class="ghost" id="tg-disconnect" hidden>Disconnect</button>
       </div>
-      <p class="note" id="tg-msg" hidden></p>
     </div>
+    <div class="tgbtns" id="tg-actions" hidden>
+      <button class="ghost danger" id="tg-disconnect">Disconnect</button>
+    </div>
+    <p class="note left" id="tg-msg" hidden></p>
   </section>
 
   <section class="card">

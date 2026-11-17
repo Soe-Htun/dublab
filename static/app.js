@@ -71,6 +71,8 @@ $('#go').addEventListener('click', () => {
   fd.append('keep_bg', $('#bgchk').checked ? '1' : '0');
   fd.append('model', model);
   fd.append('outro', $('#outrochk') && $('#outrochk').checked ? '1' : '0');
+  fd.append('intro', $('#introchk').checked ? '1' : '0');
+  fd.append('cover', $('#coverchk').checked ? '1' : '0');
   fd.append('split', split);
   try { localStorage.setItem('dublab_split', split); } catch (e) {}
   fd.append('logo', $('#logochk') && $('#logochk').checked ? '1' : '0');
@@ -126,7 +128,7 @@ function showProgress(jid) {
         setRing(li, p, s === j.stage && j.stage_pct != null);
       });
       if (j.status === 'review') { stopAll(); showReview(jid); }
-      if (j.status === 'done') { stopAll(); showResult(jid, j.parts); }
+      if (j.status === 'done') { stopAll(); showResult(jid, j.parts); showCovers(jid, j.covers, j.cover_pick, j.title); }
       if (j.status === 'failed') { stopAll(); showError(j.error || 'အမှားရှိတယ်'); }
     } catch (e) { stopAll(); showError(e.message); }
   }, 2000);
@@ -182,6 +184,10 @@ async function showReview(jid) {
     const r = await fetch('/api/jobs/' + jid + '/lines');
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'load failed');
+    $('#introbox').hidden = j.intro == null;
+    $('#titlebox').hidden = j.title == null;
+    $('#titletext').value = j.title || '';
+    $('#introtext').value = j.intro || '';
     j.lines.forEach((ln) => {
       const row = document.createElement('div');
       row.className = 'line';
@@ -212,7 +218,10 @@ async function showReview(jid) {
       else { btn.disabled = false; alert(j.error || 'ပို့မရဘူး'); }
     };
     xhr.onerror = () => { btn.disabled = false; btn.textContent = '🎙️ အသံဖော်မယ်'; alert('ပို့မရဘူး'); };
-    xhr.send(JSON.stringify({ texts: texts }));
+    const body = { texts: texts };
+    if (!$('#introbox').hidden) body.intro = $('#introtext').value;
+    if (!$('#titlebox').hidden) body.title = $('#titletext').value;
+    xhr.send(JSON.stringify(body));
   };
 }
 
@@ -314,6 +323,29 @@ document.querySelectorAll('#speedrow button').forEach((b) => b.addEventListener(
   const slider = $('#speedslider');
   if (slider) slider.addEventListener('input', () => setSpeed(parseFloat(slider.value)));
 })();
+
+// ---- covers: one set for the whole film; the picked one goes to every part ----
+function showCovers(jid, n, pick, title) {
+  const box = $('#coverbox'), grid = $('#covergrid');
+  box.hidden = !n; grid.innerHTML = '';
+  if (!n) return;
+  $('#covertitle').textContent = title ? '— ' + title : '';
+  const select = (k) => {
+    grid.querySelectorAll('img').forEach((im, i) => im.classList.toggle('on', i + 1 === k));
+    $('#coverdl').href = `/r/${jid}/cover/${k}?dl=1`;
+  };
+  for (let k = 1; k <= n; k++) {
+    const im = document.createElement('img');
+    im.src = `/r/${jid}/cover/${k}`; im.alt = 'cover ' + k; im.loading = 'lazy';
+    im.addEventListener('click', () => {
+      select(k);
+      fetch('/api/jobs/' + jid + '/cover', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ n: k }) }).catch(() => {});
+    });
+    grid.append(im);
+  }
+  select(pick || 1);
+}
 
 // ---- Telegram (owner only: needs the admin password) ----
 const ADMKEY = 'dublab_admin_key';

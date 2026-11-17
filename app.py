@@ -19,9 +19,9 @@ from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tt
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
-                 mux, probe_duration, probe_url, separate_music, split_points,
+                 make_covers, mux, probe_duration, probe_url, separate_music, split_points,
                  split_video, transcribe)
-from gemini import RateLimited, translate_lines
+from gemini import RateLimited, translate_lines, write_intro, write_title
 
 # Gemini TTS key rotation.
 # GEMINI_TTS_API_KEYS is comma-separated; falls back to the single GEMINI_API_KEY.
@@ -77,6 +77,8 @@ try:
     for _k, (_lo, _hi) in _RANGES.items():
         if isinstance(_saved.get(_k), (int, float)) and _lo <= _saved[_k] <= _hi:
             _settings[_k] = _saved[_k]
+    if isinstance(_saved.get("telegram_token"), str):   # set on the admin page
+        telegram.set_token(_saved["telegram_token"])
     if isinstance(_saved.get("telegram_chat_id"), int):
         _settings["telegram_chat_id"] = _saved["telegram_chat_id"]
         _settings["telegram_chat_name"] = str(_saved.get("telegram_chat_name") or "")[:80]
@@ -309,6 +311,20 @@ def _transcribe_and_translate(jid, job):
         u["text"] = t or u["text"]
     job["utter"] = utter
     jlog(job, f"translated {len(texts)} lines")
+    if job.get("intro"):
+        try:
+            job["intro_text"] = write_intro([u["text"] for u in utter], api_key)
+            jlog(job, f"intro: {job['intro_text']}")
+        except Exception as e:  # noqa: BLE001 - the dub works without it
+            job["intro_text"] = ""
+            jlog(job, f"intro skipped: {e}")
+    if job.get("cover"):
+        try:
+            job["title_mm"] = write_title([u["text"] for u in utter], api_key)
+            jlog(job, f"cover title: {job['title_mm']}")
+        except Exception as e:  # noqa: BLE001
+            job["title_mm"] = ""
+            jlog(job, f"cover title skipped: {e}")
 
 
 def _ends_with_channel_promo(utter, total):
@@ -348,7 +364,12 @@ def _voice_and_mux(job):
         outro = ""
     if outro:
         jlog(job, f"adding outro: {outro}")
-    dub_wav, cues = build_dub_track(utter, voice_name, d, job["total"], tts_prog, outro or None)
+    intro = (job.get("intro_text") or "") if job.get("intro") else ""
+    if intro:
+        jlog(job, f"adding intro: {intro}")
+    dub_wav, cues, lead = build_dub_track(utter, voice_name, d, job["total"], tts_prog,
+                                          outro or None, intro or None)
+    total = job["total"] + lead                 # the held first frame makes it longer
     write_srt(cues, d / "captions.srt")          # always offered as a download
 
     job.update(stage="mux", pct=93)
@@ -377,19 +398,30 @@ def _voice_and_mux(job):
             jlog(job, f"burning {len(cues)} Burmese captions")
         except Exception as e:  # noqa: BLE001 - never lose the dub over captions
             jlog(job, f"captions skipped: {e}")
-    cuts = split_points(cues, job["total"], job.get("split") or 0)
+    cuts = split_points(cues, total, job.get("split") or 0)
     if cuts:
         jlog(job, f"splitting into {len(cuts) + 1} parts of ~{job['split']} min "
                   f"(cuts at {', '.join(f'{c / 60:.1f}' for c in cuts)} min)")
     mux(src, dub_wav, d / "dubbed.mp4", bg_wav=bg_wav, bg_volume=BG_VOLUME, logo=logo,
-        captions=captions, blur=blur, keyframes=cuts or None)
+        captions=captions, blur=blur, keyframes=cuts or None, lead=lead)
+    if job.get("cover") and job.get("title_mm"):
+        # one cover for the whole film — every part uses the same one
+        try:
+            covers = make_covers(src, job["title_mm"], d, job["total"] * 0.06, job["total"] * 0.7,
+                                 portrait=bool(sfx), blur=blur,
+                                 logo=LOGO_FILE if job.get("logo") and LOGO_FILE.exists() else None)
+            job["covers"] = [c.name for c in covers]
+            job["cover_pick"] = 1
+            jlog(job, f"made {len(covers)} cover images")
+        except Exception as e:  # noqa: BLE001 - never lose the dub over a cover
+            jlog(job, f"cover skipped: {e}")
     if cuts:
         job.update(stage="split", pct=97)
         jlog(job, "cutting the parts…")
         parts = split_video(d / "dubbed.mp4", cuts, d)
         (d / "dubbed.mp4").unlink(missing_ok=True)        # the parts replace it
         job["parts"] = [p.name for p in parts]
-        job["part_times"] = list(zip([0.0, *cuts], [*cuts, job["total"]]))
+        job["part_times"] = list(zip([0.0, *cuts], [*cuts, total]))
     shutil.rmtree(d / "sep", ignore_errors=True)
     cleanup_segments(d)
     (d / "dub.wav").unlink(missing_ok=True)
@@ -473,6 +505,8 @@ def create_job():
     review = request.form.get("review") == "1"
     keep_bg = request.form.get("keep_bg", "0") == "1"
     outro = request.form.get("outro", "1") == "1"
+    intro = request.form.get("intro", "1") == "1"
+    cover = request.form.get("cover", "1") == "1"
     logo = request.form.get("logo", "1") == "1"
     send_tg = request.form.get("telegram") == "1" and _admin_ok() and telegram.configured()
     captions = request.form.get("captions", "1") == "1"
@@ -531,7 +565,7 @@ def create_job():
     jobs[jid] = {"status": "queued", "stage": "queue", "pct": 0, "error": "",
                  "dir": d, "ext": ext, "direction": direction, "url": url,
                  "voice": voice, "review": review, "keep_bg": keep_bg, "phase": 1,
-                 "model": model, "outro": outro, "logo": logo, "name": name,
+                 "model": model, "outro": outro, "intro": intro, "cover": cover, "logo": logo, "name": name,
                  "id": jid, "telegram": send_tg, "owner": _admin_ok(),
                  "captions": captions, "blur": blur, "split": split,
                  "created": time.time()}
@@ -560,6 +594,8 @@ def job_status(jid):
                  for i, ((_, name), (a, b)) in enumerate(zip(_outputs(job), job["part_times"]), 1)]
     return jsonify(status=job["status"], stage=job["stage"], pct=job["pct"],
                    stage_pct=stage_pct, parts=parts,
+                   covers=len(job.get("covers") or []) if job["status"] == "done" else 0,
+                   cover_pick=job.get("cover_pick", 1), title=job.get("title_mm", ""),
                    label=STAGE_LABEL.get(job["stage"], job["stage"]),
                    error=job["error"])
 
@@ -572,7 +608,9 @@ def job_lines(jid):
         return jsonify(error="ပြင်လို့ရတဲ့ အခြေအနေ မဟုတ်ဘူး"), 404
     return jsonify(lines=[{"start": round(u["start"], 2), "end": round(u["end"], 2),
                            "orig": u.get("orig", ""), "text": u["text"]}
-                          for u in job["utter"]])
+                          for u in job["utter"]],
+                   intro=job.get("intro_text") if job.get("intro") else None,
+                   title=job.get("title_mm") if job.get("cover") else None)
 
 
 @app.post("/api/jobs/<jid>/lines")
@@ -597,6 +635,10 @@ def submit_lines(jid):
         if job["status"] != "review":  # double-click / second tab
             return jsonify(error="တင်ပြီးသားပါ"), 409
         job["utter"] = kept
+        if job.get("intro") and isinstance(data.get("intro"), str):
+            job["intro_text"] = re.sub(r"\s+", " ", data["intro"]).strip()[:300]   # "" = no intro
+        if job.get("cover") and isinstance(data.get("title"), str):
+            job["title_mm"] = re.sub(r"\s+", " ", data["title"]).strip()[:60]
         jlog(job, f"translation checked · {len(kept)} lines → voicing")
         job.update(status="queued", stage="queue", phase=2)
         queue.append(jid)
@@ -765,7 +807,7 @@ def admin_set_settings():
         SETTINGS_FILE.write_text(json.dumps(_settings, ensure_ascii=False))
     except OSError:
         return jsonify(error="သိမ်းမရဘူး"), 500
-    return jsonify(ok=True, **_settings)
+    return jsonify(ok=True, **{k: v for k, v in _settings.items() if k != "telegram_token"})
 
 
 @app.get("/admin/api/logo")
@@ -864,7 +906,7 @@ def telegram_state():
         bot = telegram.bot_info()
     except telegram.TelegramError as e:
         return jsonify(configured=True, authorized=True, connected=False, error=str(e))
-    return jsonify(configured=True, authorized=True, bot=bot,
+    return jsonify(configured=True, authorized=True, bot=bot, token=telegram.masked(),
                    connected=bool(_settings.get("telegram_chat_id")),
                    chat=_settings.get("telegram_chat_name", ""))
 
@@ -878,16 +920,41 @@ def _save_settings():
 
 @app.post("/api/telegram/connect")
 def telegram_connect():
-    if not _admin_ok() or not telegram.configured():
+    """Body {token}: check and save the bot token (empty = keep the saved one),
+    then link the chat that last messaged the bot."""
+    if not _admin_ok():
         return jsonify(error="not found"), 404
+    data = request.get_json(force=True, silent=True) or {}
+    new = str(data.get("token") or "").strip()
+    if new:
+        if not re.fullmatch(r"\d{5,}:[\w-]{20,}", new):
+            return jsonify(error="Token ပုံစံ မမှန်ဘူး — @BotFather ပေးတဲ့ 123456:ABC… အပြည့် ထည့်ပါ"), 400
+        try:
+            bot = telegram.check_token(new)
+        except telegram.TelegramError as e:
+            return jsonify(error=f"Token မှားနေတယ် ({e})"), 400
+        if new != telegram.token():
+            _settings.pop("telegram_chat_id", None)        # new bot → link the chat again
+            _settings.pop("telegram_chat_name", None)
+        telegram.set_token(new)
+        _settings["telegram_token"] = new
+        _save_settings()
+    elif not telegram.configured():
+        return jsonify(error="Bot token ထည့်ပါ"), 400
     try:
+        bot = telegram.bot_info()
         chat_id, name = telegram.find_chat()
+    except telegram.TelegramError as e:
+        if "no messages" in str(e):
+            return jsonify(ok=True, need_start=True, bot=bot)
+        return jsonify(error=str(e)), 400
+    try:
         telegram.send_message(chat_id, "✅ DubLab connected — finished dubs will be sent here.")
     except telegram.TelegramError as e:
         return jsonify(error=str(e)), 400
     _settings.update(telegram_chat_id=chat_id, telegram_chat_name=name)
     _save_settings()
-    return jsonify(ok=True, chat=name)
+    return jsonify(ok=True, chat=name, bot=bot)
 
 
 @app.post("/api/telegram/disconnect")
@@ -896,8 +963,27 @@ def telegram_disconnect():
         return jsonify(error="not found"), 404
     _settings.pop("telegram_chat_id", None)
     _settings.pop("telegram_chat_name", None)
+    _settings["telegram_token"] = ""           # forget the bot too (overrides .env)
+    telegram.set_token("")
     _save_settings()
     return jsonify(ok=True)
+
+
+def _cover_thumb(job):
+    """The chosen cover, shrunk to Telegram's thumbnail size (≤320 px JPEG)."""
+    covers = job.get("covers") or []
+    n = job.get("cover_pick", 1)
+    if not covers or not 1 <= n <= len(covers):
+        return None
+    src, out = job["dir"] / covers[n - 1], job["dir"] / f"tg_cover{n}.jpg"
+    try:
+        if not out.exists():
+            subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-vf",
+                            "scale=320:320:force_original_aspect_ratio=decrease", "-q:v", "4",
+                            str(out)], check=True, timeout=30)
+        return out
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _video_thumb(video, out):
@@ -961,12 +1047,12 @@ def _telegram_prepare(job):
 
 def _send_one(job, chat, path, name, caption, prog):
     size = path.stat().st_size
+    thumb = _cover_thumb(job) or _video_thumb(path, job["dir"] / f"tg_thumb_{path.stem}.jpg")
     if size <= telegram.MAX_UPLOAD:
-        telegram.send_file(chat, path, name, caption=caption)
+        telegram.send_file(chat, path, name, caption=caption, thumb=thumb)
         return "file"
     if size <= telegram.BIG_MAX and telegram.big_available():
         w, h = video_size(path)
-        thumb = _video_thumb(path, job["dir"] / f"tg_thumb_{path.stem}.jpg")
         pre = job.get("tg_pre") or {}
         prepared = pre.get("files", {}).get(str(path)) if pre.get("state") == "ready" else None
         telegram.send_big_video(chat, path, name, caption=caption,
@@ -1050,6 +1136,32 @@ def _download_name(job, ext, part=None):
     if len(name) > 50:                                       # cut at a word boundary
         name = name[:50].rsplit(" ", 1)[0].strip(" .-_,") or name[:50]
     return f"{name or 'dublab'} - mm" + (f"-{part}" if part else "") + ext
+
+
+@app.get("/r/<jid>/cover/<int:n>")
+def result_cover(jid, n):
+    job = jobs.get(jid)
+    covers = (job or {}).get("covers") or []
+    if not job or not 1 <= n <= len(covers):
+        return jsonify(error="မရှိဘူး"), 404
+    name = _download_name(job, ".jpg").replace(" - mm.jpg", " - cover.jpg")
+    return send_file(job["dir"] / covers[n - 1], mimetype="image/jpeg",
+                     as_attachment=request.args.get("dl") == "1", download_name=name)
+
+
+@app.post("/api/jobs/<jid>/cover")
+def pick_cover(jid):
+    """Choose which cover is used (Telegram thumbnail for every part)."""
+    job = jobs.get(jid)
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        n = int(data.get("n"))
+    except (TypeError, ValueError):
+        n = 0
+    if not job or not 1 <= n <= len(job.get("covers") or []):
+        return jsonify(error="မရှိဘူး"), 404
+    job["cover_pick"] = n
+    return jsonify(ok=True)
 
 
 @app.get("/r/<jid>.srt")
