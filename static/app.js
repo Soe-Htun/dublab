@@ -266,7 +266,6 @@ function showResult(jid, parts) {
       row.append(play, dl); box.append(row);
     });
   }
-  $('#dlsrt').href = '/r/' + jid + '.srt';
   initTelegram(jid);
   $('#card-result').scrollIntoView({ behavior: 'smooth' });
 }
