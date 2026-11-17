@@ -275,6 +275,10 @@ Rules:
 - Beats are in story order. Each beat tells what happens during a short range of transcript lines, so the
   matching scene can be shown while it is narrated; cover the whole section from start to end.
 - Each beat's line range must be in order and not go backwards; ranges should be short (the scene shown).
+- SKIP SONGS AND DANCES: song-and-dance numbers, music videos and montages (common in Indian films) are not
+  story. Transcript lines that are song lyrics (rhyming, repeated chorus lines, poetic words unrelated to the
+  dialogue around them) belong to such a number: never narrate them and never point a beat's line range at them,
+  so the dance scene is not shown. Jump straight to the next story scene.
 """ + NAME_RULE + """
 - {extra}
 - Write Burmese in Myanmar script only — never Thai, Chinese or any other script inside Burmese words.
