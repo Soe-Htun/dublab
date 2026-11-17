@@ -4,6 +4,7 @@ import re
 import subprocess
 from pathlib import Path
 
+SPEAK_SPEED = float(os.environ.get("DUBLAB_SPEAK_SPEED") or 1.15)   # every voice line is sped up this much (1.0 = TTS's own pace, felt slow)
 MAX_ATEMPO = 1.65  # never speed speech up more than this (1.5->1.8 on 2026-10-26 to fix ~1.7s drift, then 1.8->1.65 same night: 1.8 sounded too fast; 1.65 fits every ratio measured on the Oct 25 test video, 1.61-1.67, with ~0.04s total drift)
 
 
@@ -135,7 +136,62 @@ def _get_model(name):
     return m
 
 
+MLX_REPOS = {"base": "mlx-community/whisper-base-mlx", "small": "mlx-community/whisper-small-mlx"}
+MLX_CHUNK = 600.0     # seconds per piece (lets us report progress; mlx has no callback)
+_mlx_broken = False
+
+
+def _use_mlx():
+    if _mlx_broken or os.environ.get("DUBLAB_WHISPER_ENGINE", "").strip() == "faster":
+        return False
+    import platform
+    if not (platform.system() == "Darwin" and platform.machine() == "arm64"):
+        return False
+    try:
+        import mlx_whisper  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _transcribe_mlx(wav, lang_hint, progress, name):
+    """Whisper on the Apple GPU (mlx-whisper): the CPU engine below can't use it.
+    The audio goes in 10-minute pieces so progress can be shown."""
+    import tempfile
+    import mlx_whisper
+    repo = MLX_REPOS.get(name, MLX_REPOS["small"])
+    total = probe_duration(wav)
+    segs, lang, t0 = [], lang_hint, 0.0
+    with tempfile.TemporaryDirectory() as tmp:
+        while t0 < total - 0.5:
+            piece = Path(tmp) / "piece.wav"
+            run(["ffmpeg", "-y", "-v", "error", "-ss", f"{t0:.2f}", "-t", f"{MLX_CHUNK:.0f}",
+                 "-i", str(wav), "-ac", "1", "-ar", "16000", str(piece)])
+            r = mlx_whisper.transcribe(str(piece), path_or_hf_repo=repo, language=lang,
+                                       condition_on_previous_text=False,   # no runaway repeats
+                                       no_speech_threshold=0.6, verbose=None)
+            lang = lang or r.get("language")
+            for sg in r.get("segments", []):
+                text = (sg.get("text") or "").strip()
+                if text and sg.get("no_speech_prob", 0) < 0.8:
+                    segs.append({"start": t0 + float(sg["start"]), "end": t0 + float(sg["end"]),
+                                 "text": text})
+            t0 += MLX_CHUNK
+            if progress:
+                progress(min(t0 / total, 1.0))
+    return segs, lang
+
+
 def _transcribe(wav, lang_hint, progress, name):
+    global _mlx_broken
+    if _use_mlx():
+        try:
+            out = _transcribe_mlx(wav, lang_hint, progress, name)
+            print(f"[whisper] {name} on Apple GPU (mlx)")
+            return out
+        except Exception as e:  # noqa: BLE001 - fall back to the CPU engine
+            print(f"[whisper] mlx failed ({type(e).__name__}: {e}); using faster-whisper")
+            _mlx_broken = True
     model = _get_model(name)
     # beam 1 (greedy) is ~3x faster than the default 5 with near-identical text
     beam = int(os.environ.get("DUBLAB_WHISPER_BEAM") or 1)
@@ -273,6 +329,21 @@ def _in_thread(fn, timeout):
 
 
 def synthesize(text, voice, out_path):
+    """TTS one utterance at SPEAK_SPEED (the TTS's own pace is a bit slow)."""
+    _synthesize_raw(text, voice, out_path)
+    if abs(SPEAK_SPEED - 1.0) < 0.01:
+        return
+    out_path = Path(out_path)
+    tmp = out_path.with_name(f"{out_path.stem}.fast{out_path.suffix}")
+    try:
+        run(["ffmpeg", "-y", "-v", "error", "-i", str(out_path),
+             "-af", f"atempo={SPEAK_SPEED:.3f}", str(tmp)])
+        tmp.replace(out_path)
+    except Exception as e:  # noqa: BLE001 - normal speed is still fine
+        print(f"[tts] speed-up skipped: {e}")
+
+
+def _synthesize_raw(text, voice, out_path):
     """TTS one utterance, never hanging: the normal chain gets TTS_WALL
     seconds, then Edge alone, then gTTS. Each try writes its own temp file,
     so a late, abandoned try can't overwrite the result."""
@@ -399,7 +470,8 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=N
         tts_dur = durs[i]
         slot = max(u["end"] - u["start"], 0.5)
         ratio = tts_dur / slot
-        atempo = 1.0 if ratio <= 1.0 else min(ratio, MAX_ATEMPO)
+        # lines are already at SPEAK_SPEED: cap the extra so the total stays ≤ MAX_ATEMPO
+        atempo = 1.0 if ratio <= 1.0 else min(ratio, max(1.0, MAX_ATEMPO / SPEAK_SPEED))
         fitted = tts_dur / atempo
         start = max(u["start"] + lead, cursor)
         plan.append((_path(i), atempo, start))

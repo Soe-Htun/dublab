@@ -1,6 +1,7 @@
 flask>=3.0
 waitress>=2.1
 faster-whisper>=1.0
+mlx-whisper; sys_platform == "darwin" and platform_machine == "arm64"   # whisper on the Apple GPU
 edge-tts>=7.0
 # pinned: newer av (19.x) removed the metadata_errors kwarg faster-whisper uses;
 # newer huggingface_hub (1.x) breaks faster-whisper's model download

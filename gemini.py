@@ -1,5 +1,6 @@
 """Gemini REST client for dubbing-script translation (no SDK needed)."""
 import json
+import os
 import re
 import time
 import ssl
@@ -253,7 +254,11 @@ def write_title(lines, api_key, max_chars=6000):
 
 
 # ---- recap version: a shorter Burmese narration over chosen scenes ----
-TTS_CPS = 15.0          # Burmese TTS speaks ~15 characters per second
+TTS_CPS = 15.0 * float(os.environ.get("DUBLAB_SPEAK_SPEED") or 1.15)   # Burmese TTS ~15 chars/s at normal pace, sped up in dub.synthesize
+
+BEAT_CHARS = 130        # one beat ≈ 2–3 sentences ≈ 8 s spoken; a beat count is easier for the model to hit than a character count
+RECAP_SECTION_MIN = 4   # minutes of narration per parallel request: the model fills short targets far better than long ones
+RECAP_PARALLEL = 6
 
 RECAP_PROMPT = """You are a Myanmar movie-recap narrator (like popular Burmese recap channels).
 Below is the transcript of {what}: numbered lines "N|mm:ss|text" in {lang}, from speech recognition
@@ -263,10 +268,12 @@ Write a RECAP of it in natural, engaging SPOKEN Burmese (စကားပြေ�
 narrator ("ဂွေးတိုက…", "အဲ့ဒီမှာ…"), not a translation of the dialogue.
 
 Rules:
-- Length: about {chars} Burmese characters in total (≈ {minutes} minutes spoken). Keep the most important
-  plot points, conflicts, twists and the ending of this section; skip filler, repetition and minor scenes.
-- Split it into beats in story order. Each beat = 1–3 short sentences about what happens during a
-  range of transcript lines, so the matching scene can be shown while it is narrated.
+- LENGTH IS A HARD REQUIREMENT: write AT LEAST {beats} beats, each about {beat_chars} Burmese characters
+  (2–3 sentences) — about {chars} characters in total (≈ {minutes} minutes spoken). Narrations that come out
+  short are rejected, so tell the story scene by scene in detail: what each character does, says and feels,
+  every conflict, twist and the ending of this section. Never summarise several scenes in one line.
+- Beats are in story order. Each beat tells what happens during a short range of transcript lines, so the
+  matching scene can be shown while it is narrated; cover the whole section from start to end.
 - Each beat's line range must be in order and not go backwards; ranges should be short (the scene shown).
 """ + NAME_RULE + """
 - {extra}
@@ -276,8 +283,10 @@ Rules:
 
 def _recap_chunk(lines, lo, hi, minutes, lang, extra, api_key, what):
     numbered = "\n".join(f"{i}|{int(s // 60):02d}:{int(s % 60):02d}|{t}" for i, (s, t) in enumerate(lines[lo:hi], lo))
+    chars = int(minutes * 60 * TTS_CPS)
     prompt = RECAP_PROMPT.format(what=what, lang=lang or "the original language",
-                                 chars=int(minutes * 60 * TTS_CPS * 0.92), minutes=round(minutes, 1),
+                                 chars=chars, minutes=round(minutes, 1),
+                                 beats=max(3, round(chars / BEAT_CHARS)), beat_chars=BEAT_CHARS,
                                  extra=extra) + "\n\nTranscript:\n" + numbered
     raw = _call(prompt, api_key, max_tokens=60000)
     beats, last = [], lo
@@ -297,24 +306,59 @@ def _chars(beats):
     return sum(len(b["say"]) for b in beats)
 
 
+CAST_PROMPT = """Below is the transcript of a movie ({lang}, from speech recognition — may contain mistakes).
+List its characters (at most 12, most important first) and give each one a Burmese name for a
+Myanmar recap narration.
+
+""" + NAME_RULE + """
+
+Output one character per line as "Burmese name = who they are (role, gender, age; their original name if known)".
+Nothing else."""
+
+
+def write_cast(lines, api_key, lang=None, max_chars=60000):
+    """Burmese names for the characters, decided once for the whole film so
+    every parallel recap section calls them the same."""
+    text = "\n".join(t for _, t in lines)
+    if len(text) > max_chars:                     # keep beginning, middle and end
+        third = max_chars // 3
+        mid = len(text) // 2
+        text = text[:third] + "\n…\n" + text[mid - third // 2: mid + third // 2] + "\n…\n" + text[-third:]
+    raw = _call(CAST_PROMPT.format(lang=lang or "original language") + "\n\nTranscript:\n" + text,
+                api_key, max_tokens=2000)
+    rows = [r.strip(" -*") for r in raw.strip().splitlines() if "=" in r]
+    return "\n".join(rows[:12])
+
+
 def write_recap(lines, minutes, api_key, lang=None, channel=None, min_minutes=0, log=None):
     """lines: [(start_seconds, text)] of the whole video. Returns beats
     [{"from": i, "to": j, "say": burmese}] in order (i/j index into lines).
-    Long targets are written in parallel sections of up to ~8 minutes.
+    Long targets are written in parallel sections of ~4 minutes.
     min_minutes: the narration alone (no intro/outro) must reach this; the
     model tends to write short, so short sections are rewritten longer."""
     from concurrent.futures import ThreadPoolExecutor
-    k = max(1, round(minutes / 8))
+    k = max(1, round(minutes / RECAP_SECTION_MIN))
     bounds = [round(len(lines) * i / k) for i in range(k + 1)]
     per = minutes / k
     extra = ("Leave out any channel names and channel promotion of the original video; "
              "no greetings, no like/subscribe/follow lines (those are added separately).")
+    try:
+        cast = write_cast(lines, api_key, lang)
+    except Exception as e:  # noqa: BLE001 - the per-section name rule still applies
+        cast = ""
+        if log:
+            log(f"character names skipped: {e}")
+    if cast:
+        if log:
+            log("characters: " + " · ".join(r.split("=")[0].strip() for r in cast.splitlines()))
+        extra += ("\n- USE EXACTLY THESE CHARACTER NAMES (decided for the whole film; every section must "
+                  "call each character the same):\n" + cast)
 
     def job(i):
         what = "a video" if k == 1 else f"part {i + 1} of {k} of a video (continue the story; do not re-introduce it)"
         return _recap_chunk(lines, bounds[i], bounds[i + 1], per, lang, extra, api_key, what)
 
-    with ThreadPoolExecutor(min(k, PARALLEL)) as ex:
+    with ThreadPoolExecutor(min(k, RECAP_PARALLEL)) as ex:
         parts = list(ex.map(job, range(k)))
         # each section must carry its share of the minimum (+8% headroom);
         # ask again for the short ones, scaled up by how short they came out
