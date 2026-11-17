@@ -154,7 +154,7 @@ STAGE_LABEL = {
     "recap": "Recap အခန်းတွေ ဖြတ်ဆက်နေတယ်",
     "done": "ပြီးပြီ",
 }
-STAGE_RANGE = {"transcribe": (8, 44), "voice": (60, 90)}  # overall pct span
+STAGE_RANGE = {"download": (1, 4), "transcribe": (8, 44), "voice": (60, 90)}  # overall pct span
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = max_mb() * 1024 * 1024
@@ -320,6 +320,8 @@ def _transcribe_and_translate(jid, job):
         jlog(job, "downloading video from Telegram…")
         last = [0]
         def dl_prog(f):
+            job["pct"] = 1 + int(3 * f)          # the bar and the ring show the download too
+            job["dl_pct"] = int(f * 100)
             if f * 100 >= last[0] + 10:
                 last[0] = int(f * 10) * 10
                 jlog(job, f"Telegram download… {last[0]}%")
@@ -618,8 +620,9 @@ def _stay_awake():
     if not shutil.which("caffeinate"):
         return None
     try:
-        # -i: no idle sleep; -s: no system sleep while on AC power
-        return subprocess.Popen(["caffeinate", "-i", "-s"])
+        # -i: no idle sleep; -s: no system sleep on AC power; -d: keep the
+        # screen on too, so a running dub never looks like the Mac fell asleep
+        return subprocess.Popen(["caffeinate", "-i", "-s", "-d"])
     except OSError:
         return None
 
@@ -787,6 +790,8 @@ def job_status(jid):
     if lo_hi:
         lo, hi = lo_hi
         stage_pct = max(0, min(100, round((job["pct"] - lo) * 100 / (hi - lo))))
+    if job["stage"] == "download" and job.get("dl_pct") is not None:
+        stage_pct = job["dl_pct"]          # the real download %, not the coarse overall one
     parts = []
     if job["status"] == "done" and job.get("parts"):
         parts = [{"n": i, "name": name, "start": round(a), "end": round(b)}

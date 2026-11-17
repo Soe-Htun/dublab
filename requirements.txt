@@ -17,3 +17,4 @@ certifi
 # Burmese caption rendering; needs libraqm for shaping (macOS: brew install libraqm, Debian: apt install libraqm0)
 pillow>=11
 telethon
+cryptg            # fast decryption for Telethon: big Telegram downloads/uploads are CPU-bound without it
