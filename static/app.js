@@ -1,7 +1,7 @@
 const $ = (s) => document.querySelector(s);
 const drop = $('#drop'), fileInput = $('#file'), preview = $('#preview');
 const direction = 'auto2mm';  // language is detected on the server
-let voice = 'auto', pollTimer = null, lastJid = null, ytUrl = '', split = '0';
+let voice = 'auto', pollTimer = null, lastJid = null, ytUrl = '', split = '0', tgMsg = null, recap = '0';
 
 function selectGrid(gridSel, attr, cb) {
   document.querySelectorAll(gridSel + ' .opt').forEach((b) => {
@@ -25,12 +25,14 @@ drop.addEventListener('drop', (ev) => {
 fileInput.addEventListener('change', () => { if (fileInput.files.length) handleFile(fileInput.files[0]); });
 
 function handleFile(f) {
-  ytUrl = ''; $('#urlin').value = ''; syncUrlBtn();
+  ytUrl = ''; tgMsg = null; $('#urlin').value = ''; syncUrlBtn();
   if (!/^video\//.test(f.type) && !/\.(mp4|mov|mkv|webm|m4v)$/i.test(f.name)) {
     alert('ဗီဒီယိုဖိုင်ပဲ တင်လို့ရတယ်'); return;
   }
   preview.src = URL.createObjectURL(f);
   preview.hidden = false;
+  srcDur = 0;
+  preview.onloadedmetadata = () => { srcDur = preview.duration || 0; setRecapLen(recapLen); };
   const meta = $('#filemeta');
   meta.hidden = false;
   meta.textContent = `${f.name} · ${(f.size / 1048576).toFixed(1)} MB`;
@@ -44,7 +46,7 @@ const YT_RE = /^https?:\/\/((www|m|music|vm|vt)\.)?(youtube\.com|youtu\.be|tikto
 function useUrl() {
   const u = $('#urlin').value.trim();
   if (!YT_RE.test(u)) { alert('YouTube / TikTok link ပဲ ထည့်လို့ရတယ်'); return; }
-  ytUrl = u;
+  ytUrl = u; tgMsg = null; srcDur = 0; setRecapLen(recapLen);
   fileInput.value = '';
   preview.hidden = true; preview.removeAttribute('src');
   const meta = $('#filemeta');
@@ -62,11 +64,12 @@ $('#urlin').addEventListener('keydown', (e) => { if (e.key === 'Enter' && $('#ur
 
 $('#go').addEventListener('click', () => {
   const f = fileInput.files[0];
-  if (!f && !ytUrl) return;
+  if (!f && !ytUrl && !tgMsg) return;
   const btn = $('#go');
-  btn.disabled = true; btn.textContent = ytUrl ? '⏳ link စစ်နေတယ်…' : '⏳ တင်နေတယ်…';
+  btn.disabled = true; btn.textContent = ytUrl || tgMsg ? '⏳ စစ်နေတယ်…' : '⏳ တင်နေတယ်…';
   const fd = new FormData();
-  if (ytUrl) fd.append('url', ytUrl); else fd.append('video', f); fd.append('direction', direction); fd.append('voice', voice);
+  if (tgMsg) fd.append('tg_msg', tgMsg); else if (ytUrl) fd.append('url', ytUrl); else fd.append('video', f);
+  fd.append('direction', direction); fd.append('voice', voice);
   fd.append('review', $('#reviewchk').checked ? '1' : '0');
   fd.append('keep_bg', $('#bgchk').checked ? '1' : '0');
   fd.append('model', model);
@@ -74,6 +77,7 @@ $('#go').addEventListener('click', () => {
   fd.append('intro', $('#introchk').checked ? '1' : '0');
   fd.append('cover', $('#coverchk').checked ? '1' : '0');
   fd.append('split', split);
+  fd.append('recap', $('#recapchk').checked ? recapLen : '0');
   try { localStorage.setItem('dublab_split', split); } catch (e) {}
   fd.append('logo', $('#logochk') && $('#logochk').checked ? '1' : '0');
   fd.append('telegram', !$('#tgrow').hidden && $('#tgchk').checked ? '1' : '0');
@@ -100,12 +104,17 @@ function showProgress(jid) {
   ['card-upload', 'card-opts', 'card-review', 'card-result', 'card-error'].forEach((id) => ($('#' + id).hidden = true));
   $('#card-progress').hidden = false;
   $('#card-progress').scrollIntoView({ behavior: 'smooth' });
-  const isUrl = !!ytUrl;
+  const isUrl = !!ytUrl || !!tgMsg;
   const dl = document.querySelector('#stages li[data-s="download"]');
   if (dl) dl.hidden = !isUrl;
   const sp = document.querySelector('#stages li[data-s="split"]');
   if (sp) sp.hidden = !(+split);       // only when a split length is chosen
-  const order = ['download', 'audio', 'transcribe', 'translate', 'review', 'music', 'voice', 'mux', 'split'];
+  const rc = document.querySelector('#stages li[data-s="recap"]');
+  const isRecap = $('#recapchk').checked;
+  if (rc) rc.hidden = !isRecap;
+  const mu = document.querySelector('#stages li[data-s="music"]');
+  if (mu) mu.hidden = isRecap || !$('#bgchk').checked;
+  const order = ['download', 'audio', 'transcribe', 'translate', 'review', 'music', 'voice', 'recap', 'mux', 'split'];
   addRings();
   const stopLog = startLiveLog(jid);
   const stopAll = () => { clearInterval(pollTimer); stopLog(); };
@@ -324,6 +333,48 @@ document.querySelectorAll('#speedrow button').forEach((b) => b.addEventListener(
   if (slider) slider.addEventListener('input', () => setSpeed(parseFloat(slider.value)));
 })();
 
+// ---- 📨 videos forwarded to the bot (owner only) ----
+const fmtDur = (s) => { s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+  return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s % 60).padStart(2, '0'); };
+async function loadTgVideos() {
+  const list = $('#tglist');
+  list.hidden = false; list.textContent = '⏳ …';
+  let j = {};
+  try {
+    const r = await fetch('/api/telegram/videos', { headers: { 'X-Admin-Key': admKey() } });
+    j = await r.json();
+    if (!r.ok) { list.textContent = '⚠️ ' + (j.error || 'မရဘူး'); return; }
+  } catch (e) { list.textContent = '⚠️ မရဘူး'; return; }
+  list.innerHTML = '';
+  const hint = document.createElement('p'); hint.className = 'note left';
+  hint.textContent = `Telegram မှာ ဗီဒီယိုကို @${j.bot} ဆီ forward လုပ်ပြီး 🔄 နှိပ်ပါ (၂၄ နာရီအတွင်း ပို့ထားတာတွေ ပေါ်မယ်)`;
+  const refresh = document.createElement('button'); refresh.className = 'ghost mini-r'; refresh.textContent = '🔄';
+  refresh.addEventListener('click', loadTgVideos);
+  const head = document.createElement('div'); head.className = 'tghead'; head.append(hint, refresh);
+  list.append(head);
+  if (!j.videos.length) { const p = document.createElement('p'); p.className = 'note'; p.textContent = 'ဗီဒီယို မရှိသေးဘူး'; list.append(p); return; }
+  j.videos.forEach((v) => {
+    const b = document.createElement('button'); b.className = 'ghost tgitem';
+    const long = v.duration > j.max_minutes * 60;
+    b.innerHTML = '';
+    const t = document.createElement('b'); t.textContent = '🎬 ' + v.name;
+    const m = document.createElement('span'); m.className = 'dim';
+    m.textContent = ` · ${fmtDur(v.duration)} · ${(v.size / 1048576).toFixed(0)} MB` + (v.from ? ' · ' + v.from : '') +
+      (long ? ` · ⚠️ ${j.max_minutes} မိနစ်ထက် ရှည်တယ်` : '');
+    b.append(t, m);
+    b.addEventListener('click', () => {
+      tgMsg = v.id; ytUrl = ''; fileInput.value = ''; $('#urlin').value = ''; syncUrlBtn();
+      srcDur = v.duration; setRecapLen(recapLen);
+      preview.hidden = true; preview.removeAttribute('src');
+      list.querySelectorAll('.tgitem').forEach((x) => x.classList.toggle('on', x === b));
+      const meta = $('#filemeta'); meta.hidden = false; meta.textContent = '📨 ' + v.name;
+      $('#card-opts').hidden = false;
+      $('#card-opts').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+    list.append(b);
+  });
+}
+
 // ---- covers: one set for the whole film; the picked one goes to every part ----
 function showCovers(jid, n, pick, title) {
   const box = $('#coverbox'), grid = $('#covergrid');
@@ -360,6 +411,7 @@ async function tgState() {
 (async function () {
   const st = await tgState();
   if (st.configured && st.authorized && st.connected) {
+    $('#tgpick').hidden = false;
     $('#tgrow').hidden = false;
     $('#tgrow-to').textContent = '→ ' + (st.chat || '') + (st.bot && st.bot.username ? ' (@' + st.bot.username + ')' : '');
   }
@@ -430,9 +482,51 @@ function setSplit(v) {
   if (!b) return;
   split = v;
   document.querySelectorAll('#splitgrid .opt').forEach((x) => x.classList.toggle('selected', x === b));
-  $('#splitnote').textContent = +v
-    ? `${v} မိနစ်ထက် ရှည်ရင် ${v} မိနစ်စီ ခွဲမယ် — နာမည်-1, နာမည်-2 … · like & follow က နောက်ဆုံးပိုင်းမှာ`
-    : 'ဗီဒီယို တစ်ခုတည်း ထွက်မယ်';
+  if (typeof partsNote === 'function' && $('#recapchk')) try { partsNote(); } catch (e) { /* not ready yet */ }
 }
 document.querySelectorAll('#splitgrid .opt').forEach((b) => b.addEventListener('click', () => setSplit(b.dataset.split)));
 try { setSplit(localStorage.getItem('dublab_split') || '0'); } catch (e) { setSplit('0'); }
+
+$('#tgpickbtn').addEventListener('click', loadTgVideos);
+
+// 🎬 recap version (checkbox → length) and how many parts that makes
+let srcDur = 0;          // seconds of the chosen video, when known
+function partsNote() {
+  const sp = +split, rc = $('#recapchk').checked ? +recapLen * 1.25 : 0;
+  const len = rc ? rc * 60 : srcDur;              // finished video length (s)
+  let txt = +sp ? `${sp} မိနစ်ထက် ရှည်ရင် ${sp} မိနစ်စီ ခွဲမယ် — နာမည်-1, နာမည်-2 …` : 'ဗီဒီယို တစ်ခုတည်း ထွက်မယ်';
+  if (+sp && len) {
+    const n = Math.max(1, Math.round(len / (sp * 60)));
+    txt = `≈ ${n} ပိုင်း ထွက်မယ် (${sp} မိနစ်စီ) — နာမည်-1 … နာမည်-${n}`;
+  }
+  $('#splitnote').textContent = txt + (+sp ? ' · like & follow က နောက်ဆုံးပိုင်းမှာ' : '');
+}
+let recapLen = '20';
+function setRecapLen(v) {
+  let b = document.querySelector(`#recapgrid .opt[data-recap="${v}"]`);
+  if (!b) { v = '20'; b = document.querySelector('#recapgrid .opt[data-recap="20"]'); }   // old saved choice
+  recapLen = v;
+  document.querySelectorAll('#recapgrid .opt').forEach((x) => x.classList.toggle('selected', x === b));
+  const aim = Math.round(v * 1.25);
+  const src = srcDur ? ` (မူရင်း ${Math.round(srcDur / 60)} မိနစ်)` : '';
+  $('#recapnote').textContent = srcDur && aim * 60 >= srcDur * 0.85
+    ? `⚠️ မူရင်းက ${Math.round(srcDur / 60)} မိနစ်ပဲ ရှိလို့ ${v}+ မိနစ် recap က မတိုဘူး — ပိုတိုတာ ရွေးပါ (မဟုတ်ရင် အပြည့် dub မယ်)`
+    : `ဇာတ်လမ်းအဓိကအခန်းတွေကို ရွေးပြီး အနည်းဆုံး ${v} မိနစ် (~${v}–${aim + 2} မိနစ်) recap ထုတ်မယ်${src}`;
+  partsNote();
+}
+function syncRecap() {
+  const on = $('#recapchk').checked;
+  $('#recapopts').hidden = !on;
+  recap = on ? recapLen : '0';
+  setRecapLen(recapLen);
+}
+$('#recapchk').addEventListener('change', () => { syncRecap(); try { localStorage.setItem('dublab_recap_on', $('#recapchk').checked ? '1' : '0'); } catch (e) {} });
+document.querySelectorAll('#recapgrid .opt').forEach((b) => b.addEventListener('click', () => {
+  setRecapLen(b.dataset.recap); recap = recapLen;
+  try { localStorage.setItem('dublab_recap_len', recapLen); } catch (e) {}
+}));
+try {
+  $('#recapchk').checked = localStorage.getItem('dublab_recap_on') === '1';
+  recapLen = localStorage.getItem('dublab_recap_len') || '20';
+} catch (e) { /* ignore */ }
+syncRecap();

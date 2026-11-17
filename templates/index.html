@@ -55,6 +55,10 @@
       <input type="url" id="urlin" placeholder="🔗 YouTube / TikTok link ထည့်ပါ" inputmode="url" autocomplete="off">
       <button class="ghost" id="urlbtn" disabled>သုံးမယ်</button>
     </div>
+    <div id="tgpick" hidden>
+      <button class="ghost" id="tgpickbtn">📨 Telegram ကနေ ယူမယ် <span class="dim">(bot ဆီ forward လုပ်ထားတဲ့ ဗီဒီယို)</span></button>
+      <div class="tglist" id="tglist" hidden></div>
+    </div>
     <video id="preview" controls playsinline hidden></video>
     <p id="filemeta" class="filemeta" hidden></p>
   </section>
@@ -90,7 +94,20 @@
         <span class="opt-sub">~2 ဆ မြန် · English အတွက် အဆင်ပြေ၊ တရုတ်စကား မှားတာ ပိုများ</span>
       </button>
     </div>
-    <h2>၄ · ✂️ ဗီဒီယိုရှည်ရင် အပိုင်းခွဲမယ်</h2>
+    <label class="checkrow recaprow">
+      <input type="checkbox" id="recapchk">
+      <span>🎬 <b>Recap version</b> လုပ်မယ် <span class="dim">— ရုပ်ရှင်အပြည့်ကို AI က မြန်မာလို ဇာတ်လမ်းအကျဉ်း ပြန်ပြောပြီး အတိုလုပ်မယ်</span></span>
+    </label>
+    <div id="recapopts" hidden>
+      <div class="optgrid chips" id="recapgrid">
+        <button class="opt" data-recap="15"><span class="opt-label">15+<span class="dim"> မိနစ်</span></span></button>
+        <button class="opt selected" data-recap="20"><span class="opt-label">20+<span class="dim"> မိနစ်</span></span></button>
+        <button class="opt" data-recap="30"><span class="opt-label">30+<span class="dim"> မိနစ်</span></span></button>
+        <button class="opt" data-recap="50"><span class="opt-label">50+<span class="dim"> မိနစ်</span></span></button>
+      </div>
+      <p class="splitnote dim" id="recapnote"></p>
+    </div>
+    <h2>၄ · ✂️ အပိုင်းခွဲမယ်</h2>
     <div class="optgrid chips" id="splitgrid">
       <button class="opt selected" data-split="0"><span class="opt-label">မခွဲဘူး</span></button>
       <button class="opt" data-split="10"><span class="opt-label">10<span class="dim"> မိနစ်</span></span></button>
@@ -156,6 +173,7 @@
       <li data-s="review">ဘာသာပြန်စာ စစ်ခြင်း</li>
       <li data-s="music">နောက်ခံ music ခွဲထုတ်ခြင်း</li>
       <li data-s="voice">အသံဖော်ခြင်း</li>
+      <li data-s="recap">Recap အခန်းတွေ ဖြတ်ဆက်ခြင်း 🎬</li>
       <li data-s="mux">ဗီဒီယိုပေါင်းစပ်ခြင်း</li>
       <li data-s="split">အပိုင်းခွဲခြင်း ✂️</li>
     </ul>

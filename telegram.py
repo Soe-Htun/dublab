@@ -290,3 +290,66 @@ def send_big_video(chat_id, path, filename, caption="", duration=0, width=0, hei
             asyncio.run(run())
         except Exception as e:  # noqa: BLE001
             raise TelegramError(str(e)[:300]) from None
+
+
+# ---- videos forwarded to the bot → DubLab input ----
+# A bot can't open channel links itself, but anything the owner sends or
+# forwards to it can be downloaded (up to 2 GB over MTProto).
+
+def recent_videos(chat_id, limit=15):
+    """Videos the owner sent/forwarded to the bot (newest first, last ~24 h)."""
+    updates = _call("getUpdates", {"limit": 100, "allowed_updates": ["message"]})
+    out = []
+    for u in updates:
+        m = u.get("message") or {}
+        if (m.get("chat") or {}).get("id") != chat_id:
+            continue
+        v = m.get("video")
+        doc = m.get("document") or {}
+        if not v and str(doc.get("mime_type", "")).startswith("video/"):
+            v = doc
+        if not v:
+            continue
+        origin = (m.get("forward_origin") or {})
+        src = ((origin.get("chat") or {}).get("title") or (origin.get("sender_user") or {}).get("first_name")
+               or origin.get("sender_user_name") or "")
+        cap = (m.get("caption") or "").strip().splitlines()
+        name = (cap[0] if cap else "") or v.get("file_name") or "Telegram video"
+        out.append({"id": m["message_id"], "name": name[:120], "from": src[:60],
+                    "duration": int(v.get("duration") or 0), "size": int(v.get("file_size") or 0),
+                    "date": m.get("date", 0)})
+    out.sort(key=lambda x: x["id"], reverse=True)
+    return out[:limit]
+
+
+def download_video(chat_id, msg_id, dest, progress=None):
+    """Download the video of message msg_id (in the owner's chat with the bot)."""
+    import asyncio
+    from telethon.tl.types import PeerUser
+
+    async def run():
+        client = _client()
+        await client.start(bot_token=token())
+        try:
+            try:
+                peer = await client.get_input_entity(chat_id)
+            except ValueError:
+                peer = await client.get_input_entity(PeerUser(chat_id))
+            msg = await client.get_messages(peer, ids=msg_id)
+            if not msg or not msg.media:
+                raise TelegramError("message has no video (it may have been deleted)")
+            cb = (lambda got, total: progress(got / max(total, 1))) if progress else None
+            path = await client.download_media(msg, file=str(dest), progress_callback=cb)
+            if not path:
+                raise TelegramError("download failed")
+            return path
+        finally:
+            await client.disconnect()
+
+    with _big_lock:
+        try:
+            return asyncio.run(run())
+        except TelegramError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise TelegramError(str(e)[:300]) from None

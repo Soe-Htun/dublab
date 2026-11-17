@@ -74,11 +74,11 @@ Rules:
 PROMPTS = {"en2mm": PROMPT_EN2MM, "mm2en": PROMPT_MM2EN, "zh2mm": PROMPT_ZH2MM}
 
 
-def _call(prompt, api_key):
+def _call(prompt, api_key, max_tokens=8192):
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}"
            f":generateContent?key={api_key}")
     body = {"contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"maxOutputTokens": 8192, "temperature": 0.7}}
+            "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.7}}
     limited = 0
     attempt = 0
     while True:
@@ -223,3 +223,64 @@ def write_title(lines, api_key, max_chars=6000):
     raw = _call(TITLE_PROMPT + "\n\nVideo text:\n" + "\n".join(text), api_key)
     title = re.sub(r"\s+", " ", raw.strip().splitlines()[0]).strip().strip('"“”။')
     return title[:60]
+
+
+
+# ---- recap version: a shorter Burmese narration over chosen scenes ----
+TTS_CPS = 15.0          # Burmese TTS speaks ~15 characters per second
+
+RECAP_PROMPT = """You are a Myanmar movie-recap narrator (like popular Burmese recap channels).
+Below is the transcript of {what}: numbered lines "N|mm:ss|text" in {lang}, from speech recognition
+(may contain mistakes — infer the meaning).
+
+Write a RECAP of it in natural, engaging SPOKEN Burmese (စကားပြောဘာသာ), told in your own words as a
+narrator ("ဒီကောင်လေးက…", "အဲ့ဒီမှာ…"), not a translation of the dialogue.
+
+Rules:
+- Length: about {chars} Burmese characters in total (≈ {minutes} minutes spoken). Keep the most important
+  plot points, conflicts, twists and the ending of this section; skip filler, repetition and minor scenes.
+- Split it into beats in story order. Each beat = 1–3 short sentences about what happens during a
+  range of transcript lines, so the matching scene can be shown while it is narrated.
+- Each beat's line range must be in order and not go backwards; ranges should be short (the scene shown).
+- Names: transliterate into Burmese script consistently.
+- {extra}
+- Output format: one beat per line as "FROM|TO|narration" (FROM/TO = line numbers). Nothing else."""
+
+
+def _recap_chunk(lines, lo, hi, minutes, lang, extra, api_key, what):
+    numbered = "\n".join(f"{i}|{int(s // 60):02d}:{int(s % 60):02d}|{t}" for i, (s, t) in enumerate(lines[lo:hi], lo))
+    prompt = RECAP_PROMPT.format(what=what, lang=lang or "the original language",
+                                 chars=int(minutes * 60 * TTS_CPS * 0.92), minutes=round(minutes, 1),
+                                 extra=extra) + "\n\nTranscript:\n" + numbered
+    raw = _call(prompt, api_key, max_tokens=60000)
+    beats, last = [], lo
+    for line in raw.strip().split("\n"):
+        m = re.match(r"\s*(\d+)\s*\|\s*(\d+)\s*\|\s*(.+)", line)
+        if not m:
+            continue
+        a, b, say = int(m.group(1)), int(m.group(2)), m.group(3).strip()
+        a = min(max(a, last, lo), hi - 1)
+        b = min(max(b, a), hi - 1)
+        beats.append({"from": a, "to": b, "say": say})
+        last = a
+    return beats
+
+
+def write_recap(lines, minutes, api_key, lang=None, channel=None):
+    """lines: [(start_seconds, text)] of the whole video. Returns beats
+    [{"from": i, "to": j, "say": burmese}] in order (i/j index into lines).
+    Long targets are written in parallel sections of up to ~8 minutes."""
+    from concurrent.futures import ThreadPoolExecutor
+    k = max(1, round(minutes / 8))
+    bounds = [round(len(lines) * i / k) for i in range(k + 1)]
+    per = minutes / k
+    extra = ("Leave out any channel names and channel promotion of the original video; "
+             "no greetings, no like/subscribe/follow lines (those are added separately).")
+
+    def job(i):
+        what = "a video" if k == 1 else f"part {i + 1} of {k} of a video (continue the story; do not re-introduce it)"
+        return _recap_chunk(lines, bounds[i], bounds[i + 1], per, lang, extra, api_key, what)
+
+    with ThreadPoolExecutor(min(k, PARALLEL)) as ex:
+        parts = list(ex.map(job, range(k)))
+    return [b for part in parts for b in part]

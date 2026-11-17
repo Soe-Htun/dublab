@@ -315,8 +315,12 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=N
     done_lock = threading.Lock()
     n = len(utterances)
 
+    def _path(i):           # recap mode hands in narration it already voiced
+        return Path(utterances[i].get("audio") or tmpdir / f"u{i}.mp3")
+
     def _tts(i):
-        synthesize(utterances[i]["text"], voice, tmpdir / f"u{i}.mp3")
+        if not utterances[i].get("audio"):
+            synthesize(utterances[i]["text"], voice, tmpdir / f"u{i}.mp3")
         with done_lock:
             done[0] += 1
             if progress:
@@ -325,7 +329,7 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=N
     workers = max(1, int(os.environ.get("DUBLAB_TTS_WORKERS") or 8))
     with ThreadPoolExecutor(workers) as ex:
         list(ex.map(_tts, range(n)))   # list() re-raises the first error
-        durs = list(ex.map(lambda i: probe_duration(tmpdir / f"u{i}.mp3"), range(n)))
+        durs = list(ex.map(lambda i: probe_duration(_path(i)), range(n)))
 
     plan = []
     cues = []      # (start, end, text) of each spoken line, for captions
@@ -348,7 +352,7 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=N
         atempo = 1.0 if ratio <= 1.0 else min(ratio, MAX_ATEMPO)
         fitted = tts_dur / atempo
         start = max(u["start"] + lead, cursor)
-        plan.append((tmpdir / f"u{i}.mp3", atempo, start))
+        plan.append((_path(i), atempo, start))
         cues.append((start, start + fitted, u["text"]))
         cursor = start + fitted + GAP
 
@@ -968,8 +972,168 @@ def render_cover(video, t, title, out_jpg, portrait=False, logo=None, blur=None)
     return Path(out_jpg)
 
 
+def _grab(video, t, w, h):
+    """Frame at t, scaled and centre-cropped to w x h (PIL RGB)."""
+    from PIL import Image
+    import io
+    r = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.2f}", "-i", str(video), "-frames:v", "1",
+                        "-vf", f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}",
+                        "-f", "image2pipe", "-vcodec", "png", "-"], capture_output=True)
+    if r.returncode or not r.stdout:
+        raise RuntimeError("frame grab failed")
+    return Image.open(io.BytesIO(r.stdout)).convert("RGB")
+
+
+def _layout(n, W, H, portrait):
+    """Panel boxes (x, y, w, h) for n = 3..5 photos."""
+    g = 8
+    if portrait:
+        top = int(H * 0.42)
+        rows = {3: [(0, 0, W, top), (0, top + g, W // 2 - g // 2, H - top - g),
+                    (W // 2 + g // 2, top + g, W - W // 2 - g // 2, H - top - g)],
+                4: [(0, 0, W, top)] + [(i * (W + g) // 3, top + g, W // 3 - g, H - top - g) for i in range(3)],
+                5: [(0, 0, W // 2 - g // 2, top), (W // 2 + g // 2, 0, W - W // 2 - g // 2, top)]
+                   + [(i * (W + g) // 3, top + g, W // 3 - g, H - top - g) for i in range(3)]}
+        return rows[n]
+    big = int(W * 0.56)
+    rw = W - big - g
+    if n == 3:
+        return [(0, 0, big, H), (big + g, 0, rw, H // 2 - g // 2), (big + g, H // 2 + g // 2, rw, H - H // 2 - g // 2)]
+    if n == 4:
+        h3 = (H - 2 * g) // 3
+        return [(0, 0, big, H)] + [(big + g, i * (h3 + g), rw, h3) for i in range(3)]
+    third = (W - 2 * g) // 3
+    top = int(H * 0.58)
+    return [(0, 0, W // 2 - g // 2, top), (W // 2 + g // 2, 0, W - W // 2 - g // 2, top)] + \
+           [(i * (third + g), top + g, third, H - top - g) for i in range(3)]
+
+
+def _gold_title(img, title, box_w, center_x, bottom_y, max_lines, size):
+    """Big gold-gradient title with a dark outline and glow, bottom-anchored."""
+    from PIL import Image, ImageDraw, ImageFilter
+    d = ImageDraw.Draw(img)
+    while True:
+        font = _caption_font(size)
+        lines = _wrap(d, title, font, box_w)
+        if len(lines) <= max_lines or size < 40:
+            break
+        size = int(size * 0.9)
+    line_h = int(size * 1.5)
+    stroke = max(4, size // 9)
+    W, H = img.size
+    block_h = line_h * len(lines)
+    y0 = bottom_y - block_h
+    mask = Image.new("L", (W, H), 0)
+    outline = Image.new("L", (W, H), 0)
+    md, od = ImageDraw.Draw(mask), ImageDraw.Draw(outline)
+    for k, ln in enumerate(lines):
+        w = d.textlength(ln, font=font)
+        x, y = center_x - w / 2, y0 + k * line_h
+        od.text((x, y), ln, font=font, fill=255, stroke_width=stroke, stroke_fill=255)
+        md.text((x, y), ln, font=font, fill=255)
+    glow = outline.filter(ImageFilter.GaussianBlur(stroke * 1.6))
+    img.paste(Image.new("RGB", (W, H), (255, 140, 0)), (0, 0), glow.point(lambda v: int(v * 0.55)))
+    img.paste(Image.new("RGB", (W, H), (60, 10, 0)), (0, 0), outline)          # dark outline
+    grad = Image.new("RGB", (1, block_h + 2))
+    for yy in range(block_h + 2):              # light gold → deep orange, top to bottom (per line)
+        f = (yy % line_h) / line_h
+        grad.putpixel((0, yy), (255, int(246 - 90 * f), int(170 - 160 * f)))
+    gfull = Image.new("RGB", (W, H), (255, 200, 0))
+    gfull.paste(grad.resize((W, block_h + 2)), (0, max(0, y0)))
+    img.paste(gfull, (0, 0), mask)
+    return img
+
+
+def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur=None):
+    """3–5 frames in panels with a big gold Burmese title across the bottom."""
+    from PIL import Image, ImageEnhance, ImageFilter
+    W, H = (1080, 1920) if portrait else (1280, 720)
+    n = max(3, min(5, len(times)))
+    times = (list(times) * 5)[:n]
+    canvas = Image.new("RGB", (W, H), (12, 8, 6))
+    for (x, y, w, h), t in zip(_layout(n, W, H, portrait), times):
+        fr = _grab(video, t, w, h)
+        if blur:                                # hide burned-in captions inside each panel
+            b0, bh = float(blur["bottom"]), float(blur["height"])
+            box = (0, int(h * (1 - b0 - bh)), w, int(h * (1 - b0)))
+            fr.paste(fr.crop(box).filter(ImageFilter.GaussianBlur(14)), box[:2])
+        fr = ImageEnhance.Color(ImageEnhance.Contrast(fr).enhance(1.15)).enhance(1.2)
+        canvas.paste(fr, (x, y))
+    img = canvas.convert("RGBA")
+    # warm dark band behind the title
+    band_h = int(H * (0.34 if portrait else 0.42))
+    band_y = int(H * 0.72) - band_h // 2 if portrait else H - band_h
+    grad = Image.new("L", (1, band_h))
+    for yy in range(band_h):
+        f = yy / band_h
+        grad.putpixel((0, yy), int(235 * min(1.0, (f / 0.45) if portrait else f ** 0.9)) if not portrait
+                      else int(235 * (1 - abs(f - 0.5) * 2) ** 0.6))
+    shade = Image.new("RGBA", (W, band_h), (25, 4, 0, 255))
+    shade.putalpha(grad.resize((W, band_h)))
+    img.alpha_composite(shade, (0, band_y))
+    img = img.convert("RGB")
+    if portrait:
+        _gold_title(img, title, int(W * 0.9), W // 2, band_y + band_h - int(band_h * 0.18), 3, int(W * 0.14))
+    else:
+        _gold_title(img, title, int(W * 0.92), W // 2, H - int(H * 0.06), 2, int(H * 0.17))
+    if logo and Path(logo).exists():
+        img = img.convert("RGBA")
+        lg = Image.open(logo).convert("RGBA")
+        lw = int(W * (0.2 if portrait else 0.13))
+        lg = lg.resize((lw, max(1, int(lg.height * lw / lg.width))))
+        m = int(W * 0.025)
+        img.alpha_composite(lg, (W - lw - m, m))
+        img = img.convert("RGB")
+    img.save(out_jpg, "JPEG", quality=90)
+    return Path(out_jpg)
+
+
 def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, blur=None, count=3):
+    """Three collage covers (3, 4 and 5 photos) from the strongest frames."""
     out_dir = Path(out_dir)
-    times = pick_cover_times(video, start, end, count, tmp=out_dir)
-    return [render_cover(video, t, title, out_dir / f"cover{i}.jpg", portrait, logo, blur)
-            for i, t in enumerate(times, 1)]
+    times = pick_cover_times(video, start, end, 7, samples=36, tmp=out_dir)
+    covers = []
+    for i, n in enumerate((3, 4, 5)[:count], 1):
+        pick = (times[i - 1:] + times[:i - 1])[:n]          # a different lead photo each time
+        covers.append(render_collage(video, pick, title, out_dir / f"cover{i}.jpg", portrait, logo, blur))
+    return covers
+
+
+# ---- recap version: cut the scenes that go with each narration beat ----
+
+def build_recap_video(src, clips, out_mp4, tmp, progress=None):
+    """clips: [(source_start, duration)] in order. Each is cut (re-encoded,
+    no audio, same size/fps so they join cleanly) and the pieces joined.
+    Returns the joined video's duration."""
+    from concurrent.futures import ThreadPoolExecutor
+    tmp = Path(tmp)
+    tmp.mkdir(exist_ok=True)
+    total_src = probe_duration(src)
+    hw = _has_encoder("h264_videotoolbox")
+    enc = (["-c:v", "h264_videotoolbox", "-q:v", "65", "-allow_sw", "1"] if hw
+           else ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"])
+    fps = run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+               "stream=avg_frame_rate", "-of", "csv=p=0", str(src)]).stdout.strip() or "30"
+    done = [0]
+
+    def cut(item):
+        i, (start, dur) = item
+        start = max(0.0, min(start, total_src - dur - 0.05))
+        out = tmp / f"clip{i:05d}.mp4"
+        run(["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", str(src), "-t", f"{dur:.3f}",
+             "-an", "-vf", f"scale=trunc(iw/2)*2:trunc(ih/2)*2,fps={fps},format=yuv420p",
+             *enc, "-video_track_timescale", "90000", str(out)])
+        done[0] += 1
+        if progress:
+            progress(done[0], len(clips))
+        return out
+
+    with ThreadPoolExecutor(4) as ex:
+        parts = list(ex.map(cut, enumerate(clips)))
+    lst = tmp / "clips.txt"
+    lst.write_text("".join(f"file '{p.name}'\n" for p in parts))
+    run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(lst),
+         "-c", "copy", "-movflags", "+faststart", str(out_mp4)])
+    import shutil as _sh
+    _sh.rmtree(tmp, ignore_errors=True)
+    return probe_duration(out_mp4)

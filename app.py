@@ -19,9 +19,9 @@ from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tt
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
-                 make_covers, mux, probe_duration, probe_url, separate_music, split_points,
+                 build_recap_video, make_covers, mux, synthesize, probe_duration, probe_url, separate_music, split_points,
                  split_video, transcribe)
-from gemini import RateLimited, translate_lines, write_intro, write_title
+from gemini import TTS_CPS, RateLimited, translate_lines, write_intro, write_recap, write_title
 
 # Gemini TTS key rotation.
 # GEMINI_TTS_API_KEYS is comma-separated; falls back to the single GEMINI_API_KEY.
@@ -40,7 +40,8 @@ JOBS.mkdir(exist_ok=True)
 SETTINGS_FILE = BASE / "settings.json"
 MAX_MINUTES_LIMIT = 180
 OUTRO_MAX = 200   # chars
-SPLIT_CHOICES = (0, 10, 15, 20, 30)   # minutes per part; 0 = one video
+SPLIT_CHOICES = (0, 10, 15, 20, 30)
+OWNER_MAX_MINUTES = int(os.environ.get("DUBLAB_OWNER_MAX_MINUTES") or 240)   # owner: 4 h   # minutes per part; 0 = one video
 CHANNEL_MAX = 60
 # channel logo burned into the video corner (uploaded on the admin page)
 BRAND_DIR = BASE / "brand"
@@ -149,6 +150,7 @@ STAGE_LABEL = {
     "voice": "အသံဖော်နေတယ်",
     "mux": "ဗီဒီယိုပေါင်းနေတယ်",
     "split": "အပိုင်းခွဲနေတယ်",
+    "recap": "Recap အခန်းတွေ ဖြတ်ဆက်နေတယ်",
     "done": "ပြီးပြီ",
 }
 STAGE_RANGE = {"transcribe": (8, 44), "voice": (60, 90)}  # overall pct span
@@ -254,9 +256,26 @@ def _transcribe_and_translate(jid, job):
             jlog(job, f"download error: {str(e)[:300]}")
             raise ValueError("ဗီဒီယို ဒေါင်းမရဘူး — link စစ်ပါ၊ "
                              "ခဏနေ ပြန်စမ်းပါ") from None
+    if job.get("tg_src"):
+        job.update(stage="download", pct=2)
+        jlog(job, "downloading video from Telegram…")
+        last = [0]
+        def dl_prog(f):
+            if f * 100 >= last[0] + 10:
+                last[0] = int(f * 10) * 10
+                jlog(job, f"Telegram download… {last[0]}%")
+        try:
+            telegram.download_video(_settings.get("telegram_chat_id"), job["tg_src"],
+                                    d / ("input" + job["ext"]), dl_prog)
+        except Exception as e:  # noqa: BLE001
+            jlog(job, f"Telegram download error: {str(e)[:300]}")
+            raise ValueError("Telegram ကနေ ဒေါင်းမရဘူး — bot ဆီ ပြန် forward လုပ်ပြီး ထပ်စမ်းပါ") from None
     src = d / ("input" + job["ext"])
     total = probe_duration(src)
     job["total"] = total
+    if job.get("recap") and job["recap"] * RECAP_AIM * 60 >= total * 0.85:
+        jlog(job, f"video is only {total / 60:.0f} min — no shorter recap possible, doing a full dub")
+        job["recap"] = 0
     jlog(job, f"video duration: {total:.1f}s")
     if not has_video_stream(src):
         raise ValueError("ဗီဒီယိုဖိုင် မဟုတ်ဘူး")
@@ -297,20 +316,11 @@ def _transcribe_and_translate(jid, job):
         job["voice"] = g
         jlog(job, f"auto voice: {g} (speaker pitch ≈ {f0:.0f} Hz)")
 
-    job.update(stage="translate", pct=45)
-    jlog(job, "translating with gemini…")
-    try:
-        texts = translate_lines([u["text"] for u in utter], direction, api_key,
-                                LANG_NAMES.get(lang, lang), _settings["channel_name"] or None)
-    except RateLimited as e:
-        raise ValueError("Gemini ဘာသာပြန် quota ဒီနေ့အတွက် ကုန်သွားပြီ — မနက်ဖြန် ပြန်စမ်းပါ"
-                         if e.daily else
-                         "Gemini က ခဏ ပိတ်ထားတယ် (request များလွန်း) — ၁–၂ မိနစ်နေရင် 🔁 ပြန်စမ်းပါ") from None
-    for u, t in zip(utter, texts):
-        u["orig"] = u["text"]
-        u["text"] = t or u["text"]
-    job["utter"] = utter
-    jlog(job, f"translated {len(texts)} lines")
+    if job.get("recap"):
+        _write_recap(job, utter, lang, api_key)
+        utter = job["utter"]
+    else:
+        _translate(job, utter, direction, lang, api_key)
     if job.get("intro"):
         try:
             job["intro_text"] = write_intro([u["text"] for u in utter], api_key)
@@ -338,13 +348,92 @@ def _ends_with_channel_promo(utter, total):
                for u in utter if u["end"] >= tail_from)
 
 
+def _translate(job, utter, direction, lang, api_key):
+    job.update(stage="translate", pct=45)
+    jlog(job, "translating with gemini…")
+    try:
+        texts = translate_lines([u["text"] for u in utter], direction, api_key,
+                                LANG_NAMES.get(lang, lang), _settings["channel_name"] or None)
+    except RateLimited as e:
+        raise ValueError("Gemini ဘာသာပြန် quota ဒီနေ့အတွက် ကုန်သွားပြီ — မနက်ဖြန် ပြန်စမ်းပါ"
+                         if e.daily else
+                         "Gemini က ခဏ ပိတ်ထားတယ် (request များလွန်း) — ၁–၂ မိနစ်နေရင် 🔁 ပြန်စမ်းပါ") from None
+    for u, t in zip(utter, texts):
+        u["orig"] = u["text"]
+        u["text"] = t or u["text"]
+    job["utter"] = utter
+    jlog(job, f"translated {len(texts)} lines")
+
+
+RECAP_CHOICES = (0, 15, 20, 30, 50)   # recap: at least this many minutes; 0 = full dub
+RECAP_AIM = 1.25                      # aim a bit over the minimum (20 → ~25 min)
+
+
+def _write_recap(job, utter, lang, api_key):
+    """Recap mode: Gemini writes a shorter Burmese narration in beats, each
+    tied to the scene (transcript lines) it describes."""
+    job.update(stage="translate", pct=45)
+    mins = job["recap"] * RECAP_AIM
+    jlog(job, f"writing a Burmese recap of at least {job['recap']} min (aiming ~{mins:.0f}) with gemini…")
+    try:
+        beats = write_recap([(u["start"], u["text"]) for u in utter], mins, api_key,
+                            LANG_NAMES.get(lang, lang), _settings["channel_name"] or None)
+    except RateLimited as e:
+        raise ValueError("Gemini quota ဒီနေ့အတွက် ကုန်သွားပြီ — မနက်ဖြန် ပြန်စမ်းပါ" if e.daily else
+                         "Gemini က ခဏ ပိတ်ထားတယ် — ၁–၂ မိနစ်နေရင် 🔁 ပြန်စမ်းပါ") from None
+    if not beats:
+        raise ValueError("Recap ရေးလို့ မရဘူး — ပြန်စမ်းပါ")
+    job["utter"] = [{"start": utter[b["from"]]["start"], "end": utter[b["to"]]["end"],
+                     "text": b["say"][:MAX_LINE],
+                     "orig": " ".join(u["text"] for u in utter[b["from"]:b["to"] + 1])[:300]}
+                    for b in beats]
+    est = sum(len(u["text"]) for u in job["utter"]) / TTS_CPS / 60
+    jlog(job, f"recap: {len(beats)} beats · ~{est:.1f} min of narration")
+
+
+def _recap_cut(job, voice_name):
+    """Voice each beat, then cut the matching scenes to the narration's length
+    and join them: returns (recap video, utterances on the new timeline)."""
+    d = job["dir"]
+    src = d / ("input" + job["ext"])
+    utter = job["utter"]
+    job.update(stage="voice", pct=58)
+    jlog(job, f"voicing {len(utter)} recap beats ({voice_name})…")
+    from concurrent.futures import ThreadPoolExecutor
+    done = [0]
+    def tts(i):
+        p = d / f"r{i}.mp3"
+        synthesize(utter[i]["text"], voice_name, p)
+        done[0] += 1
+        job.update(pct=58 + int(20 * done[0] / len(utter)))
+        return p, probe_duration(p)
+    with ThreadPoolExecutor(max(1, int(os.environ.get("DUBLAB_TTS_WORKERS") or 8))) as ex:
+        voiced = list(ex.map(tts, range(len(utter))))
+    GAP = 0.35
+    clips = [(u["start"], dur + GAP) for u, (_, dur) in zip(utter, voiced)]
+    job.update(stage="recap", pct=78)
+    jlog(job, f"cutting {len(clips)} scenes into the recap…")
+    def prog(i, n):
+        job.update(pct=78 + int(12 * i / max(n, 1)))
+    out = d / "recap.mp4"
+    total = build_recap_video(src, clips, out, d / "clips", prog)
+    new, t = [], 0.0
+    for u, (p, dur) in zip(utter, voiced):
+        new.append({"start": t, "end": t + dur, "text": u["text"], "audio": str(p)})
+        t += dur + GAP
+    jlog(job, f"recap video: {total / 60:.1f} min")
+    return out, new, total
+
+
 def _voice_and_mux(job):
     d = job["dir"]
     utter = job["utter"]
     voice_name = VOICES[job["direction"]][job["voice"]]
     src = d / ("input" + job["ext"])
     bg_wav = None
-    if job.get("keep_bg", True) and BG_VOLUME > 0:
+    if job.get("recap"):                 # narration over the chosen scenes, no original audio
+        src, utter, job["total"] = _recap_cut(job, voice_name)
+    elif job.get("keep_bg", True) and BG_VOLUME > 0:
         if demucs_available():
             job.update(stage="music", pct=56)
             jlog(job, "removing original voices (demucs)…")
@@ -352,14 +441,17 @@ def _voice_and_mux(job):
         else:
             jlog(job, "demucs not installed — background music skipped "
                       "(pip install demucs)")
-    job.update(stage="voice", pct=60)
-    jlog(job, f"synthesizing {len(utter)} utterances ({voice_name})…")
+    if not job.get("recap"):
+        job.update(stage="voice", pct=60)
+        jlog(job, f"synthesizing {len(utter)} utterances ({voice_name})…")
     def tts_prog(i, n):
+        if job.get("recap"):
+            return
         job.update(pct=60 + int(30 * i / max(n, 1)))
         if i % 5 == 0 or i == n:
             jlog(job, f"tts {i}/{n}")
     outro = _settings["outro"] if job.get("outro") else ""
-    if outro and _ends_with_channel_promo(utter, job["total"]):
+    if outro and not job.get("recap") and _ends_with_channel_promo(utter, job["total"]):
         jlog(job, "video already ends with a channel shout-out — outro skipped")
         outro = ""
     if outro:
@@ -429,6 +521,9 @@ def _voice_and_mux(job):
     for tmp in ("orig_stereo.wav",):
         (d / tmp).unlink(missing_ok=True)
 
+    (d / "recap.mp4").unlink(missing_ok=True)          # recap intermediate
+    for f in d.glob("r*.mp3"):
+        f.unlink(missing_ok=True)
     if job.get("telegram"):          # mark before "done" so the page never offers a 2nd send
         job["tg"] = {"state": "sending", "error": "", "pct": 0}
     job.update(status="done", stage="done", pct=100)
@@ -521,9 +616,35 @@ def create_job():
         model = default_whisper_model()
     if direction not in VOICES or voice not in ("auto", "female", "male"):
         return jsonify(error="ရွေးချယ်မှု မှားနေတယ်"), 400
-    max_sec = max_minutes() * 60
-    too_long = f"{max_minutes()} မိနစ်ထက် ရှည်တဲ့ ဗီဒီယို လက်မခံဘူး"
-    if url:
+    try:
+        recap = int(request.form.get("recap") or 0)
+    except ValueError:
+        recap = 0
+    recap = recap if recap in RECAP_CHOICES else 0
+    # the owner (admin password) may dub/recap any length up to OWNER_MAX_MINUTES
+    lim = OWNER_MAX_MINUTES if _admin_ok() else max_minutes()
+    max_sec = lim * 60
+    too_long = f"{lim} မိနစ်ထက် ရှည်တဲ့ ဗီဒီယို လက်မခံဘူး"
+    tg_msg = None
+    if request.form.get("tg_msg"):          # a video the owner forwarded to the bot
+        if not (_admin_ok() and _settings.get("telegram_chat_id") and telegram.big_available()):
+            return jsonify(error="Telegram ဗီဒီယို သုံးဖို့ admin password + bot ချိတ်ထားဖို့ လိုတယ်"), 403
+        try:
+            want = int(request.form["tg_msg"])
+            item = next((v for v in telegram.recent_videos(_settings["telegram_chat_id"], 100)
+                         if v["id"] == want), None)
+        except (ValueError, telegram.TelegramError):
+            item = None
+        if not item:
+            return jsonify(error="ဒီ Telegram ဗီဒီယို မတွေ့တော့ဘူး — bot ဆီ ပြန် forward လုပ်ပါ"), 400
+        if item["duration"] > max_sec:
+            return jsonify(error=too_long), 400
+        tg_msg = want
+        url, ext, name = "", ".mp4", item["name"]
+        label = f"Telegram: {item['name']} ({item['size'] / 1048576:.0f} MB)"
+    if tg_msg:
+        pass
+    elif url:
         if len(url) > 300 or not is_supported_url(url):
             return jsonify(error="YouTube / TikTok link ပဲ လက်ခံတယ်"), 400
         try:
@@ -547,7 +668,7 @@ def create_job():
     d = JOBS / jid
     try:
         d.mkdir(parents=True)
-        if not url:
+        if not url and not tg_msg:
             src = d / ("input" + ext)
             f.save(src)
             # fail fast on bad files — nothing reaches the worker queue
@@ -566,6 +687,8 @@ def create_job():
                  "dir": d, "ext": ext, "direction": direction, "url": url,
                  "voice": voice, "review": review, "keep_bg": keep_bg, "phase": 1,
                  "model": model, "outro": outro, "intro": intro, "cover": cover, "logo": logo, "name": name,
+                 "recap": recap,
+                 "tg_src": tg_msg,
                  "id": jid, "telegram": send_tg, "owner": _admin_ok(),
                  "captions": captions, "blur": blur, "split": split,
                  "created": time.time()}
@@ -955,6 +1078,28 @@ def telegram_connect():
     _settings.update(telegram_chat_id=chat_id, telegram_chat_name=name)
     _save_settings()
     return jsonify(ok=True, chat=name, bot=bot)
+
+
+@app.get("/api/telegram/videos")
+def telegram_videos():
+    """Videos the owner forwarded to the bot, to dub one of them."""
+    if not _admin_ok():
+        return jsonify(error="not found"), 404
+    chat = _settings.get("telegram_chat_id")
+    if not chat:
+        return jsonify(error="Settings မှာ Telegram bot အရင် ချိတ်ပါ"), 400
+    if not telegram.big_available():
+        return jsonify(error="TELEGRAM_API_ID / TELEGRAM_API_HASH (.env) နဲ့ telethon လိုတယ်"), 400
+    try:
+        vids = telegram.recent_videos(chat)
+    except telegram.TelegramError as e:
+        return jsonify(error=str(e)), 400
+    bot = ""
+    try:
+        bot = telegram.bot_info().get("username", "")
+    except telegram.TelegramError:
+        pass
+    return jsonify(videos=vids, bot=bot, max_minutes=max_minutes())
 
 
 @app.post("/api/telegram/disconnect")

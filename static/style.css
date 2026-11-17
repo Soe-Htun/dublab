@@ -109,10 +109,21 @@ textarea:focus{outline:none;border-color:var(--p1)}
 
 /* language grid with 3 choices + translation review */
 .optgrid.three{grid-template-columns:repeat(3,1fr)}
-.optgrid.chips{grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:6px}
+.optgrid.chips{grid-template-columns:repeat(auto-fit,minmax(58px,1fr));gap:8px;margin-bottom:6px}
 .optgrid.chips .opt{padding:12px 4px;text-align:center;border-radius:12px}
 .splitnote{font-size:13px;margin:0 0 16px}
-@media (max-width:480px){.optgrid.chips{grid-template-columns:repeat(3,1fr)}}
+.recaprow{align-items:flex-start}
+.recaprow input{margin-top:2px;flex:0 0 auto}
+#recapopts{margin:-6px 0 4px 28px}
+@media (max-width:480px){
+  #recapopts{margin-left:0}
+  .optgrid.chips .opt{padding:11px 2px}
+  .optgrid.chips .opt-label{font-size:13px}
+  .covergrid{grid-template-columns:repeat(2,1fr)}
+  .part .ghost{font-size:13px;padding:10px 10px}
+  .tgitem{font-size:13px}
+  .tghead{align-items:flex-start}
+}
 @media (max-width:480px){.optgrid.three{grid-template-columns:1fr}}
 .checkrow{display:flex;align-items:center;gap:10px;margin:4px 0 14px;font-size:14px;cursor:pointer}
 .introedit{margin-bottom:14px;padding:12px;border:1px solid var(--p1);border-radius:14px;background:rgba(155,92,246,.06)}
@@ -124,6 +135,12 @@ textarea:focus{outline:none;border-color:var(--p1)}
 .covergrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
 .covergrid img{width:100%;border-radius:10px;border:2px solid transparent;cursor:pointer;opacity:.75;transition:opacity .15s}
 .covergrid img.on{border-color:var(--p1);opacity:1}
+.tglist{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+.tghead{display:flex;align-items:center;gap:8px}
+.tghead .note{flex:1;margin:0}
+.ghost.mini-r{width:auto;margin:0;padding:8px 12px}
+.tgitem{margin:0;text-align:left;font-size:14px;overflow:hidden;text-overflow:ellipsis}
+.tgitem.on{border-color:var(--p1)}
 .parts{display:flex;flex-direction:column;gap:8px;margin-top:4px}
 .part{display:flex;align-items:center;gap:8px}
 .part .ghost{margin:0;flex:1;text-align:left;padding:11px 14px}
