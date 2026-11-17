@@ -90,6 +90,15 @@
         <span class="opt-sub">~2 ဆ မြန် · English အတွက် အဆင်ပြေ၊ တရုတ်စကား မှားတာ ပိုများ</span>
       </button>
     </div>
+    <h2>၄ · ✂️ ဗီဒီယိုရှည်ရင် အပိုင်းခွဲမယ်</h2>
+    <div class="optgrid chips" id="splitgrid">
+      <button class="opt selected" data-split="0"><span class="opt-label">မခွဲဘူး</span></button>
+      <button class="opt" data-split="10"><span class="opt-label">10<span class="dim"> မိနစ်</span></span></button>
+      <button class="opt" data-split="15"><span class="opt-label">15<span class="dim"> မိနစ်</span></span></button>
+      <button class="opt" data-split="20"><span class="opt-label">20<span class="dim"> မိနစ်</span></span></button>
+      <button class="opt" data-split="30"><span class="opt-label">30<span class="dim"> မိနစ်</span></span></button>
+    </div>
+    <p class="splitnote dim" id="splitnote">ဗီဒီယို တစ်ခုတည်း ထွက်မယ်</p>
     <label class="checkrow">
       <input type="checkbox" id="bgchk">
       <span>🎵 နောက်ခံ music / sound effect ချန်ထားမယ် <span class="dim">(မူရင်းစကားသံ ဖယ်ပြီး · အချိန် ပိုကြာမယ်)</span></span>
@@ -118,18 +127,6 @@
       <span>📢 အဆုံးမှာ ပြောမယ် <span class="dim">— “{{ outro }}”</span></span>
     </label>
     {% endif %}
-    <label class="checkrow splitrow" for="splitsel">
-      <span>✂️ ဗီဒီယိုရှည်ရင် အပိုင်းခွဲမယ် <span class="dim">(like &amp; follow က နောက်ဆုံးပိုင်းမှာပဲ)</span></span>
-      <select id="splitsel">
-        <option value="0">မခွဲဘူး</option>
-        <option value="10">10 မိနစ်စီ</option>
-        <option value="15">15 မိနစ်စီ</option>
-        <option value="20">20 မိနစ်စီ</option>
-        <option value="30">30 မိနစ်စီ</option>
-        <option value="45">45 မိနစ်စီ</option>
-        <option value="60">60 မိနစ်စီ</option>
-      </select>
-    </label>
     <label class="checkrow">
       <input type="checkbox" id="reviewchk" checked>
       <span>✏️ အသံမဖော်ခင် ဘာသာပြန်စာကို ကြည့်ပြီး ပြင်မယ်</span>
@@ -152,6 +149,7 @@
       <li data-s="music">နောက်ခံ music ခွဲထုတ်ခြင်း</li>
       <li data-s="voice">အသံဖော်ခြင်း</li>
       <li data-s="mux">ဗီဒီယိုပေါင်းစပ်ခြင်း</li>
+      <li data-s="split">အပိုင်းခွဲခြင်း ✂️</li>
     </ul>
     <p class="note">ဒီစာမျက်နှာကို ပိတ်သွားလို့ရတယ် — link သိမ်းထားရင် ပြန်ကြည့်လို့ရတယ်</p>
     <details class="logs">

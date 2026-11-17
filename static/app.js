@@ -1,7 +1,7 @@
 const $ = (s) => document.querySelector(s);
 const drop = $('#drop'), fileInput = $('#file'), preview = $('#preview');
 const direction = 'auto2mm';  // language is detected on the server
-let voice = 'auto', pollTimer = null, lastJid = null, ytUrl = '';
+let voice = 'auto', pollTimer = null, lastJid = null, ytUrl = '', split = '0';
 
 function selectGrid(gridSel, attr, cb) {
   document.querySelectorAll(gridSel + ' .opt').forEach((b) => {
@@ -71,8 +71,8 @@ $('#go').addEventListener('click', () => {
   fd.append('keep_bg', $('#bgchk').checked ? '1' : '0');
   fd.append('model', model);
   fd.append('outro', $('#outrochk') && $('#outrochk').checked ? '1' : '0');
-  fd.append('split', $('#splitsel').value);
-  try { localStorage.setItem('dublab_split', $('#splitsel').value); } catch (e) {}
+  fd.append('split', split);
+  try { localStorage.setItem('dublab_split', split); } catch (e) {}
   fd.append('logo', $('#logochk') && $('#logochk').checked ? '1' : '0');
   fd.append('telegram', !$('#tgrow').hidden && $('#tgchk').checked ? '1' : '0');
   fd.append('captions', $('#capchk').checked ? '1' : '0');
@@ -101,7 +101,9 @@ function showProgress(jid) {
   const isUrl = !!ytUrl;
   const dl = document.querySelector('#stages li[data-s="download"]');
   if (dl) dl.hidden = !isUrl;
-  const order = ['download', 'audio', 'transcribe', 'translate', 'review', 'music', 'voice', 'mux'];
+  const sp = document.querySelector('#stages li[data-s="split"]');
+  if (sp) sp.hidden = !(+split);       // only when a split length is chosen
+  const order = ['download', 'audio', 'transcribe', 'translate', 'review', 'music', 'voice', 'mux', 'split'];
   addRings();
   const stopLog = startLiveLog(jid);
   const stopAll = () => { clearInterval(pollTimer); stopLog(); };
@@ -390,4 +392,15 @@ function pollTelegram() {
 })();
 
 // remember the last split choice
-(() => { try { const v = localStorage.getItem('dublab_split'); if (v && $('#splitsel')) $('#splitsel').value = v; } catch (e) {} })();
+// ✂️ split length: chips; remembers the last choice
+function setSplit(v) {
+  const b = document.querySelector(`#splitgrid .opt[data-split="${v}"]`);
+  if (!b) return;
+  split = v;
+  document.querySelectorAll('#splitgrid .opt').forEach((x) => x.classList.toggle('selected', x === b));
+  $('#splitnote').textContent = +v
+    ? `${v} မိနစ်ထက် ရှည်ရင် ${v} မိနစ်စီ ခွဲမယ် — နာမည်-1, နာမည်-2 … · like & follow က နောက်ဆုံးပိုင်းမှာ`
+    : 'ဗီဒီယို တစ်ခုတည်း ထွက်မယ်';
+}
+document.querySelectorAll('#splitgrid .opt').forEach((b) => b.addEventListener('click', () => setSplit(b.dataset.split)));
+try { setSplit(localStorage.getItem('dublab_split') || '0'); } catch (e) { setSplit('0'); }

@@ -40,7 +40,7 @@ JOBS.mkdir(exist_ok=True)
 SETTINGS_FILE = BASE / "settings.json"
 MAX_MINUTES_LIMIT = 180
 OUTRO_MAX = 200   # chars
-SPLIT_CHOICES = (0, 10, 15, 20, 30, 45, 60)   # minutes per part; 0 = one video
+SPLIT_CHOICES = (0, 10, 15, 20, 30)   # minutes per part; 0 = one video
 CHANNEL_MAX = 60
 # channel logo burned into the video corner (uploaded on the admin page)
 BRAND_DIR = BASE / "brand"
@@ -146,6 +146,7 @@ STAGE_LABEL = {
     "music": "နောက်ခံ music ခွဲထုတ်နေတယ်",
     "voice": "အသံဖော်နေတယ်",
     "mux": "ဗီဒီယိုပေါင်းနေတယ်",
+    "split": "အပိုင်းခွဲနေတယ်",
     "done": "ပြီးပြီ",
 }
 STAGE_RANGE = {"transcribe": (8, 44), "voice": (60, 90)}  # overall pct span
@@ -383,6 +384,8 @@ def _voice_and_mux(job):
     mux(src, dub_wav, d / "dubbed.mp4", bg_wav=bg_wav, bg_volume=BG_VOLUME, logo=logo,
         captions=captions, blur=blur, keyframes=cuts or None)
     if cuts:
+        job.update(stage="split", pct=97)
+        jlog(job, "cutting the parts…")
         parts = split_video(d / "dubbed.mp4", cuts, d)
         (d / "dubbed.mp4").unlink(missing_ok=True)        # the parts replace it
         job["parts"] = [p.name for p in parts]

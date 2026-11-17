@@ -109,12 +109,12 @@ textarea:focus{outline:none;border-color:var(--p1)}
 
 /* language grid with 3 choices + translation review */
 .optgrid.three{grid-template-columns:repeat(3,1fr)}
+.optgrid.chips{grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:6px}
+.optgrid.chips .opt{padding:12px 4px;text-align:center;border-radius:12px}
+.splitnote{font-size:13px;margin:0 0 16px}
+@media (max-width:480px){.optgrid.chips{grid-template-columns:repeat(3,1fr)}}
 @media (max-width:480px){.optgrid.three{grid-template-columns:1fr}}
 .checkrow{display:flex;align-items:center;gap:10px;margin:4px 0 14px;font-size:14px;cursor:pointer}
-.splitrow{justify-content:space-between;flex-wrap:wrap}
-.splitrow select{background:rgba(255,255,255,.05);color:var(--txt);border:1px solid var(--card-br);
-  border-radius:10px;padding:7px 10px;font:inherit;font-size:14px}
-.splitrow select option{background:#141420}
 .parts{display:flex;flex-direction:column;gap:8px;margin-top:4px}
 .part{display:flex;align-items:center;gap:8px}
 .part .ghost{margin:0;flex:1;text-align:left;padding:11px 14px}
