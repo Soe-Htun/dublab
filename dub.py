@@ -154,12 +154,27 @@ def _use_mlx():
         return False
 
 
+def _mlx_model_ready(repo, timeout=240):
+    """Make sure the model is on disk. A download that stalls (it once hung
+    at 3.8 MB for good) must not hang the job: give up and use the CPU engine."""
+    from huggingface_hub import snapshot_download
+    try:
+        snapshot_download(repo, local_files_only=True)
+        return
+    except Exception:  # noqa: BLE001 - not downloaded yet
+        pass
+    print(f"[whisper] downloading {repo} (once)…")
+    if not _in_thread(lambda: snapshot_download(repo, etag_timeout=30), timeout):
+        raise TimeoutError(f"{repo} download took over {timeout}s")
+
+
 def _transcribe_mlx(wav, lang_hint, progress, name):
     """Whisper on the Apple GPU (mlx-whisper): the CPU engine below can't use it.
     The audio goes in 10-minute pieces so progress can be shown."""
     import tempfile
     import mlx_whisper
     repo = MLX_REPOS.get(name, MLX_REPOS["small"])
+    _mlx_model_ready(repo)
     total = probe_duration(wav)
     segs, lang, t0 = [], lang_hint, 0.0
     with tempfile.TemporaryDirectory() as tmp:
