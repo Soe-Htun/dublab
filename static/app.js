@@ -71,6 +71,8 @@ $('#go').addEventListener('click', () => {
   fd.append('keep_bg', $('#bgchk').checked ? '1' : '0');
   fd.append('model', model);
   fd.append('outro', $('#outrochk') && $('#outrochk').checked ? '1' : '0');
+  fd.append('split', $('#splitsel').value);
+  try { localStorage.setItem('dublab_split', $('#splitsel').value); } catch (e) {}
   fd.append('logo', $('#logochk') && $('#logochk').checked ? '1' : '0');
   fd.append('telegram', !$('#tgrow').hidden && $('#tgchk').checked ? '1' : '0');
   fd.append('captions', $('#capchk').checked ? '1' : '0');
@@ -122,7 +124,7 @@ function showProgress(jid) {
         setRing(li, p, s === j.stage && j.stage_pct != null);
       });
       if (j.status === 'review') { stopAll(); showReview(jid); }
-      if (j.status === 'done') { stopAll(); showResult(jid); }
+      if (j.status === 'done') { stopAll(); showResult(jid, j.parts); }
       if (j.status === 'failed') { stopAll(); showError(j.error || 'အမှားရှိတယ်'); }
     } catch (e) { stopAll(); showError(e.message); }
   }, 2000);
@@ -212,13 +214,33 @@ async function showReview(jid) {
   };
 }
 
-function showResult(jid) {
+const mmss = (s) => Math.floor(s / 60) + ':' + String(Math.round(s % 60)).padStart(2, '0');
+function showResult(jid, parts) {
   $('#card-progress').hidden = true;
   $('#card-result').hidden = false;
   lastJid = jid;
   $('#resultvideo').src = '/r/' + jid;
   setSpeed(1);
   $('#download').href = '/r/' + jid;
+  // split video: one row per part — play it here, or download it
+  const box = $('#parts');
+  box.innerHTML = '';
+  const many = parts && parts.length > 1;
+  box.hidden = !many; $('#download').hidden = many;
+  if (many) {
+    parts.forEach((p) => {
+      const row = document.createElement('div'); row.className = 'part';
+      const play = document.createElement('button'); play.className = 'ghost' + (p.n === 1 ? ' on' : '');
+      play.textContent = `▶️ အပိုင်း ${p.n}  ·  ${mmss(p.start)}–${mmss(p.end)}`;
+      play.addEventListener('click', () => {
+        $('#resultvideo').src = '/r/' + jid + '/' + p.n; setSpeed(1);
+        box.querySelectorAll('.ghost').forEach((b) => b.classList.toggle('on', b === play));
+      });
+      const dl = document.createElement('a'); dl.className = 'cta dl'; dl.href = '/r/' + jid + '/' + p.n;
+      dl.textContent = '⬇️'; dl.title = p.name;
+      row.append(play, dl); box.append(row);
+    });
+  }
   $('#dlsrt').href = '/r/' + jid + '.srt';
   initTelegram(jid);
   $('#card-result').scrollIntoView({ behavior: 'smooth' });
@@ -344,7 +366,7 @@ function pollTelegram() {
     try { t = await (await fetch('/api/jobs/' + tgJid + '/telegram')).json(); } catch (e) { return; }
     const s = $('#tg-status');
     if (t.state === 'sending') {
-      s.textContent = '⏳ Telegram ကို ပို့နေတယ်…' + (t.pct ? ' ' + t.pct + '%' : '');
+      s.textContent = '⏳ Telegram ကို ပို့နေတယ်…' + (t.pct ? ' ' + t.pct + '%' : '') + (t.sent ? ` (${t.sent} ပိုင်း ပို့ပြီး)` : '');
       $('#tg-btn').disabled = true;
     } else if (t.state === 'done') {
       tgSent = true;
@@ -366,3 +388,6 @@ function pollTelegram() {
   const k = admKey();
   if (g && k) g.href = '/admin/reviews?key=' + encodeURIComponent(k);
 })();
+
+// remember the last split choice
+(() => { try { const v = localStorage.getItem('dublab_split'); if (v && $('#splitsel')) $('#splitsel').value = v; } catch (e) {} })();

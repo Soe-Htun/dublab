@@ -625,7 +625,7 @@ def separate_music(src_video, job_dir):
 
 
 def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
-        captions=None, blur=None):
+        captions=None, blur=None, keyframes=None):
     """Combine picture + dub track.
 
     bg_wav: music/effects with the original voices removed (separate_music).
@@ -712,6 +712,8 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
                 enc = ["-c:v", "h264_videotoolbox", "-q:v", "65", "-allow_sw", "1"]
             else:
                 enc = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
+            if keyframes:     # exact cut points for split_video
+                enc += ["-force_key_frames", ",".join(f"{t:.3f}" for t in keyframes)]
             vid = ["-map", "[v]", *enc]
         return ["ffmpeg", "-y", "-v", "error", "-i", str(src_video), "-i", str(dub_wav),
                 *bg_in, *logo_in, *cap_in, *fc, *vid, *amap, "-c:a", "aac", "-b:a", "128k",
@@ -720,7 +722,7 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
                 # cut it off again.
                 "-movflags", "+faststart", str(out_mp4)]
 
-    if not watermark and not draw:
+    if not watermark and not draw and not keyframes:
         try:
             run(_cmd(copy_video=True))
             return
@@ -733,6 +735,42 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
         except RuntimeError as e:
             print(f"[mux] hardware encoder failed ({e}); using libx264")
     run(_cmd(copy_video=False))
+
+
+def split_points(cues, total, minutes, min_tail=60.0, window=90.0):
+    """Cut times about every `minutes`, moved into the nearest pause between
+    captions (within `window` s) so no sentence is cut in half. A last part
+    shorter than `min_tail` s is merged into the one before."""
+    step = minutes * 60.0
+    if not minutes or total <= step + min_tail:
+        return []
+    gaps = [(b, a2) for (_, b, _), (a2, _, _) in zip(cues, cues[1:]) if a2 - b > 0.25]
+    cuts, target = [], step
+    while total - target >= min_tail:
+        near = [g for g in gaps if abs((g[0] + g[1]) / 2 - target) <= window
+                and (g[0] + g[1]) / 2 > (cuts[-1] if cuts else 0) + step / 2]
+        t = min(((g[0] + g[1]) / 2 for g in near), key=lambda m: abs(m - target)) if near else target
+        cuts.append(round(t, 3))
+        target = t + step
+    return cuts
+
+
+def split_video(src, cuts, out_dir, stem="part"):
+    """Cut src at `cuts` (seconds) without re-encoding; returns the part paths.
+    mux(keyframes=cuts) put keyframes exactly there, so the cuts are exact."""
+    out_dir = Path(out_dir)
+    bounds = [0.0, *cuts, None]
+    paths = []
+    for i, (a, b) in enumerate(zip(bounds, bounds[1:]), 1):
+        out = out_dir / f"{stem}{i}.mp4"
+        cmd = ["ffmpeg", "-y", "-v", "error", "-ss", f"{a:.3f}", "-i", str(src)]
+        if b is not None:
+            cmd += ["-t", f"{b - a:.3f}"]
+        cmd += ["-map", "0", "-c", "copy", "-avoid_negative_ts", "make_zero",
+                "-movflags", "+faststart", str(out)]
+        run(cmd)
+        paths.append(out)
+    return paths
 
 
 _encoders = None

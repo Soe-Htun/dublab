@@ -111,6 +111,15 @@ textarea:focus{outline:none;border-color:var(--p1)}
 .optgrid.three{grid-template-columns:repeat(3,1fr)}
 @media (max-width:480px){.optgrid.three{grid-template-columns:1fr}}
 .checkrow{display:flex;align-items:center;gap:10px;margin:4px 0 14px;font-size:14px;cursor:pointer}
+.splitrow{justify-content:space-between;flex-wrap:wrap}
+.splitrow select{background:rgba(255,255,255,.05);color:var(--txt);border:1px solid var(--card-br);
+  border-radius:10px;padding:7px 10px;font:inherit;font-size:14px}
+.splitrow select option{background:#141420}
+.parts{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+.part{display:flex;align-items:center;gap:8px}
+.part .ghost{margin:0;flex:1;text-align:left;padding:11px 14px}
+.part .ghost.on{border-color:var(--p1)}
+.part .dl{flex:0 0 auto;width:auto;padding:11px 16px;margin:0;text-decoration:none}
 .checkrow input{width:18px;height:18px;accent-color:var(--p1)}
 .note.left{text-align:left;margin:0 0 12px}
 .lines{display:flex;flex-direction:column;gap:12px;max-height:60vh;overflow-y:auto;margin-bottom:14px;padding-right:4px}

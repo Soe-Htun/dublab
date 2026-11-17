@@ -19,7 +19,8 @@ from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tt
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
-                 mux, probe_duration, probe_url, separate_music, transcribe)
+                 mux, probe_duration, probe_url, separate_music, split_points,
+                 split_video, transcribe)
 from gemini import RateLimited, translate_lines
 
 # Gemini TTS key rotation.
@@ -39,6 +40,7 @@ JOBS.mkdir(exist_ok=True)
 SETTINGS_FILE = BASE / "settings.json"
 MAX_MINUTES_LIMIT = 180
 OUTRO_MAX = 200   # chars
+SPLIT_CHOICES = (0, 10, 15, 20, 30, 45, 60)   # minutes per part; 0 = one video
 CHANNEL_MAX = 60
 # channel logo burned into the video corner (uploaded on the admin page)
 BRAND_DIR = BASE / "brand"
@@ -374,8 +376,17 @@ def _voice_and_mux(job):
             jlog(job, f"burning {len(cues)} Burmese captions")
         except Exception as e:  # noqa: BLE001 - never lose the dub over captions
             jlog(job, f"captions skipped: {e}")
+    cuts = split_points(cues, job["total"], job.get("split") or 0)
+    if cuts:
+        jlog(job, f"splitting into {len(cuts) + 1} parts of ~{job['split']} min "
+                  f"(cuts at {', '.join(f'{c / 60:.1f}' for c in cuts)} min)")
     mux(src, dub_wav, d / "dubbed.mp4", bg_wav=bg_wav, bg_volume=BG_VOLUME, logo=logo,
-        captions=captions, blur=blur)
+        captions=captions, blur=blur, keyframes=cuts or None)
+    if cuts:
+        parts = split_video(d / "dubbed.mp4", cuts, d)
+        (d / "dubbed.mp4").unlink(missing_ok=True)        # the parts replace it
+        job["parts"] = [p.name for p in parts]
+        job["part_times"] = list(zip([0.0, *cuts], [*cuts, job["total"]]))
     shutil.rmtree(d / "sep", ignore_errors=True)
     cleanup_segments(d)
     (d / "dub.wav").unlink(missing_ok=True)
@@ -462,6 +473,11 @@ def create_job():
     logo = request.form.get("logo", "1") == "1"
     send_tg = request.form.get("telegram") == "1" and _admin_ok() and telegram.configured()
     captions = request.form.get("captions", "1") == "1"
+    try:
+        split = int(request.form.get("split") or 0)
+    except ValueError:
+        split = 0
+    split = split if split in SPLIT_CHOICES else 0
     blur = request.form.get("blur", "0") == "1"
     model = request.form.get("model") or default_whisper_model()
     if model not in WHISPER_MODELS:
@@ -514,7 +530,7 @@ def create_job():
                  "voice": voice, "review": review, "keep_bg": keep_bg, "phase": 1,
                  "model": model, "outro": outro, "logo": logo, "name": name,
                  "id": jid, "telegram": send_tg, "owner": _admin_ok(),
-                 "captions": captions, "blur": blur,
+                 "captions": captions, "blur": blur, "split": split,
                  "created": time.time()}
     jlog(jobs[jid], "uploaded " + re.sub(r"[\r\n]", " ", label)[:160])
     with lock:
@@ -535,8 +551,12 @@ def job_status(jid):
     if lo_hi:
         lo, hi = lo_hi
         stage_pct = max(0, min(100, round((job["pct"] - lo) * 100 / (hi - lo))))
+    parts = []
+    if job["status"] == "done" and job.get("parts"):
+        parts = [{"n": i, "name": name, "start": round(a), "end": round(b)}
+                 for i, ((_, name), (a, b)) in enumerate(zip(_outputs(job), job["part_times"]), 1)]
     return jsonify(status=job["status"], stage=job["stage"], pct=job["pct"],
-                   stage_pct=stage_pct,
+                   stage_pct=stage_pct, parts=parts,
                    label=STAGE_LABEL.get(job["stage"], job["stage"]),
                    error=job["error"])
 
@@ -892,27 +912,39 @@ def _video_thumb(video, out):
 _tg_lock = threading.Lock()
 
 
+def _outputs(job):
+    """[(path, download name)] — one file, or the parts of a split video."""
+    d = job["dir"]
+    if job.get("parts"):
+        return [(d / f, _download_name(job, ".mp4", i)) for i, f in enumerate(job["parts"], 1)]
+    return [(d / "dubbed.mp4", _download_name(job, ".mp4"))]
+
+
 def _should_preupload(job):
-    """Owner's big video, Telegram set up: upload it in the background right
+    """Owner's big video(s), Telegram set up: upload in the background right
     away so pressing "send" later is instant."""
     try:
-        size = (job["dir"] / "dubbed.mp4").stat().st_size
+        sizes = [p.stat().st_size for p, _ in _outputs(job)]
     except OSError:
         return False
-    return (job.get("owner") and _settings.get("telegram_chat_id")
-            and telegram.MAX_UPLOAD < size <= telegram.BIG_MAX and telegram.big_available())
+    return bool(job.get("owner") and _settings.get("telegram_chat_id")
+                and any(sz > telegram.MAX_UPLOAD for sz in sizes)
+                and all(sz <= telegram.BIG_MAX for sz in sizes) and telegram.big_available())
 
 
 def _telegram_prepare(job):
-    pre = job["tg_pre"] = {"state": "uploading", "pct": 0}
-    def prog(f):
-        pre["pct"] = int(f * 100)
-        if job.get("tg_want"):
-            job["tg"]["pct"] = pre["pct"]
+    outs = _outputs(job)
+    pre = job["tg_pre"] = {"state": "uploading", "pct": 0, "files": {}}
     try:
         jlog(job, "uploading to Telegram in the background…")
-        pre["file"] = telegram.upload_parts(job["dir"] / "dubbed.mp4",
-                                            _download_name(job, ".mp4"), prog)
+        for i, (path, name) in enumerate(outs):
+            if path.stat().st_size <= telegram.MAX_UPLOAD:
+                continue                      # small parts go through the Bot API anyway
+            def prog(f, i=i):
+                pre["pct"] = int((i + f) * 100 / len(outs))
+                if job.get("tg_want"):
+                    job["tg"]["pct"] = pre["pct"]
+            pre["files"][str(path)] = telegram.upload_parts(path, name, prog)
         pre["state"] = "ready"
         jlog(job, "Telegram upload ready")
     except Exception as e:  # noqa: BLE001 - a normal send will upload again
@@ -922,6 +954,29 @@ def _telegram_prepare(job):
         want = job.pop("tg_want", False)
     if want:
         _telegram_send(job)
+
+
+def _send_one(job, chat, path, name, caption, prog):
+    size = path.stat().st_size
+    if size <= telegram.MAX_UPLOAD:
+        telegram.send_file(chat, path, name, caption=caption)
+        return "file"
+    if size <= telegram.BIG_MAX and telegram.big_available():
+        w, h = video_size(path)
+        thumb = _video_thumb(path, job["dir"] / f"tg_thumb_{path.stem}.jpg")
+        pre = job.get("tg_pre") or {}
+        prepared = pre.get("files", {}).get(str(path)) if pre.get("state") == "ready" else None
+        telegram.send_big_video(chat, path, name, caption=caption,
+                                duration=probe_duration(path), width=w, height=h,
+                                thumb=thumb, progress=prog, prepared=prepared)
+        return "file"
+    link, mb = _public_url(), size / 1048576
+    n = job["parts"].index(path.name) + 1 if job.get("parts") else 0
+    url = f"{link}/r/{job['id']}" + (f"/{n}" if n else "")
+    telegram.send_message(chat, (f"{caption}\n⬇️ {url}\n({mb:.0f} MB — too big for a Telegram "
+                                 f"bot, so here is the download link; it works for 24 hours)")
+                          if link else f"{caption} is ready ({mb:.0f} MB) — download it from DubLab.")
+    return "link"
 
 
 def _telegram_send(job):
@@ -936,38 +991,19 @@ def _telegram_send(job):
         chat = _settings.get("telegram_chat_id")
         if not chat:
             raise telegram.TelegramError("Telegram not connected (admin page → Telegram)")
-        video = job["dir"] / "dubbed.mp4"
-        name = _download_name(job, ".mp4")
-        size = video.stat().st_size
-        size_mb = size / 1048576
-        jlog(job, f"sending to Telegram ({size_mb:.0f} MB)…")
-        if size <= telegram.MAX_UPLOAD:
-            telegram.send_file(chat, video, name, caption=f"🎬 {name[:-4]}")
-            tg["how"] = "file"
-        elif size <= telegram.BIG_MAX and telegram.big_available():
-            w, h = video_size(video)
-            thumb = _video_thumb(video, job["dir"] / "tg_thumb.jpg")
-            def prog(f):
-                tg["pct"] = int(f * 100)
-            ready = (job.get("tg_pre") or {}).get("state") == "ready"
-            telegram.send_big_video(chat, video, name, caption=f"🎬 {name[:-4]}",
-                                    duration=probe_duration(video), width=w, height=h,
-                                    thumb=thumb, progress=prog,
-                                    prepared=job["tg_pre"]["file"] if ready else None)
-            tg["how"] = "file"
-        else:
-            link = _public_url()
-            if link:
-                text = (f"🎬 {name[:-4]}\n⬇️ {link}/r/{job['id']}\n"
-                        f"({size_mb:.0f} MB — Telegram bot can send files up to 50 MB, "
-                        f"so here is the download link; it works for 24 hours)")
-            else:
-                text = (f"🎬 {name[:-4]} is ready ({size_mb:.0f} MB) — too big for a Telegram "
-                        f"bot (50 MB limit); download it from DubLab.")
-            telegram.send_message(chat, text)
-            tg["how"] = "link"
+        outs = _outputs(job)
+        hows = []
+        for i, (path, name) in enumerate(outs):
+            jlog(job, f"sending {name} to Telegram ({path.stat().st_size / 1048576:.0f} MB)…")
+            caption = f"🎬 {name[:-4]}" + (f"  ({i + 1}/{len(outs)})" if len(outs) > 1 else "")
+            def prog(f, i=i):
+                tg["pct"] = int((i + f) * 100 / len(outs))
+            hows.append(_send_one(job, chat, path, name, caption, prog))
+            tg["pct"] = int((i + 1) * 100 / len(outs))
+            tg["sent"] = i + 1
+        tg["how"] = "link" if "link" in hows else "file"
         tg["state"] = "done"
-        jlog(job, f"sent to Telegram ({tg['how']})")
+        jlog(job, f"sent {len(outs)} file(s) to Telegram ({tg['how']})")
     except Exception as e:  # noqa: BLE001 - shown in the UI
         tg.update(state="failed", error=str(e)[:300])
         jlog(job, f"Telegram send failed: {e}")
@@ -1002,7 +1038,7 @@ def telegram_job_status(jid):
     return jsonify(out)
 
 
-def _download_name(job, ext):
+def _download_name(job, ext, part=None):
     """Short, file-system-safe name from the source video's title or file name,
     e.g. "Bullies Picked on the Wrong Girl - mm.mp4"."""
     name = re.sub(r"#\S+", "", job.get("name") or "")        # drop hashtags
@@ -1010,7 +1046,7 @@ def _download_name(job, ext):
     name = re.sub(r"\s+", " ", name).strip(" .-_")
     if len(name) > 50:                                       # cut at a word boundary
         name = name[:50].rsplit(" ", 1)[0].strip(" .-_,") or name[:50]
-    return f"{name or 'dublab'} - mm{ext}"
+    return f"{name or 'dublab'} - mm" + (f"-{part}" if part else "") + ext
 
 
 @app.get("/r/<jid>.srt")
@@ -1023,9 +1059,14 @@ def result_srt(jid):
 
 
 @app.get("/r/<jid>")
-def result(jid):
+@app.get("/r/<jid>/<int:n>")
+def result(jid, n=1):
+    """The dubbed video, or part n of a split one."""
     job = jobs.get(jid)
     if not job or job["status"] != "done":
         return jsonify(error="အဆင်သင့် မဖြစ်သေးဘူး"), 404
-    return send_file(job["dir"] / "dubbed.mp4", as_attachment=True,
-                     download_name=_download_name(job, ".mp4"))
+    outs = _outputs(job)
+    if not 1 <= n <= len(outs):
+        return jsonify(error="မရှိဘူး"), 404
+    path, name = outs[n - 1]
+    return send_file(path, as_attachment=True, download_name=name)

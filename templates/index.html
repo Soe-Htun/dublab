@@ -118,6 +118,18 @@
       <span>📢 အဆုံးမှာ ပြောမယ် <span class="dim">— “{{ outro }}”</span></span>
     </label>
     {% endif %}
+    <label class="checkrow splitrow" for="splitsel">
+      <span>✂️ ဗီဒီယိုရှည်ရင် အပိုင်းခွဲမယ် <span class="dim">(like &amp; follow က နောက်ဆုံးပိုင်းမှာပဲ)</span></span>
+      <select id="splitsel">
+        <option value="0">မခွဲဘူး</option>
+        <option value="10">10 မိနစ်စီ</option>
+        <option value="15">15 မိနစ်စီ</option>
+        <option value="20">20 မိနစ်စီ</option>
+        <option value="30">30 မိနစ်စီ</option>
+        <option value="45">45 မိနစ်စီ</option>
+        <option value="60">60 မိနစ်စီ</option>
+      </select>
+    </label>
     <label class="checkrow">
       <input type="checkbox" id="reviewchk" checked>
       <span>✏️ အသံမဖော်ခင် ဘာသာပြန်စာကို ကြည့်ပြီး ပြင်မယ်</span>
@@ -170,6 +182,7 @@
       <span class="speedval" id="speedval">1.00x</span>
     </div>
     <a class="cta" id="download" href="#">⬇️ Download</a>
+    <div class="parts" id="parts" hidden></div>
     <a class="ghost center" id="dlsrt" href="#">📝 မြန်မာ caption (.srt) download</a>
     <div class="tg" id="tgbox" hidden>
       <h3>📨 Telegram</h3>
