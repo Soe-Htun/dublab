@@ -142,7 +142,9 @@ _mlx_broken = False
 
 
 def _use_mlx():
-    if _mlx_broken or os.environ.get("DUBLAB_WHISPER_ENGINE", "").strip() == "faster":
+    # opt-in only: on an M1 (8 GB) it ran at ~2x real time on a 2.5 h film (temperature
+    # fallbacks on music, no VAD) vs ~15x for faster-whisper on the CPU (2026-11-17)
+    if _mlx_broken or os.environ.get("DUBLAB_WHISPER_ENGINE", "").strip() != "mlx":
         return False
     import platform
     if not (platform.system() == "Darwin" and platform.machine() == "arm64"):
