@@ -249,7 +249,57 @@ def _synth_edge(text, voice, out_path):
     raise err
 
 
+TTS_WALL = int(os.environ.get("DUBLAB_TTS_TIMEOUT") or 150)   # seconds one line may take, all retries included
+
+
+def _in_thread(fn, timeout):
+    """Run fn() in a daemon thread; True if it finished in time (re-raises its
+    error). A network call that hangs is left behind instead of hanging the job."""
+    import threading
+    box = {}
+
+    def go():
+        try:
+            fn()
+            box["ok"] = True
+        except BaseException as e:  # noqa: BLE001
+            box["err"] = e
+    t = threading.Thread(target=go, daemon=True)
+    t.start()
+    t.join(timeout)
+    if "err" in box:
+        raise box["err"]
+    return bool(box.get("ok"))
+
+
 def synthesize(text, voice, out_path):
+    """TTS one utterance, never hanging: the normal chain gets TTS_WALL
+    seconds, then Edge alone, then gTTS. Each try writes its own temp file,
+    so a late, abandoned try can't overwrite the result."""
+    out_path = Path(out_path)
+    tries = [("main", lambda o: _synthesize_once(text, voice, o), TTS_WALL),
+             ("edge", lambda o: _synth_edge(text, voice, o), 75)]
+    err = None
+    for n, (name, fn, limit) in enumerate(tries):
+        tmp = out_path.with_name(f"{out_path.stem}.try{n}{out_path.suffix}")
+        try:
+            if _in_thread(lambda: fn(tmp), limit) and tmp.exists() and tmp.stat().st_size > 0:
+                tmp.replace(out_path)
+                return
+            print(f"[tts] {name} took over {limit}s — trying the next way")
+        except QuotaExhausted as e:
+            err = e
+        except Exception as e:  # noqa: BLE001
+            err = e
+    from gtts import gTTS                       # last resort: always answers quickly
+    lang = "my" if voice.startswith("my-MM") else "en"
+    try:
+        gTTS(text, lang=lang).save(str(out_path))
+    except Exception:
+        raise err or RuntimeError("TTS timed out")
+
+
+def _synthesize_once(text, voice, out_path):
     """TTS one utterance.
 
     Order: Edge-TTS first when the .edge_primary flag file exists (Microsoft

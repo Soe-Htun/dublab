@@ -225,9 +225,9 @@ def _find_blur(job, src, sfx):
         top, bot = band
         # generous margin: a two-line subtitle reaches higher than the
         # sampled frames may show, and outlines/shadows spread a little
-        top, bot = max(0.0, top - 0.04), min(1.0, bot + 0.015)
-        if bot - top < 0.12:                             # at least two lines' worth
-            top = max(0.0, bot - 0.12)
+        top, bot = max(0.0, top - 0.06), min(1.0, bot + 0.025)
+        if bot - top < 0.15:                             # at least two lines' worth
+            top = max(0.0, bot - 0.15)
         jlog(job, f"original captions found at {top * 100:.0f}–{bot * 100:.0f}% of the height — blurring there")
         return {"bottom": 1 - bot, "height": bot - top}
     except Exception as e:  # noqa: BLE001 - never lose the dub over this
