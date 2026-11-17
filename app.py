@@ -1370,13 +1370,20 @@ def _telegram_send(job):
         if not chat:
             raise telegram.TelegramError("Telegram not connected (admin page → Telegram)")
         outs = _outputs(job)
-        hows = []
+        hows, sent_covers = [], set()
         for i, (path, name) in enumerate(outs):
             jlog(job, f"sending {name} to Telegram ({path.stat().st_size / 1048576:.0f} MB)…")
             caption = f"🎬 {name[:-4]}" + (f"  ({i + 1}/{len(outs)})" if len(outs) > 1 else "")
             def prog(f, i=i):
                 tg["pct"] = int((i + f) * 100 / len(outs))
             hows.append(_send_one(job, chat, path, name, caption, prog, i + 1))
+            cov = _cover_file(job, i + 1)
+            if cov and cov not in sent_covers:   # the part's cover, full size, to upload to TikTok etc.
+                sent_covers.add(cov)
+                try:
+                    telegram.send_image_file(chat, cov, name[:-4] + " cover.jpg", caption="🖼️ cover")
+                except Exception as e:  # noqa: BLE001 - the video itself is what matters
+                    jlog(job, f"cover send failed: {e}")
             tg["pct"] = int((i + 1) * 100 / len(outs))
             tg["sent"] = i + 1
         tg["how"] = "link" if "link" in hows else "file"

@@ -155,6 +155,14 @@ def send_file(chat_id, path, filename, caption="", kind="video", thumb=None, cov
     return _call(method, params, files=files, timeout=600)
 
 
+def send_image_file(chat_id, path, filename, caption=""):
+    """An image as a file (not a compressed photo), so it downloads full size."""
+    with open(path, "rb") as fh:
+        files = {"document": (filename, fh.read(), "image/jpeg")}
+    return _call("sendDocument", {"chat_id": chat_id, "caption": caption[:1000]},
+                 files=files, timeout=120)
+
+
 # ---- big files (> 50 MB) through MTProto, still as the same bot ----
 # The Bot HTTP API caps uploads at 50 MB, but a bot logged in over MTProto
 # (Telethon) can upload up to 2 GB. Needs TELEGRAM_API_ID / TELEGRAM_API_HASH
