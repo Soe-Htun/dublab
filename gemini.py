@@ -25,6 +25,19 @@ CHUNK = 25
 PARALLEL = 4     # chunks translated at the same time
 
 
+NAME_RULE = """- CHARACTER NAMES: do NOT transliterate foreign character names. Give every character a familiar Burmese name,
+  and never refer to a main character only as "ဒီကောင်လေး", "ဒီကောင်မလေး", "သူ", etc. when a name fits. Preferred names:
+  young man / boy: ဂွေးတို, ကျော်ကြီး, လင်ဖူန်း, စိုးကြီး,အောင်လေး
+  young woman / girl: ရှောင်မေ, မြမြ, ဂွက်ထော်, ဖြူဖြူထွေး, လှလှ
+  older man: ကျော်ရဲ, ကျော်မျိုး, တင်မောင်
+  older woman: ဒေါ်မြ, ဒေါ်လှ, ဂျမ်းစိန်
+  little boy (child): လပ်ကီး, ဘနားနား
+  baby / little girl: ဂျက်မ, ဂူးဂူး
+  Use these first, in this order, for the most important characters; for more characters pick other short, common Burmese names.
+  Each character keeps the SAME name every time; never give two characters the same name.
+- Places may be transliterated into Burmese script."""
+
+
 PROMPT_EN2MM = """You are a professional dubbing script translator for short videos.
 Translate each spoken line into natural SPOKEN Burmese (စကားပြောဘာသာ) — the way real people talk, never stiff written Burmese (စာရေးဘာသာ).
 
@@ -33,7 +46,7 @@ Rules:
 - Keep it concise: each line will be SPOKEN in about the same time as the original, so avoid long-winded phrasing.
 - TIMING IS CRITICAL: Burmese speech runs longer than English, so compress hard — use the shortest natural phrasing, drop filler words and repetition, keep only the core meaning and tone. A slightly shorter line is always better than a longer one.
 - Match the speaker: casual stays casual, jokes stay funny in Burmese, adapt idioms to Burmese equivalents.
-- Names and places stay as-is (transliterated if needed).
+""" + NAME_RULE + """
 - Write Burmese in Myanmar script only — never Thai, Chinese or any other script inside Burmese words.
 - Output format: exactly one line per input as "N|||translation" (N = the number I give you). Nothing else — no explanations."""
 
@@ -58,7 +71,7 @@ Rules:
 - Translate meaning, tone and emotion — NEVER word-for-word. A natural Burmese line that captures the feeling beats a literal one.
 - TIMING IS CRITICAL: Burmese speech runs much longer than Chinese, so compress hard — use the shortest natural phrasing, drop filler words and repetition, keep only the core meaning and tone. A slightly shorter line is always better than a longer one.
 - Keep the storytelling voice: narration stays engaging and dramatic, dialogue matches the speaker, adapt Chinese idioms to Burmese equivalents.
-- Names and places: transliterate into Burmese script consistently (same name → same spelling every time).
+""" + NAME_RULE + """
 - Write Burmese in Myanmar script only — never Thai, Chinese or any other script inside Burmese words.
 - Output format: exactly one line per input as "N|||translation" (N = the number I give you). Nothing else — no explanations."""
 
@@ -70,7 +83,7 @@ Rules:
 - Translate meaning, tone and emotion — NEVER word-for-word.
 - TIMING IS CRITICAL: Burmese speech runs longer, so compress hard — shortest natural phrasing, drop filler and repetition. A slightly shorter line is always better than a longer one.
 - Match the speaker: narration stays engaging, dialogue matches the speaker, adapt idioms to Burmese equivalents.
-- Names and places: transliterate into Burmese script consistently.
+""" + NAME_RULE + """
 - Write Burmese in Myanmar script only — never Thai, Chinese or any other script inside Burmese words.
 - Output format: exactly one line per input as "N|||translation" (N = the number I give you). Nothing else — no explanations."""
 
@@ -247,7 +260,7 @@ Below is the transcript of {what}: numbered lines "N|mm:ss|text" in {lang}, from
 (may contain mistakes — infer the meaning).
 
 Write a RECAP of it in natural, engaging SPOKEN Burmese (စကားပြောဘာသာ), told in your own words as a
-narrator ("ဒီကောင်လေးက…", "အဲ့ဒီမှာ…"), not a translation of the dialogue.
+narrator ("ဂွေးတိုက…", "အဲ့ဒီမှာ…"), not a translation of the dialogue.
 
 Rules:
 - Length: about {chars} Burmese characters in total (≈ {minutes} minutes spoken). Keep the most important
@@ -255,7 +268,7 @@ Rules:
 - Split it into beats in story order. Each beat = 1–3 short sentences about what happens during a
   range of transcript lines, so the matching scene can be shown while it is narrated.
 - Each beat's line range must be in order and not go backwards; ranges should be short (the scene shown).
-- Names: transliterate into Burmese script consistently.
+""" + NAME_RULE + """
 - {extra}
 - Write Burmese in Myanmar script only — never Thai, Chinese or any other script inside Burmese words.
 - Output format: one beat per line as "FROM|TO|narration" (FROM/TO = line numbers). Nothing else."""
