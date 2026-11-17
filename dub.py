@@ -794,10 +794,7 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
                     cur = "s2"
                 if captions:
                     ch = int(captions["height"])
-                    if blur:      # centre the text strip on the blurred band
-                        cy = f"H*{1 - b0 - bh / 2:.4f}-{ch // 2}"
-                    else:
-                        cy = f"H-{ch}-H*{float(captions.get('bottom', 0.08)):.4f}"
+                    cy = caption_y(ch, blur, captions.get("bottom", 0.08))
                     parts.append(f"[{cap_idx}:v]format=rgba[cp]")
                     parts.append(f"[{cur}][cp]overlay=0:{cy}:eof_action=pass[s3]")
                     cur = "s3"
@@ -869,6 +866,42 @@ def split_video(src, cuts, out_dir, stem="part"):
         run(cmd)
         paths.append(out)
     return paths
+
+
+def add_outro_tail(part, outro_audio, out, caption_png=None, caption_y=None):
+    """Append the channel outro to the end of a part: the last frame is held
+    while the outro voice plays (with its caption strip, if given)."""
+    dur = probe_duration(part)
+    odur = probe_duration(outro_audio)
+    t0, hold = dur + 0.3, odur + 0.9
+    ins = ["-i", str(part), "-i", str(outro_audio)]
+    vf = f"[0:v]tpad=stop_mode=clone:stop_duration={hold:.3f}[v0]"
+    if caption_png:
+        ins += ["-loop", "1", "-i", str(caption_png)]
+        vf += (f";[2:v]format=rgba[cp];[v0][cp]overlay=0:{caption_y}:"
+               f"enable='gte(t,{t0:.3f})':shortest=1[v]")
+    else:
+        vf += ";[v0]null[v]"
+    af = (f"[0:a]apad=pad_dur={hold:.3f}[a0];[1:a]aformat=sample_rates=44100:channel_layouts=stereo,"
+          f"adelay={int(t0 * 1000)}:all=1[o];[a0][o]amix=inputs=2:duration=first:normalize=0[a]")
+    enc = (["-c:v", "h264_videotoolbox", "-q:v", "65", "-allow_sw", "1"] if _has_encoder("h264_videotoolbox")
+           else ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"])
+    run(["ffmpeg", "-y", "-v", "error", *ins, "-filter_complex", vf + ";" + af,
+         "-map", "[v]", "-map", "[a]", *enc, "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+         "-t", f"{dur + hold:.3f}", "-movflags", "+faststart", str(out)])
+
+
+def caption_y(strip_h, blur=None, bottom=0.08, margin=0.035):
+    """ffmpeg overlay y for the caption strip. The text box sits at the
+    strip's bottom edge, so the strip's bottom goes to the bottom of the
+    blurred band (one line covers the band, a second line grows upwards),
+    but never closer than `margin` to the frame's bottom — players and phone
+    UIs cut the last few percent."""
+    if blur:
+        bot = 1 - float(blur["bottom"])
+    else:
+        bot = 1 - float(bottom)
+    return f"H*{min(bot, 1 - margin):.4f}-{int(strip_h)}"
 
 
 _encoders = None
@@ -1208,13 +1241,52 @@ def _cover_times_by_ai(video, start, end, chooser, samples=30):
     return [times[i] for i in hero], [times[i] for i in others]
 
 
+def render_art_cover(art, title, out_jpg, portrait=False, logo=None, suffix=""):
+    """An AI-drawn picture (bytes) as the cover: dark band at the bottom with the
+    big gold Burmese title in the lower third, like popular recap thumbnails."""
+    from PIL import Image, ImageEnhance, ImageOps
+    import io
+    W, H = (1080, 1920) if portrait else (1280, 720)
+    img = ImageOps.fit(Image.open(io.BytesIO(art)).convert("RGB"), (W, H), Image.LANCZOS)
+    img = ImageEnhance.Contrast(img).enhance(1.05).convert("RGBA")
+    band_h = int(H * (0.38 if portrait else 0.48))
+    grad = Image.new("L", (1, band_h))
+    for yy in range(band_h):
+        grad.putpixel((0, yy), int(215 * (yy / band_h) ** 1.4))
+    shade = Image.new("RGBA", (W, band_h), (10, 4, 0, 255))
+    shade.putalpha(grad.resize((W, band_h)))
+    bottom = H - (int(H * 0.16) if portrait else 0)            # TikTok buttons cover the very bottom
+    img.alpha_composite(shade, (0, bottom - band_h))
+    if portrait:
+        img.alpha_composite(Image.new("RGBA", (W, H - bottom), (10, 4, 0, 215)), (0, bottom))
+    img = img.convert("RGB")
+    if portrait:
+        _gold_title(img, title, int(W * 0.9), W // 2, int(H * 0.71), 3, int(W * 0.13), suffix)
+    else:
+        _gold_title(img, title, int(W * 0.92), W // 2, int(H * 0.8), 2, int(H * 0.14), suffix)
+    if logo and Path(logo).exists():
+        img = img.convert("RGBA")
+        lg = Image.open(logo).convert("RGBA")
+        lw = int(W * (0.2 if portrait else 0.13))
+        lg = lg.resize((lw, max(1, int(lg.height * lw / lg.width))))
+        m = int(W * 0.025)
+        img.alpha_composite(lg, (W - lw - m, m))
+        img = img.convert("RGB")
+    img.save(out_jpg, "JPEG", quality=90)
+    return Path(out_jpg)
+
+
 def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, blur=None, parts=1,
-                chooser=None, log=None):
+                chooser=None, log=None, art=None):
     """The film's cover: 4 photos in a 2x2 grid with the title in the middle.
     With `chooser` (Gemini) the first photo is the main character and the rest
     show the main scenes / other characters; otherwise the sharpest frames.
     parts > 1: one cover per part, same photos, titled "title - 1", "title - 2"…"""
     out_dir = Path(out_dir)
+    if art:                       # an AI-drawn picture: same picture for every part
+        names = ["cover1.jpg"] if parts <= 1 else [f"cover{i}.jpg" for i in range(1, parts + 1)]
+        return [render_art_cover(art, title, out_dir / n, portrait, logo,
+                                 "" if parts <= 1 else f" - {i}") for i, n in enumerate(names, 1)]
     pick = None
     if chooser:
         try:

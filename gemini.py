@@ -413,3 +413,78 @@ def find_caption_band(jpegs, api_key):
     if not 0 <= top < bot <= 1 or bot - top > 0.4:
         raise ValueError(f"odd subtitle area {top:.2f}-{bot:.2f}")
     return top, bot
+
+
+# ---- AI-drawn cover art (like popular recap thumbnails) ----
+IMAGE_MODEL = __import__("os").environ.get("DUBLAB_IMAGE_MODEL") or "gemini-3.1-flash-image"
+
+COVER_SCENE_PROMPT = """You design YouTube thumbnails for a Burmese movie-recap channel.
+Below is the story of a movie (narration lines). Invent ONE eye-catching thumbnail picture for it, in the
+style of viral recap thumbnails: bold, dramatic, high-contrast digital illustration, cinematic lighting,
+glowing effects, vivid saturated colours, expressive faces. Often a "before → after" or "hero vs. danger"
+contrast, the main character big and in front, the key conflict or setting behind (e.g. a fishing story: the
+hero on a small boat in a stormy sea with a huge catch; a kung-fu story: the hero mid-kick with golden energy
+and the villain behind).
+Write the image prompt in English, 60-110 words: who is in it (describe the main character's look, clothes,
+age), what they do, the setting, mood, colours and composition. Leave the LOWER THIRD free of important
+details (a title will be printed there). No text, letters, logos or watermarks in the picture.
+Characters must be original illustrated people, not real actors' likenesses.
+Answer with the prompt only."""
+
+
+def write_cover_scene(lines, api_key, max_chars=8000):
+    text, used = [], 0
+    for ln in lines:
+        if used + len(ln) > max_chars:
+            break
+        text.append(ln)
+        used += len(ln) + 1
+    return _call(COVER_SCENE_PROMPT + "\n\nStory:\n" + "\n".join(text), api_key, max_tokens=1024).strip()
+
+
+def draw_cover(scene, refs, api_key, portrait=False):
+    """Generate the cover picture. refs: a few JPEG frames from the movie,
+    used only for the setting, costumes and colours. Returns JPEG/PNG bytes."""
+    import base64
+    url = (f"https://generativelanguage.googleapis.com/v1beta/models/{IMAGE_MODEL}"
+           f":generateContent?key={api_key}")
+    parts = [{"text": "Create this YouTube thumbnail illustration, " + ("vertical 9:16" if portrait else
+              "wide 16:9") + ". The attached movie frames show the setting, costumes and colour mood only — "
+              "draw original stylized characters, do not copy the real actors' faces. No text at all.\n\n"
+              + scene}]
+    for b in refs[:4]:
+        parts.append({"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(b).decode()}})
+    body = {"contents": [{"parts": parts}],
+            "generationConfig": {"responseModalities": ["IMAGE"],
+                                 "imageConfig": {"aspectRatio": "9:16" if portrait else "16:9"}}}
+    last = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=240, context=_SSL) as r:
+                data = json.loads(r.read().decode())
+            for p in data["candidates"][0].get("content", {}).get("parts", []):
+                inl = p.get("inline_data") or p.get("inlineData")
+                if inl and inl.get("data"):
+                    return base64.b64decode(inl["data"])
+            last = RuntimeError("no image in the answer")
+        except urllib.error.HTTPError as e:
+            msg = ""
+            try:
+                msg = json.loads(e.read() or b"{}").get("error", {}).get("message", "")
+            except Exception:  # noqa: BLE001
+                pass
+            last = RuntimeError(f"HTTP {e.code}: {msg[:120]}")
+            if e.code == 429 and "plan and billing" in msg:     # free plan: no image quota at all
+                raise RuntimeError("image generation needs billing on the Gemini key "
+                                   "(free plan has no image quota)") from None
+            if e.code == 429:
+                time.sleep(20 * (attempt + 1))
+                continue
+            if e.code < 500:
+                break
+        except Exception as e:  # noqa: BLE001
+            last = e
+        time.sleep(3 * (attempt + 1))
+    raise RuntimeError(f"cover image failed: {last}")

@@ -15,14 +15,14 @@ from flask import Flask, jsonify, redirect, render_template, request, send_file
 import telegram
 
 from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tts,
-                 normalize_logo, render_captions, sample_frames, video_size, write_srt,
+                 add_outro_tail, caption_y, normalize_logo, render_captions, sample_frames, video_size, write_srt,
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
                  build_recap_video, make_covers, mux, synthesize, probe_duration, probe_url, separate_music, split_points,
                  split_video, transcribe)
-from gemini import (TTS_CPS, RateLimited, find_caption_band, pick_cover_frames, translate_lines, write_intro,
-                    write_recap, write_title)
+from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, pick_cover_frames, translate_lines,
+                    write_cover_scene, write_intro, write_recap, write_title)
 
 # Gemini TTS key rotation.
 # GEMINI_TTS_API_KEYS is comma-separated; falls back to the single GEMINI_API_KEY.
@@ -41,6 +41,7 @@ JOBS.mkdir(exist_ok=True)
 SETTINGS_FILE = BASE / "settings.json"
 MAX_MINUTES_LIMIT = 180
 OUTRO_MAX = 200   # chars
+AI_COVER = (os.environ.get("DUBLAB_AI_COVER") or "0") == "1"   # AI-drawn cover (needs a paid Gemini key); off = photo collage
 SPLIT_CHOICES = (0, 10, 15, 20, 30)
 OWNER_MAX_MINUTES = int(os.environ.get("DUBLAB_OWNER_MAX_MINUTES") or 240)   # owner: 4 h   # minutes per part; 0 = one video
 CHANNEL_MAX = 60
@@ -184,6 +185,30 @@ def clean_err(e):
     return s.replace(str(BASE), "[app]").replace(str(JOBS), "[jobs]")[:300]
 
 
+def _outro_on_parts(job, parts, d, outro, captions, blur, vw, vh):
+    """Every part ends with the channel outro ("like and follow…"), not only
+    the last one (which already has it from the dub track)."""
+    jlog(job, f"adding the outro to the end of {len(parts)} more part(s)…")
+    png = cy = None
+    if captions:
+        try:
+            lst, ch = render_captions([(0.0, 5.0, outro)], vw, vh, d / "caps_outro", _settings["caption_size"])
+            png = lst.parent / "c0.png"
+            cy = caption_y(ch, blur, captions.get("bottom", 0.08))
+        except Exception as e:  # noqa: BLE001 - the voice still goes on without a caption
+            jlog(job, f"outro caption skipped: {e}")
+            png = None
+    for p in parts:
+        tmp = p.with_name(p.stem + "_o.mp4")
+        try:
+            add_outro_tail(p, d / "outro.mp3", tmp, png, cy)
+            tmp.replace(p)
+        except Exception as e:  # noqa: BLE001 - keep the part without the outro
+            tmp.unlink(missing_ok=True)
+            jlog(job, f"outro on {p.name} failed: {str(e)[:150]}")
+    shutil.rmtree(d / "caps_outro", ignore_errors=True)
+
+
 def _find_blur(job, src, sfx):
     """Where the video's own burned-in captions are, found by Gemini from a
     few frames: the band to blur (and to put the Burmese captions on), or
@@ -198,8 +223,11 @@ def _find_blur(job, src, sfx):
             jlog(job, "no burned-in captions found — nothing to blur")
             return None
         top, bot = band
-        pad = 0.012                                      # a little margin around the text
-        top, bot = max(0.0, top - pad), min(1.0, bot + pad)
+        # generous margin: a two-line subtitle reaches higher than the
+        # sampled frames may show, and outlines/shadows spread a little
+        top, bot = max(0.0, top - 0.04), min(1.0, bot + 0.015)
+        if bot - top < 0.12:                             # at least two lines' worth
+            top = max(0.0, bot - 0.12)
         jlog(job, f"original captions found at {top * 100:.0f}–{bot * 100:.0f}% of the height — blurring there")
         return {"bottom": 1 - bot, "height": bot - top}
     except Exception as e:  # noqa: BLE001 - never lose the dub over this
@@ -393,6 +421,12 @@ def _transcribe_and_translate(jid, job):
         try:
             job["title_mm"] = write_title([u["text"] for u in utter], api_key)
             jlog(job, f"cover title: {job['title_mm']}")
+            if AI_COVER:
+                try:
+                    job["cover_scene"] = write_cover_scene([u["text"] for u in utter], api_key)
+                    jlog(job, f"cover picture idea: {job['cover_scene'][:160]}…")
+                except Exception as e:  # noqa: BLE001 - the photo collage is used instead
+                    jlog(job, f"cover picture idea skipped: {e}")
         except Exception as e:  # noqa: BLE001
             job["title_mm"] = ""
             jlog(job, f"cover title skipped: {e}")
@@ -570,12 +604,22 @@ def _voice_and_mux(job):
         # made before the mux so part 1's cover is also the picture under the intro
         try:
             key = os.environ.get("GEMINI_API_KEY")
+            art = None
+            if key and job.get("cover_scene"):
+                try:
+                    jlog(job, "drawing the cover picture with AI…")
+                    refs = sample_frames(src, job["total"] * 0.1, job["total"] * 0.85, 4, width=768)
+                    art = draw_cover(job["cover_scene"], refs, key, portrait=bool(sfx))
+                    (d / "cover_art.jpg").write_bytes(art)
+                except Exception as e:  # noqa: BLE001 - fall back to the photo collage
+                    art = None
+                    jlog(job, f"AI cover picture failed ({str(e)[:150]}) — using a photo collage")
             covers = make_covers(src, job["title_mm"], d, job["total"] * 0.04, job["total"] * 0.9,
                                  portrait=bool(sfx), blur=blur,
                                  logo=LOGO_FILE if job.get("logo") and LOGO_FILE.exists() else None,
                                  parts=len(cuts) + 1 if cuts else 1,
                                  chooser=(lambda shots: pick_cover_frames(shots, key)) if key else None,
-                                 log=lambda m: jlog(job, m))
+                                 log=lambda m: jlog(job, m), art=art)
             job["covers"] = [c.name for c in covers]
             jlog(job, f"made {len(covers)} cover image(s)")
         except Exception as e:  # noqa: BLE001 - never lose the dub over a cover
@@ -589,6 +633,8 @@ def _voice_and_mux(job):
         jlog(job, "cutting the parts…")
         parts = split_video(d / "dubbed.mp4", cuts, d)
         (d / "dubbed.mp4").unlink(missing_ok=True)        # the parts replace it
+        if outro and (d / "outro.mp3").exists():
+            _outro_on_parts(job, parts[:-1], d, outro, captions, blur, vw, vh)
         job["parts"] = [p.name for p in parts]
         job["part_times"] = list(zip([0.0, *cuts], [*cuts, total]))
     shutil.rmtree(d / "sep", ignore_errors=True)
