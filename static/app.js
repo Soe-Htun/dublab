@@ -451,7 +451,9 @@ function pollTelegram() {
       $('#tg-btn').disabled = true;
     } else if (t.state === 'done') {
       tgSent = true;
-      s.textContent = t.how === 'link' ? '✅ ပို့ပြီးပြီ — ဖိုင်ကြီးလို့ download link ပို့ထားတယ်' : '✅ Telegram ကို ဗီဒီယို ပို့ပြီးပြီ';
+      s.textContent = t.how === 'link' ? '✅ ပို့ပြီးပြီ — ဖိုင်ကြီးလို့ download link ပို့ထားတယ်'
+        : '✅ Telegram ကို ဗီဒီယို ပို့ပြီးပြီ' + (t.gone ? ' · 🗑️ disk နေရာ မစားအောင် ဒီစက်ကနေ ဖျက်လိုက်ပြီ' : '');
+      if (t.gone) { $('#tg-btn').hidden = true; clearInterval(tgTimer); return; }
       $('#tg-btn').firstChild.textContent = '📨 ထပ်ပို့မယ် ';
       $('#tg-btn').disabled = false; clearInterval(tgTimer);
     } else if (t.state === 'failed') { s.textContent = '⚠️ ' + (t.error || 'မအောင်မြင်ဘူး'); $('#tg-btn').disabled = false; clearInterval(tgTimer); }
@@ -551,7 +553,9 @@ async function renderHistory() {
       if (!ok) { st.textContent = when + ' · ⌛ မရှိတော့ဘူး'; return; }
       if (j.title || j.name) nm.textContent = j.title || j.name;
       b.disabled = false;
-      if (j.status === 'done') {
+      if (j.status === 'done' && j.gone) {
+        st.textContent = when + ' · ✅ Telegram ကို ပို့ပြီး · 🗑️ ဖိုင်ဖျက်ပြီး'; b.disabled = true;
+      } else if (j.status === 'done') {
         st.textContent = when + ' · ✅ ပြီးပြီ' + (j.parts && j.parts.length > 1 ? ` (${j.parts.length} ပိုင်း)` : '');
         b.onclick = () => {
           ['card-upload', 'card-opts', 'card-progress', 'card-review', 'card-error'].forEach((id) => ($('#' + id).hidden = true));

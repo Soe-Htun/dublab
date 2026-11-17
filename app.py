@@ -217,7 +217,7 @@ for _old in JOBS.iterdir():
 
 # what a finished job needs to be shown again (history, after a restart)
 _META_KEYS = ("id", "name", "title_mm", "status", "stage", "pct", "error", "ext", "parts",
-              "part_times", "covers", "cover_pick", "created", "owner", "recap", "tg", "url")
+              "part_times", "covers", "cover_pick", "created", "owner", "recap", "tg", "url", "files_gone")
 
 
 def _save_meta(job):
@@ -775,6 +775,7 @@ def job_status(jid):
                    covers=len(job.get("covers") or []) if job["status"] == "done" else 0,
                    cover_pick=job.get("cover_pick", 1), title=job.get("title_mm", ""),
                    name=job.get("name", ""), created=int(job.get("created", 0)),
+                   gone=bool(job.get("files_gone")),
                    label=STAGE_LABEL.get(job["stage"], job["stage"]),
                    error=job["error"])
 
@@ -945,7 +946,7 @@ def admin_api_history():
                      "covers": len(job.get("covers") or []) if done else 0,
                      "cover_pick": job.get("cover_pick", 1),
                      "tg": tg.get("state", "none"), "tg_pct": tg.get("pct", 0),
-                     "tg_error": tg.get("error", "")})
+                     "tg_error": tg.get("error", ""), "gone": bool(job.get("files_gone"))})
     return jsonify(jobs=rows, ttl_hours=TTL // 3600)
 
 
@@ -1335,6 +1336,14 @@ def _telegram_send(job):
         tg["how"] = "link" if "link" in hows else "file"
         tg["state"] = "done"
         jlog(job, f"sent {len(outs)} file(s) to Telegram ({tg['how']})")
+        if tg["how"] == "file":       # the videos are on Telegram now: free the Mac's disk
+            for path, _ in outs:      # (a "link" send still needs the file for the download link)
+                path.unlink(missing_ok=True)
+            for f in job["dir"].glob("tg_thumb_*.jpg"):
+                f.unlink(missing_ok=True)
+            job["files_gone"] = True
+            tg["gone"] = True
+            jlog(job, "videos deleted from this computer (they are on Telegram)")
         _save_meta(job)
     except Exception as e:  # noqa: BLE001 - shown in the UI
         tg.update(state="failed", error=str(e)[:300])

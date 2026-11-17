@@ -265,7 +265,9 @@ async function loadHistory() {
         + `<a class="mini" href="/?job=${x.id}">▶️ ဖွင့်ကြည့်မယ်</a></div>`;
     }
     if (x.covers) html += `<div class="hcovers"><img src="/r/${x.id}/cover/1" loading="lazy" alt="cover"></div>`;
-    if (x.status === 'done') {
+    if (x.status === 'done' && x.gone) {
+      html += `<p class="hsub">✅ Telegram ကို ပို့ပြီးပြီ · 🗑️ ဗီဒီယိုဖိုင်ကို ဒီစက်ကနေ ဖျက်ပြီး</p>`;
+    } else if (x.status === 'done') {
       let tg = '';
       if (x.tg === 'sending') { tg = `⏳ Telegram ကို ပို့နေတယ် ${x.tg_pct}%`; busy = true; }
       else if (x.tg === 'done') tg = '✅ Telegram ကို ပို့ပြီးပြီ';
