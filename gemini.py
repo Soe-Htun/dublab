@@ -34,6 +34,7 @@ Rules:
 - TIMING IS CRITICAL: Burmese speech runs longer than English, so compress hard — use the shortest natural phrasing, drop filler words and repetition, keep only the core meaning and tone. A slightly shorter line is always better than a longer one.
 - Match the speaker: casual stays casual, jokes stay funny in Burmese, adapt idioms to Burmese equivalents.
 - Names and places stay as-is (transliterated if needed).
+- Write Burmese in Myanmar script only — never Thai, Chinese or any other script inside Burmese words.
 - Output format: exactly one line per input as "N|||translation" (N = the number I give you). Nothing else — no explanations."""
 
 
@@ -58,6 +59,7 @@ Rules:
 - TIMING IS CRITICAL: Burmese speech runs much longer than Chinese, so compress hard — use the shortest natural phrasing, drop filler words and repetition, keep only the core meaning and tone. A slightly shorter line is always better than a longer one.
 - Keep the storytelling voice: narration stays engaging and dramatic, dialogue matches the speaker, adapt Chinese idioms to Burmese equivalents.
 - Names and places: transliterate into Burmese script consistently (same name → same spelling every time).
+- Write Burmese in Myanmar script only — never Thai, Chinese or any other script inside Burmese words.
 - Output format: exactly one line per input as "N|||translation" (N = the number I give you). Nothing else — no explanations."""
 
 PROMPT_ANY2MM = """You are a professional dubbing script translator for short videos and movie recaps.
@@ -69,6 +71,7 @@ Rules:
 - TIMING IS CRITICAL: Burmese speech runs longer, so compress hard — shortest natural phrasing, drop filler and repetition. A slightly shorter line is always better than a longer one.
 - Match the speaker: narration stays engaging, dialogue matches the speaker, adapt idioms to Burmese equivalents.
 - Names and places: transliterate into Burmese script consistently.
+- Write Burmese in Myanmar script only — never Thai, Chinese or any other script inside Burmese words.
 - Output format: exactly one line per input as "N|||translation" (N = the number I give you). Nothing else — no explanations."""
 
 PROMPTS = {"en2mm": PROMPT_EN2MM, "mm2en": PROMPT_MM2EN, "zh2mm": PROMPT_ZH2MM}
@@ -170,7 +173,8 @@ def translate_lines(lines, direction, api_key, src_lang_name=None, channel=None)
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(PARALLEL) as ex:
         parts = list(ex.map(_chunk, range(0, len(lines), CHUNK)))
-    return [t for part in parts for t in part]
+    out = [t for part in parts for t in part]
+    return out if direction == "mm2en" else fix_script(out, api_key)
 
 
 INTRO_PROMPT = """You write the spoken opening line of a Burmese movie-recap video.
@@ -184,6 +188,7 @@ Rules:
 - Start with "ဒီနေ့ ဇာတ်လမ်းက" (or a very close variant).
 - Set up the situation and make people want to keep watching; never reveal the ending or twists.
 - No greetings, no channel names, no "like/follow/subscribe", no emojis, no quotes.
+- Write Burmese in Myanmar script only — never Thai, Chinese or any other script inside Burmese words.
 - Output only the hook text, nothing else."""
 
 
@@ -197,7 +202,7 @@ def write_intro(lines, api_key, max_chars=6000):
         used += len(ln) + 1
     raw = _call(INTRO_PROMPT + "\n\nVideo text:\n" + "\n".join(text), api_key)
     hook = re.sub(r"\s+", " ", raw).strip().strip('"“”')
-    return hook[:300]
+    return fix_script([hook[:300]], api_key)[0]
 
 
 TITLE_PROMPT = """You name Burmese movie-recap videos.
@@ -210,6 +215,7 @@ Rules:
 - Burmese only, 2–6 words, at most about 25 characters.
 - About the main hook of the story; no spoilers of the ending.
 - No channel names, no hashtags, no emojis, no quotes, no punctuation at the end.
+- Write Burmese in Myanmar script only — never Thai, Chinese or any other script inside Burmese words.
 - Output only the title."""
 
 
@@ -222,7 +228,7 @@ def write_title(lines, api_key, max_chars=6000):
         used += len(ln) + 1
     raw = _call(TITLE_PROMPT + "\n\nVideo text:\n" + "\n".join(text), api_key)
     title = re.sub(r"\s+", " ", raw.strip().splitlines()[0]).strip().strip('"“”။')
-    return title[:60]
+    return fix_script([title[:60]], api_key)[0]
 
 
 
@@ -244,6 +250,7 @@ Rules:
 - Each beat's line range must be in order and not go backwards; ranges should be short (the scene shown).
 - Names: transliterate into Burmese script consistently.
 - {extra}
+- Write Burmese in Myanmar script only — never Thai, Chinese or any other script inside Burmese words.
 - Output format: one beat per line as "FROM|TO|narration" (FROM/TO = line numbers). Nothing else."""
 
 
@@ -283,4 +290,42 @@ def write_recap(lines, minutes, api_key, lang=None, channel=None):
 
     with ThreadPoolExecutor(min(k, PARALLEL)) as ex:
         parts = list(ex.map(job, range(k)))
-    return [b for part in parts for b in part]
+    beats = [b for part in parts for b in part]
+    fixed = fix_script([b["say"] for b in beats], api_key)
+    for b, t in zip(beats, fixed):
+        b["say"] = t
+    return beats
+
+
+
+# ---- keep Burmese text in Myanmar script ----
+# The model sometimes slips Thai (or other scripts) into Burmese words, e.g.
+# "တပ်စည်းဆราบ". Such lines are sent back once to be rewritten; anything still
+# foreign after that is dropped so it is never spoken or burned in.
+_FOREIGN = re.compile("[\u0E00-\u0EFF\u1780-\u17FF\u0900-\u09FF\u0B80-\u0BFF"
+                      "\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF\u0400-\u04FF\u0600-\u06FF]")
+
+FIX_PROMPT = """These Burmese lines wrongly contain characters from other scripts (e.g. Thai, Chinese).
+Rewrite each line in correct Burmese (Myanmar script) only, keeping the meaning and style.
+Names may stay in Latin letters. Output exactly one line per input as "N|||line". Nothing else."""
+
+
+def has_foreign(text):
+    return bool(_FOREIGN.search(text or ""))
+
+
+def fix_script(lines, api_key):
+    bad = [i for i, t in enumerate(lines) if has_foreign(t)]
+    if not bad:
+        return lines
+    out = list(lines)
+    try:
+        raw = _call(FIX_PROMPT + "\n\n" + "\n".join(f"{k + 1}|||{lines[i]}" for k, i in enumerate(bad)),
+                    api_key)
+        for line in raw.strip().split("\n"):
+            m = re.match(r"(\d+)\|\|\|(.+)", line.strip())
+            if m and 1 <= int(m.group(1)) <= len(bad):
+                out[bad[int(m.group(1)) - 1]] = m.group(2).strip()
+    except Exception:  # noqa: BLE001 - fall through to stripping
+        pass
+    return [re.sub(r"\s{2,}", " ", _FOREIGN.sub("", t)).strip() if has_foreign(t) else t for t in out]
