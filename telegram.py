@@ -134,8 +134,9 @@ def send_message(chat_id, text):
                                  "disable_web_page_preview": True})
 
 
-def send_file(chat_id, path, filename, caption="", kind="video", thumb=None):
-    """kind 'video' (plays inline) or 'document'. thumb: JPEG ≤320 px."""
+def send_file(chat_id, path, filename, caption="", kind="video", thumb=None, cover=None):
+    """kind 'video' (plays inline) or 'document'. thumb: JPEG ≤320 px.
+    cover: full-size JPEG Telegram shows on the video in the chat."""
     with open(path, "rb") as fh:
         data = fh.read()
     method, field = ("sendVideo", "video") if kind == "video" else ("sendDocument", "document")
@@ -147,6 +148,10 @@ def send_file(chat_id, path, filename, caption="", kind="video", thumb=None):
     if thumb and os.path.exists(thumb):
         with open(thumb, "rb") as fh:
             files["thumbnail"] = ("thumb.jpg", fh.read(), "image/jpeg")
+    if kind == "video" and cover and os.path.exists(cover):
+        with open(cover, "rb") as fh:
+            files["cover"] = ("cover.jpg", fh.read(), "image/jpeg")
+        params["cover"] = "attach://cover"
     return _call(method, params, files=files, timeout=600)
 
 
@@ -251,7 +256,7 @@ def upload_parts(path, filename, progress=None):
 
 
 def send_big_video(chat_id, path, filename, caption="", duration=0, width=0, height=0,
-                   thumb=None, progress=None, prepared=None):
+                   thumb=None, progress=None, prepared=None, cover=None):
     """Send a video of up to 2 GB to chat_id as the bot (blocking). With
     `prepared` (from upload_parts) the file is already on Telegram's side;
     if Telegram has dropped it meanwhile, it is uploaded again."""
@@ -267,13 +272,31 @@ def send_big_video(chat_id, path, filename, caption="", duration=0, width=0, hei
                 peer = await client.get_input_entity(chat_id)
             except ValueError:            # not cached yet: look the user up
                 peer = await client.get_input_entity(PeerUser(chat_id))
+            attrs = [DocumentAttributeVideo(duration=int(duration), w=int(width),
+                                            h=int(height), supports_streaming=True),
+                     DocumentAttributeFilename(filename)]
+            video_cover = None
+            if cover and os.path.exists(cover):     # the cover shown on the video in the chat
+                try:
+                    from telethon.tl.functions.messages import UploadMediaRequest
+                    from telethon.tl.types import InputMediaUploadedPhoto, InputPhoto
+                    m = await client(UploadMediaRequest(peer, InputMediaUploadedPhoto(
+                        await client.upload_file(str(cover)))))
+                    video_cover = InputPhoto(m.photo.id, m.photo.access_hash, m.photo.file_reference)
+                except Exception:  # noqa: BLE001 - send without a cover rather than fail
+                    video_cover = None
+
             async def send(uploaded):
-                await client.send_file(
-                    peer, uploaded, caption=caption[:1000], supports_streaming=True,
-                    thumb=str(thumb) if thumb else None,
-                    attributes=[DocumentAttributeVideo(duration=int(duration), w=int(width),
-                                                       h=int(height), supports_streaming=True),
-                                DocumentAttributeFilename(filename)])
+                if video_cover is None:
+                    await client.send_file(peer, uploaded, caption=caption[:1000], supports_streaming=True,
+                                           thumb=str(thumb) if thumb else None, attributes=attrs)
+                    return
+                from telethon.tl.functions.messages import SendMediaRequest
+                from telethon.tl.types import InputMediaUploadedDocument
+                th = await client.upload_file(str(thumb)) if thumb else None
+                await client(SendMediaRequest(peer, InputMediaUploadedDocument(
+                    file=uploaded, mime_type="video/mp4", attributes=attrs, thumb=th,
+                    video_cover=video_cover), message=caption[:1000]))
             if prepared:
                 try:
                     await send(InputFileBig(*prepared))

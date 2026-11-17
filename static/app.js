@@ -142,7 +142,7 @@ function showProgress(jid) {
       if (j.status === 'review') { stopAll(); showReview(jid); }
       if (j.status === 'done') {
         stopAll(); histAdd(jid, j.title || j.name);
-        showResult(jid, j.parts); showCovers(jid, j.covers, j.cover_pick, j.title);
+        showResult(jid, j.parts); showCovers(jid, j.covers, j.title);
       }
       if (j.status === 'failed') { stopAll(); showError(j.error || 'အမှားရှိတယ်'); }
     } catch (e) { stopAll(); showError(e.message); }
@@ -381,27 +381,16 @@ async function loadTgVideos() {
   });
 }
 
-// ---- covers: one set for the whole film; the picked one goes to every part ----
-function showCovers(jid, n, pick, title) {
+// ---- cover: one for the whole film, used for every part ----
+function showCovers(jid, n, title) {
   const box = $('#coverbox'), grid = $('#covergrid');
   box.hidden = !n; grid.innerHTML = '';
   if (!n) return;
   $('#covertitle').textContent = title ? '— ' + title : '';
-  const select = (k) => {
-    grid.querySelectorAll('img').forEach((im, i) => im.classList.toggle('on', i + 1 === k));
-    $('#coverdl').href = `/r/${jid}/cover/${k}?dl=1`;
-  };
-  for (let k = 1; k <= n; k++) {
-    const im = document.createElement('img');
-    im.src = `/r/${jid}/cover/${k}`; im.alt = 'cover ' + k; im.loading = 'lazy';
-    im.addEventListener('click', () => {
-      select(k);
-      fetch('/api/jobs/' + jid + '/cover', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ n: k }) }).catch(() => {});
-    });
-    grid.append(im);
-  }
-  select(pick || 1);
+  const im = document.createElement('img');
+  im.src = `/r/${jid}/cover/1`; im.alt = 'cover';
+  grid.append(im);
+  $('#coverdl').href = `/r/${jid}/cover/1?dl=1`;
 }
 
 // ---- Telegram (owner only: needs the admin password) ----
@@ -509,6 +498,7 @@ function partsNote() {
 }
 let recapLen = '20';
 function setRecapLen(v) {
+  if (v === '50') v = '40';            // old saved choice (50+ became 40+)
   let b = document.querySelector(`#recapgrid .opt[data-recap="${v}"]`);
   if (!b) { v = '20'; b = document.querySelector('#recapgrid .opt[data-recap="20"]'); }   // old saved choice
   recapLen = v;
@@ -517,7 +507,7 @@ function setRecapLen(v) {
   const src = srcDur ? ` (မူရင်း ${Math.round(srcDur / 60)} မိနစ်)` : '';
   $('#recapnote').textContent = srcDur && aim * 60 >= srcDur * 0.85
     ? `⚠️ မူရင်းက ${Math.round(srcDur / 60)} မိနစ်ပဲ ရှိလို့ ${v}+ မိနစ် recap က မတိုဘူး — ပိုတိုတာ ရွေးပါ (မဟုတ်ရင် အပြည့် dub မယ်)`
-    : `ဇာတ်လမ်းအဓိကအခန်းတွေကို ရွေးပြီး အနည်းဆုံး ${v} မိနစ် (~${v}–${aim + 2} မိနစ်) recap ထုတ်မယ်${src}`;
+    : `ဇာတ်လမ်းအဓိကအခန်းတွေကို ရွေးပြီး အနည်းဆုံး ${v} မိနစ် (intro/outro မပါ · ~${v}–${+v >= 40 ? 60 : aim + 5} မိနစ်) recap ထုတ်မယ်${src}`;
   partsNote();
 }
 function syncRecap() {
@@ -565,7 +555,7 @@ async function renderHistory() {
         st.textContent = when + ' · ✅ ပြီးပြီ' + (j.parts && j.parts.length > 1 ? ` (${j.parts.length} ပိုင်း)` : '');
         b.onclick = () => {
           ['card-upload', 'card-opts', 'card-progress', 'card-review', 'card-error'].forEach((id) => ($('#' + id).hidden = true));
-          showResult(x.id, j.parts); showCovers(x.id, j.covers, j.cover_pick, j.title);
+          showResult(x.id, j.parts); showCovers(x.id, j.covers, j.title);
         };
       } else if (j.status === 'failed') {
         st.textContent = when + ' · ⚠️ မအောင်မြင်ဘူး'; b.disabled = true;

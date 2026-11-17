@@ -119,7 +119,6 @@ textarea:focus{outline:none;border-color:var(--p1)}
   #recapopts{margin-left:0}
   .optgrid.chips .opt{padding:11px 2px}
   .optgrid.chips .opt-label{font-size:13px}
-  .covergrid{grid-template-columns:repeat(2,1fr)}
   .part .ghost{font-size:13px;padding:10px 10px}
   .tgitem{font-size:13px}
   .tghead{align-items:flex-start}
@@ -132,9 +131,8 @@ textarea:focus{outline:none;border-color:var(--p1)}
   border-radius:10px;color:var(--txt);padding:10px 12px;font:inherit;font-size:16px;font-weight:700}
 .covers{margin-top:18px}
 .covers h3{font-size:15px;margin:0 0 10px}
-.covergrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-.covergrid img{width:100%;border-radius:10px;border:2px solid transparent;cursor:pointer;opacity:.75;transition:opacity .15s}
-.covergrid img.on{border-color:var(--p1);opacity:1}
+.covergrid{display:grid;grid-template-columns:1fr;gap:8px}
+.covergrid img{width:100%;border-radius:10px}
 .tglist{margin-top:10px;display:flex;flex-direction:column;gap:6px}
 .tghead{display:flex;align-items:center;gap:8px}
 .tghead .note{flex:1;margin:0}

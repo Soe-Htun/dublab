@@ -77,10 +77,17 @@ Rules:
 PROMPTS = {"en2mm": PROMPT_EN2MM, "mm2en": PROMPT_MM2EN, "zh2mm": PROMPT_ZH2MM}
 
 
-def _call(prompt, api_key, max_tokens=8192):
+def _call(prompt, api_key, max_tokens=8192, images=None):
+    """images: optional [(label, jpeg bytes)] sent after the prompt, each
+    preceded by its label so the model can refer to it."""
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}"
            f":generateContent?key={api_key}")
-    body = {"contents": [{"parts": [{"text": prompt}]}],
+    parts = [{"text": prompt}]
+    for label, data in images or []:
+        import base64
+        parts += [{"text": label},
+                  {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(data).decode()}}]
+    body = {"contents": [{"parts": parts}],
             "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.7}}
     limited = 0
     attempt = 0
@@ -273,10 +280,16 @@ def _recap_chunk(lines, lo, hi, minutes, lang, extra, api_key, what):
     return beats
 
 
-def write_recap(lines, minutes, api_key, lang=None, channel=None):
+def _chars(beats):
+    return sum(len(b["say"]) for b in beats)
+
+
+def write_recap(lines, minutes, api_key, lang=None, channel=None, min_minutes=0, log=None):
     """lines: [(start_seconds, text)] of the whole video. Returns beats
     [{"from": i, "to": j, "say": burmese}] in order (i/j index into lines).
-    Long targets are written in parallel sections of up to ~8 minutes."""
+    Long targets are written in parallel sections of up to ~8 minutes.
+    min_minutes: the narration alone (no intro/outro) must reach this; the
+    model tends to write short, so short sections are rewritten longer."""
     from concurrent.futures import ThreadPoolExecutor
     k = max(1, round(minutes / 8))
     bounds = [round(len(lines) * i / k) for i in range(k + 1)]
@@ -290,6 +303,28 @@ def write_recap(lines, minutes, api_key, lang=None, channel=None):
 
     with ThreadPoolExecutor(min(k, PARALLEL)) as ex:
         parts = list(ex.map(job, range(k)))
+        # each section must carry its share of the minimum (+8% headroom);
+        # ask again for the short ones, scaled up by how short they came out
+        need = min_minutes * 60 * TTS_CPS * 1.08 / k
+        for rnd in range(3):
+            short = [i for i in range(k) if _chars(parts[i]) < need]
+            if not min_minutes or not short:
+                break
+            if log:
+                got = sum(_chars(p) for p in parts) / TTS_CPS / 60
+                log(f"recap only ~{got:.1f} min (need {min_minutes}+) — rewriting {len(short)} "
+                    f"short section(s) longer (try {rnd + 1})")
+
+            def redo(i):
+                grow = min(3.0, need * 1.2 / max(1, _chars(parts[i])))
+                what = ("a video" if k == 1 else f"part {i + 1} of {k} of a video (continue the story; "
+                        "do not re-introduce it)") + (". Your previous version was far too short: tell "
+                        "this part in much more detail, scene by scene")
+                return _recap_chunk(lines, bounds[i], bounds[i + 1], per * grow, lang, extra, api_key, what)
+
+            for i, new in zip(short, ex.map(redo, short)):
+                if _chars(new) > _chars(parts[i]):
+                    parts[i] = new
     beats = [b for part in parts for b in part]
     fixed = fix_script([b["say"] for b in beats], api_key)
     for b, t in zip(beats, fixed):
@@ -329,3 +364,27 @@ def fix_script(lines, api_key):
     except Exception:  # noqa: BLE001 - fall through to stripping
         pass
     return [re.sub(r"\s{2,}", " ", _FOREIGN.sub("", t)).strip() if has_foreign(t) else t for t in out]
+
+
+# ---- cover photos: let the model find the main character ----
+COVER_PROMPT = """The numbered frames below (0 to {last}) come from one movie.
+First work out who the MAIN CHARACTER is (the protagonist: the person who appears most and the story is about).
+Then answer with JSON only, no other text:
+{{"hero": [...], "others": [...]}}
+- "hero": up to 5 frame numbers where the main character's FACE is clearly visible, large and sharp (close-up or medium shot, looking good, dramatic expression is a plus), best first.
+- "others": up to 8 frame numbers, best first, that together show what this movie is ABOUT: its main scenes and setting (e.g. a fishing movie: people fishing, the small boat, the sea; a war movie: soldiers, tanks, battle; a fantasy: the magic, creatures, the kingdom), plus the other important characters (villain, partner, love interest) with their faces visible. Mix scene shots and character shots.
+Never pick dark, blurry, black, fading, crowd-only, landscape-only, logo, title or text frames. A frame may appear in only one list."""
+
+
+def pick_cover_frames(jpegs, api_key):
+    """jpegs: [bytes]. Returns (hero indices, other indices); raises on failure."""
+    raw = _call(COVER_PROMPT.format(last=len(jpegs) - 1), api_key, max_tokens=1024,
+                images=[(f"Frame {i}:", b) for i, b in enumerate(jpegs)])
+    m = re.search(r"\{.*\}", raw, re.S)
+    data = json.loads(m.group(0)) if m else {}
+    ok = lambda xs: [int(x) for x in xs or [] if str(x).isdigit() and 0 <= int(x) < len(jpegs)]
+    hero = list(dict.fromkeys(ok(data.get("hero"))))
+    others = [i for i in dict.fromkeys(ok(data.get("others"))) if i not in hero]
+    if not hero and not others:
+        raise ValueError("no cover frames picked")
+    return hero, others

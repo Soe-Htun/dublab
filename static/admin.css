@@ -72,6 +72,5 @@
 .hbtns{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
 .hbtns .mini{font-size:13px;text-decoration:none}
 .hbtns .ghost{width:auto;flex:1;margin:0}
-.hcovers{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px}
-.hcovers img{width:100%;border-radius:8px;border:2px solid transparent;cursor:pointer;opacity:.7}
-.hcovers img.on{border-color:var(--p1);opacity:1}
+.hcovers{margin-top:10px;max-width:360px}
+.hcovers img{width:100%;border-radius:8px}

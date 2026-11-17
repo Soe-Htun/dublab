@@ -423,6 +423,56 @@ _CAPTION_FONTS = [  # (path, face index) — Unicode Burmese, bold first
 ]
 
 
+_LATIN_FONTS = [  # Noto Sans Myanmar has no Latin letters: English words use one of these
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+]
+
+
+class _MixFont:
+    """A Burmese font plus a Latin one: text is drawn in runs, so English
+    words ("like and follow", channel names) never come out as □□□ boxes."""
+    def __init__(self, my, lat):
+        self.my, self.lat = my, lat or my
+        self.asc = my.getmetrics()[0]
+
+
+_LATIN_RUN = re.compile(r"[\x21-\x7E](?:[\x20-\x7E]*[\x21-\x7E])?")
+
+
+def _runs(text, f):
+    pos = 0
+    for m in _LATIN_RUN.finditer(text):
+        if m.start() > pos:
+            yield text[pos:m.start()], f.my
+        yield m.group(0), f.lat
+        pos = m.end()
+    if pos < len(text):
+        yield text[pos:], f.my
+
+
+def _tlen(d, text, f):
+    return sum(d.textlength(seg, font=ft) for seg, ft in _runs(text, f))
+
+
+def _tbbox(d, xy, text, f, **kw):
+    x, base = xy[0], xy[1] + f.asc
+    box = None
+    for seg, ft in _runs(text, f):
+        b = d.textbbox((x, base), seg, font=ft, anchor="ls", **kw)
+        box = b if box is None else (min(box[0], b[0]), min(box[1], b[1]), max(box[2], b[2]), max(box[3], b[3]))
+        x += d.textlength(seg, font=ft)
+    return box or (xy[0], xy[1], xy[0], xy[1])
+
+
+def _tdraw(d, xy, text, f, **kw):
+    x, base = xy[0], xy[1] + f.asc
+    for seg, ft in _runs(text, f):
+        d.text((x, base), seg, font=ft, anchor="ls", **kw)
+        x += d.textlength(seg, font=ft)
+
+
 def _caption_font(size):
     from PIL import ImageFont, features
     if not features.check("raqm"):
@@ -430,8 +480,10 @@ def _caption_font(size):
     forced = os.environ.get("DUBLAB_CAPTION_FONT")
     for path, idx in ([(forced, 0)] if forced else []) + _CAPTION_FONTS:
         if path and os.path.exists(path):
-            return ImageFont.truetype(path, size, index=idx,
-                                      layout_engine=ImageFont.Layout.RAQM)
+            my = ImageFont.truetype(path, size, index=idx, layout_engine=ImageFont.Layout.RAQM)
+            lat = next((ImageFont.truetype(lp, int(size * 0.92), layout_engine=ImageFont.Layout.RAQM)
+                        for lp in _LATIN_FONTS if os.path.exists(lp)), None)
+            return _MixFont(my, lat)
     raise RuntimeError("no Burmese font found (set DUBLAB_CAPTION_FONT)")
 
 
@@ -447,7 +499,7 @@ def _split_wide(draw, word, font, max_w):
         parts = list(word)
     out, cur = [], ""
     for p in parts:
-        if cur and draw.textlength(cur + p, font=font) > max_w:
+        if cur and _tlen(draw, cur + p, font) > max_w:
             out.append(cur)
             cur = p
         else:
@@ -462,14 +514,14 @@ def _wrap(draw, text, font, max_w):
     words wider than a line are broken at syllable starts."""
     words = []
     for word in text.split():
-        if draw.textlength(word, font=font) > max_w:
+        if _tlen(draw, word, font) > max_w:
             words += _split_wide(draw, word, font, max_w)
         else:
             words.append(word)
     lines, cur = [], ""
     for word in words:
         trial = f"{cur} {word}".strip()
-        if cur and draw.textlength(trial, font=font) > max_w:
+        if cur and _tlen(draw, trial, font) > max_w:
             lines.append(cur)
             cur = word
         else:
@@ -526,11 +578,11 @@ def render_captions(cues, video_w, video_h, out_dir, size_pct=5.5):
         y0 = strip_h - pad_y - line_h * len(lines)   # bottom-aligned
         placed, y = [], y0
         for ln in lines:
-            w = d.textlength(ln, font=font)
+            w = _tlen(d, ln, font)
             placed.append(((video_w - w) / 2, y, ln))
             y += line_h
         # translucent box around the real ink of the text block
-        boxes = [d.textbbox((x, yy), ln, font=font) for x, yy, ln in placed]
+        boxes = [_tbbox(d, (x, yy), ln, font) for x, yy, ln in placed]
         top = min(b[1] for b in boxes) - pad_y
         bot = max(b[3] for b in boxes) + pad_y
         dy = strip_h - 1 - bot                 # sit the box on the strip's bottom edge
@@ -545,7 +597,7 @@ def render_captions(cues, video_w, video_h, out_dir, size_pct=5.5):
         img = Image.alpha_composite(img, box)
         d = ImageDraw.Draw(img)
         for x, yy, ln in placed:
-            d.text((x, yy), ln, font=font, fill=(255, 255, 255, 255),
+            _tdraw(d, (x, yy), ln, font, fill=(255, 255, 255, 255),
                    stroke_width=stroke, stroke_fill=(0, 0, 0, 200))
         p = out_dir / f"c{n}.png"
         img.save(p)
@@ -977,11 +1029,11 @@ def render_cover(video, t, title, out_jpg, portrait=False, logo=None, blur=None)
     base = H - (int(H * 0.22) if portrait else int(H * 0.07))
     y = base - line_h * len(lines)
     for k, ln in enumerate(lines):
-        w = d.textlength(ln, font=font)
+        w = _tlen(d, ln, font)
         x = (W - w) / 2
         color = (255, 214, 0) if k == 0 else (255, 255, 255)        # first line yellow
-        d.text((x + stroke, y + stroke * 1.5), ln, font=font, fill=(0, 0, 0, 160))   # shadow
-        d.text((x, y), ln, font=font, fill=color, stroke_width=stroke, stroke_fill=(0, 0, 0))
+        _tdraw(d, (x + stroke, y + stroke * 1.5), ln, font, fill=(0, 0, 0, 160))   # shadow
+        _tdraw(d, (x, y), ln, font, fill=color, stroke_width=stroke, stroke_fill=(0, 0, 0))
         y += line_h
 
     if logo and Path(logo).exists():
@@ -995,20 +1047,31 @@ def render_cover(video, t, title, out_jpg, portrait=False, logo=None, blur=None)
 
 
 def _grab(video, t, w, h):
-    """Frame at t, scaled and centre-cropped to w x h (PIL RGB)."""
-    from PIL import Image
+    """Frame at t, black letterbox bars trimmed, scaled and centre-cropped
+    to w x h (PIL RGB)."""
+    from PIL import Image, ImageOps
     import io
+    import numpy as np
     r = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.2f}", "-i", str(video), "-frames:v", "1",
-                        "-vf", f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}",
                         "-f", "image2pipe", "-vcodec", "png", "-"], capture_output=True)
     if r.returncode or not r.stdout:
         raise RuntimeError("frame grab failed")
-    return Image.open(io.BytesIO(r.stdout)).convert("RGB")
+    img = Image.open(io.BytesIO(r.stdout)).convert("RGB")
+    g = np.asarray(img.convert("L"), dtype=np.float32)
+    rows, cols = np.where(g.mean(1) > 18)[0], np.where(g.mean(0) > 18)[0]
+    if len(rows) > g.shape[0] * 0.4 and len(cols) > g.shape[1] * 0.4:
+        img = img.crop((cols[0], rows[0], cols[-1] + 1, rows[-1] + 1))
+    return ImageOps.fit(img, (w, h), Image.LANCZOS, centering=(0.5, 0.4))
 
 
 def _layout(n, W, H, portrait):
-    """Panel boxes (x, y, w, h) for n = 3..5 photos."""
+    """Panel boxes (x, y, w, h) for n = 3..5 photos. 4 = an even 2x2 grid."""
     g = 8
+    if n == 4:
+        g = 6
+        w2, h2 = (W - g) // 2, (H - g) // 2
+        return [(0, 0, w2, h2), (w2 + g, 0, W - w2 - g, h2),
+                (0, h2 + g, w2, H - h2 - g), (w2 + g, h2 + g, W - w2 - g, H - h2 - g)]
     if portrait:
         top = int(H * 0.42)
         rows = {3: [(0, 0, W, top), (0, top + g, W // 2 - g // 2, H - top - g),
@@ -1030,8 +1093,9 @@ def _layout(n, W, H, portrait):
            [(i * (third + g), top + g, third, H - top - g) for i in range(3)]
 
 
-def _gold_title(img, title, box_w, center_x, bottom_y, max_lines, size):
-    """Big gold-gradient title with a dark outline and glow, bottom-anchored."""
+def _gold_title(img, title, box_w, center_x, center_y, max_lines, size):
+    """Big gold-gradient title with a dark outline and glow, its ink centred
+    on (center_x, center_y)."""
     from PIL import Image, ImageDraw, ImageFilter
     d = ImageDraw.Draw(img)
     while True:
@@ -1044,15 +1108,17 @@ def _gold_title(img, title, box_w, center_x, bottom_y, max_lines, size):
     stroke = max(4, size // 9)
     W, H = img.size
     block_h = line_h * len(lines)
-    y0 = bottom_y - block_h
+    ink = [_tbbox(d, (0, k * line_h), ln, font) for k, ln in enumerate(lines)]
+    top, bot = min(b[1] for b in ink), max(b[3] for b in ink)
+    y0 = int(center_y - (top + bot) / 2)      # centre the real ink, not the line boxes
     mask = Image.new("L", (W, H), 0)
     outline = Image.new("L", (W, H), 0)
     md, od = ImageDraw.Draw(mask), ImageDraw.Draw(outline)
     for k, ln in enumerate(lines):
-        w = d.textlength(ln, font=font)
+        w = _tlen(d, ln, font)
         x, y = center_x - w / 2, y0 + k * line_h
-        od.text((x, y), ln, font=font, fill=255, stroke_width=stroke, stroke_fill=255)
-        md.text((x, y), ln, font=font, fill=255)
+        _tdraw(od, (x, y), ln, font, fill=255, stroke_width=stroke, stroke_fill=255)
+        _tdraw(md, (x, y), ln, font, fill=255)
     glow = outline.filter(ImageFilter.GaussianBlur(stroke * 1.6))
     img.paste(Image.new("RGB", (W, H), (255, 140, 0)), (0, 0), glow.point(lambda v: int(v * 0.55)))
     img.paste(Image.new("RGB", (W, H), (60, 10, 0)), (0, 0), outline)          # dark outline
@@ -1072,7 +1138,7 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
     W, H = (1080, 1920) if portrait else (1280, 720)
     n = max(3, min(5, len(times)))
     times = (list(times) * 5)[:n]
-    canvas = Image.new("RGB", (W, H), (12, 8, 6))
+    canvas = Image.new("RGB", (W, H), (236, 178, 60) if n == 4 else (12, 8, 6))   # 2x2: thin gold lines
     for (x, y, w, h), t in zip(_layout(n, W, H, portrait), times):
         fr = _grab(video, t, w, h)
         if blur:                                # hide burned-in captions inside each panel
@@ -1082,22 +1148,21 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
         fr = ImageEnhance.Color(ImageEnhance.Contrast(fr).enhance(1.15)).enhance(1.2)
         canvas.paste(fr, (x, y))
     img = canvas.convert("RGBA")
-    # warm dark band behind the title
-    band_h = int(H * (0.34 if portrait else 0.42))
-    band_y = int(H * 0.72) - band_h // 2 if portrait else H - band_h
+    # warm dark band behind the title, across the middle
+    band_h = int(H * (0.26 if portrait else 0.4))
+    band_y = H // 2 - band_h // 2
     grad = Image.new("L", (1, band_h))
     for yy in range(band_h):
         f = yy / band_h
-        grad.putpixel((0, yy), int(235 * min(1.0, (f / 0.45) if portrait else f ** 0.9)) if not portrait
-                      else int(235 * (1 - abs(f - 0.5) * 2) ** 0.6))
+        grad.putpixel((0, yy), int(190 * (1 - abs(f - 0.5) * 2) ** 0.8))
     shade = Image.new("RGBA", (W, band_h), (25, 4, 0, 255))
     shade.putalpha(grad.resize((W, band_h)))
     img.alpha_composite(shade, (0, band_y))
     img = img.convert("RGB")
     if portrait:
-        _gold_title(img, title, int(W * 0.9), W // 2, band_y + band_h - int(band_h * 0.18), 3, int(W * 0.14))
+        _gold_title(img, title, int(W * 0.88), W // 2, H // 2, 3, int(W * 0.12))
     else:
-        _gold_title(img, title, int(W * 0.92), W // 2, H - int(H * 0.06), 2, int(H * 0.17))
+        _gold_title(img, title, int(W * 0.86), W // 2, H // 2, 2, int(H * 0.13))
     if logo and Path(logo).exists():
         img = img.convert("RGBA")
         lg = Image.open(logo).convert("RGBA")
@@ -1110,12 +1175,51 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
     return Path(out_jpg)
 
 
-def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, blur=None, count=3):
-    """Three collage covers (3, 4 and 5 photos) from the strongest frames."""
+def _cover_times_by_ai(video, start, end, chooser, samples=30):
+    """Sample frames, let `chooser` (the model) pick the main character's
+    close-ups and other key characters: returns (hero times, other times)."""
+    span = max(end - start, 1.0)
+    cands = [start + span * (i + 0.5) / samples for i in range(samples)]
+    shots, times = [], []
+    for t in cands:
+        r = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.2f}", "-i", str(video), "-frames:v", "1",
+                            "-vf", "scale=384:-2", "-q:v", "5", "-f", "image2pipe", "-vcodec", "mjpeg", "-"],
+                           capture_output=True)
+        if not r.returncode and r.stdout:
+            shots.append(r.stdout)
+            times.append(t)
+    hero, others = chooser(shots)
+    return [times[i] for i in hero], [times[i] for i in others]
+
+
+def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, blur=None, count=3,
+                chooser=None, log=None):
+    """Three collage covers (3, 4 and 5 photos). With `chooser` (Gemini), the
+    big lead photo is the main character and the rest are other key
+    characters / moments; otherwise the sharpest, most colourful frames."""
     out_dir = Path(out_dir)
+    if chooser:
+        try:
+            hero, others = _cover_times_by_ai(video, start, end, chooser)
+            if log:
+                log(f"cover photos picked by AI: {len(hero)} of the main character, {len(others)} others")
+            if hero or others:
+                pool = hero + others
+                covers = []
+                for i, n in enumerate((4, 5, 3)[:count], 1):
+                    lead = (hero or pool)[(i - 1) % len(hero or pool)]
+                    rest = [t for t in others + hero if t != lead]
+                    rest = rest[(i - 1) % max(1, len(rest)):] + rest[:(i - 1) % max(1, len(rest))]
+                    pick = ([lead] + rest)[:n]
+                    covers.append(render_collage(video, pick, title, out_dir / f"cover{i}.jpg",
+                                                 portrait, logo, blur))
+                return covers
+        except Exception as e:  # noqa: BLE001 - fall back to the frame scores
+            if log:
+                log(f"AI cover pick failed ({str(e)[:120]}) — using the sharpest frames")
     times = pick_cover_times(video, start, end, 7, samples=36, tmp=out_dir)
     covers = []
-    for i, n in enumerate((3, 4, 5)[:count], 1):
+    for i, n in enumerate((4, 5, 3)[:count], 1):
         pick = (times[i - 1:] + times[:i - 1])[:n]          # a different lead photo each time
         covers.append(render_collage(video, pick, title, out_dir / f"cover{i}.jpg", portrait, logo, blur))
     return covers

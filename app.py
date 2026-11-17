@@ -21,7 +21,8 @@ from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tt
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
                  build_recap_video, make_covers, mux, synthesize, probe_duration, probe_url, separate_music, split_points,
                  split_video, transcribe)
-from gemini import TTS_CPS, RateLimited, translate_lines, write_intro, write_recap, write_title
+from gemini import (TTS_CPS, RateLimited, pick_cover_frames, translate_lines, write_intro, write_recap,
+                    write_title)
 
 # Gemini TTS key rotation.
 # GEMINI_TTS_API_KEYS is comma-separated; falls back to the single GEMINI_API_KEY.
@@ -268,6 +269,9 @@ def process_job(jid):
         err = clean_err(e)
         jlog(job, f"FAILED: {type(e).__name__}: {err}")
         job.update(status="failed", error=err)
+        # a failed job can't be resumed (🔁 starts over): free the disk now
+        for f in ("input" + job.get("ext", ".mp4"), "audio.wav"):
+            (job["dir"] / f).unlink(missing_ok=True)
 
 
 def _transcribe_and_translate(jid, job):
@@ -395,7 +399,7 @@ def _translate(job, utter, direction, lang, api_key):
     jlog(job, f"translated {len(texts)} lines")
 
 
-RECAP_CHOICES = (0, 15, 20, 30, 50)   # recap: at least this many minutes; 0 = full dub
+RECAP_CHOICES = (0, 15, 20, 30, 40)   # recap: narration at least this many minutes (intro/outro not counted); 0 = full dub
 RECAP_AIM = 1.25                      # aim a bit over the minimum (20 → ~25 min)
 
 
@@ -407,7 +411,8 @@ def _write_recap(job, utter, lang, api_key):
     jlog(job, f"writing a Burmese recap of at least {job['recap']} min (aiming ~{mins:.0f}) with gemini…")
     try:
         beats = write_recap([(u["start"], u["text"]) for u in utter], mins, api_key,
-                            LANG_NAMES.get(lang, lang), _settings["channel_name"] or None)
+                            LANG_NAMES.get(lang, lang), _settings["channel_name"] or None,
+                            min_minutes=job["recap"], log=lambda m: jlog(job, m))
     except RateLimited as e:
         raise ValueError("Gemini quota ဒီနေ့အတွက် ကုန်သွားပြီ — မနက်ဖြန် ပြန်စမ်းပါ" if e.daily else
                          "Gemini က ခဏ ပိတ်ထားတယ် — ၁–၂ မိနစ်နေရင် 🔁 ပြန်စမ်းပါ") from None
@@ -418,7 +423,8 @@ def _write_recap(job, utter, lang, api_key):
                      "orig": " ".join(u["text"] for u in utter[b["from"]:b["to"] + 1])[:300]}
                     for b in beats]
     est = sum(len(u["text"]) for u in job["utter"]) / TTS_CPS / 60
-    jlog(job, f"recap: {len(beats)} beats · ~{est:.1f} min of narration")
+    jlog(job, f"recap: {len(beats)} beats · ~{est:.1f} min of narration (need {job['recap']}+)"
+              + ("" if est >= job["recap"] else " ⚠️ still short"))
 
 
 def _recap_cut(job, voice_name):
@@ -524,9 +530,12 @@ def _voice_and_mux(job):
         # one cover for the whole film — every part uses the same one; made
         # before the mux so cover 1 can also be the picture under the intro
         try:
-            covers = make_covers(src, job["title_mm"], d, job["total"] * 0.06, job["total"] * 0.7,
+            key = os.environ.get("GEMINI_API_KEY")
+            covers = make_covers(src, job["title_mm"], d, job["total"] * 0.04, job["total"] * 0.9,
                                  portrait=bool(sfx), blur=blur,
-                                 logo=LOGO_FILE if job.get("logo") and LOGO_FILE.exists() else None)
+                                 logo=LOGO_FILE if job.get("logo") and LOGO_FILE.exists() else None,
+                                 count=1, chooser=(lambda shots: pick_cover_frames(shots, key)) if key else None,
+                                 log=lambda m: jlog(job, m))
             job["covers"] = [c.name for c in covers]
             job["cover_pick"] = 1
             jlog(job, f"made {len(covers)} cover images")
@@ -562,6 +571,7 @@ def _voice_and_mux(job):
     cleanup_segments(d)
     (d / "dub.wav").unlink(missing_ok=True)
     (d / "audio.wav").unlink(missing_ok=True)
+    (d / ("input" + job["ext"])).unlink(missing_ok=True)   # the source: covers/parts are made, not needed now
     for tmp in ("orig_stereo.wav",):
         (d / tmp).unlink(missing_ok=True)
 
@@ -1194,11 +1204,17 @@ def telegram_disconnect():
     return jsonify(ok=True)
 
 
-def _cover_thumb(job, n=None):
-    """The chosen cover, shrunk to Telegram's thumbnail size (≤320 px JPEG)."""
+def _cover_file(job):
+    """The film's one cover (the same for every part), or None."""
     covers = job.get("covers") or []
-    n = n or job.get("cover_pick", 1)
-    if not covers or not 1 <= n <= len(covers):
+    return job["dir"] / covers[0] if covers and (job["dir"] / covers[0]).exists() else None
+
+
+def _cover_thumb(job):
+    """The cover, shrunk to Telegram's thumbnail size (≤320 px JPEG)."""
+    covers = job.get("covers") or []
+    n = 1
+    if not covers:
         return None
     src, out = job["dir"] / covers[n - 1], job["dir"] / f"tg_cover{n}.jpg"
     try:
@@ -1270,11 +1286,12 @@ def _telegram_prepare(job):
         _telegram_send(job)
 
 
-def _send_one(job, chat, path, name, caption, prog, cover_n=None):
+def _send_one(job, chat, path, name, caption, prog):
     size = path.stat().st_size
-    thumb = _cover_thumb(job, cover_n) or _video_thumb(path, job["dir"] / f"tg_thumb_{path.stem}.jpg")
+    cover = _cover_file(job)
+    thumb = _cover_thumb(job) or _video_thumb(path, job["dir"] / f"tg_thumb_{path.stem}.jpg")
     if size <= telegram.MAX_UPLOAD:
-        telegram.send_file(chat, path, name, caption=caption, thumb=thumb)
+        telegram.send_file(chat, path, name, caption=caption, thumb=thumb, cover=cover)
         return "file"
     if size <= telegram.BIG_MAX and telegram.big_available():
         w, h = video_size(path)
@@ -1282,7 +1299,7 @@ def _send_one(job, chat, path, name, caption, prog, cover_n=None):
         prepared = pre.get("files", {}).get(str(path)) if pre.get("state") == "ready" else None
         telegram.send_big_video(chat, path, name, caption=caption,
                                 duration=probe_duration(path), width=w, height=h,
-                                thumb=thumb, progress=prog, prepared=prepared)
+                                thumb=thumb, progress=prog, prepared=prepared, cover=cover)
         return "file"
     link, mb = _public_url(), size / 1048576
     n = job["parts"].index(path.name) + 1 if job.get("parts") else 0
@@ -1307,14 +1324,12 @@ def _telegram_send(job):
             raise telegram.TelegramError("Telegram not connected (admin page → Telegram)")
         outs = _outputs(job)
         hows = []
-        cover_n = job.get("cover_pick", 1)     # fixed for this send: every part gets the same cover
-        tg["cover"] = cover_n
         for i, (path, name) in enumerate(outs):
             jlog(job, f"sending {name} to Telegram ({path.stat().st_size / 1048576:.0f} MB)…")
             caption = f"🎬 {name[:-4]}" + (f"  ({i + 1}/{len(outs)})" if len(outs) > 1 else "")
             def prog(f, i=i):
                 tg["pct"] = int((i + f) * 100 / len(outs))
-            hows.append(_send_one(job, chat, path, name, caption, prog, cover_n))
+            hows.append(_send_one(job, chat, path, name, caption, prog))
             tg["pct"] = int((i + 1) * 100 / len(outs))
             tg["sent"] = i + 1
         tg["how"] = "link" if "link" in hows else "file"
@@ -1375,22 +1390,6 @@ def result_cover(jid, n):
     name = _download_name(job, ".jpg").replace(" - mm.jpg", " - cover.jpg")
     return send_file(job["dir"] / covers[n - 1], mimetype="image/jpeg",
                      as_attachment=request.args.get("dl") == "1", download_name=name)
-
-
-@app.post("/api/jobs/<jid>/cover")
-def pick_cover(jid):
-    """Choose which cover is used (Telegram thumbnail for every part)."""
-    job = jobs.get(jid)
-    data = request.get_json(force=True, silent=True) or {}
-    try:
-        n = int(data.get("n"))
-    except (TypeError, ValueError):
-        n = 0
-    if not job or not 1 <= n <= len(job.get("covers") or []):
-        return jsonify(error="မရှိဘူး"), 404
-    job["cover_pick"] = n
-    _save_meta(job)
-    return jsonify(ok=True)
 
 
 @app.get("/r/<jid>.srt")

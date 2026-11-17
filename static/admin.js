@@ -264,12 +264,7 @@ async function loadHistory() {
         `<a class="mini" href="/r/${x.id}${x.outputs.length > 1 ? '/' + o.n : ''}" download>⬇️ ${x.outputs.length > 1 ? 'အပိုင်း ' + o.n : 'Download'} <span class="dim">${o.mb} MB</span></a>`).join('')
         + `<a class="mini" href="/?job=${x.id}">▶️ ဖွင့်ကြည့်မယ်</a></div>`;
     }
-    if (x.covers) {
-      html += '<div class="hcovers">';
-      for (let k = 1; k <= x.covers; k++)
-        html += `<img src="/r/${x.id}/cover/${k}" data-k="${k}" class="${k === x.cover_pick ? 'on' : ''}" loading="lazy" alt="cover ${k}">`;
-      html += '</div>';
-    }
+    if (x.covers) html += `<div class="hcovers"><img src="/r/${x.id}/cover/1" loading="lazy" alt="cover"></div>`;
     if (x.status === 'done') {
       let tg = '';
       if (x.tg === 'sending') { tg = `⏳ Telegram ကို ပို့နေတယ် ${x.tg_pct}%`; busy = true; }
@@ -279,11 +274,6 @@ async function loadHistory() {
         + (tg ? `<p class="hsub">${tg}</p>` : '');
     }
     row.innerHTML = html;
-    row.querySelectorAll('.hcovers img').forEach((im) => im.addEventListener('click', async () => {
-      row.querySelectorAll('.hcovers img').forEach((o) => o.classList.toggle('on', o === im));
-      await fetch(`/api/jobs/${x.id}/cover`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ n: +im.dataset.k }) }).catch(() => {});
-    }));
     const tgb = row.querySelector('.htg');
     if (tgb) tgb.addEventListener('click', async () => {
       if (x.tg === 'done' && !confirm('Telegram ကို ပို့ပြီးသားပါ — ထပ်ပို့မလား?')) return;
