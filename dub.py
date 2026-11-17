@@ -467,7 +467,9 @@ def render_captions(cues, video_w, video_h, out_dir, size_pct=5.5):
     from PIL import Image, ImageDraw
     out_dir = Path(out_dir)
     out_dir.mkdir(exist_ok=True)
-    fsize = max(14, int(video_h * size_pct / 100))
+    # % of the short side: same as height for landscape, and keeps portrait
+    # (TikTok 1080x1920) captions from coming out twice as big
+    fsize = max(14, int(min(video_w, video_h) * size_pct / 100))
     font = _caption_font(fsize)
     stroke = max(1, fsize // 24)               # thin edge; the box does the work
     line_h = int(fsize * 1.75)                 # Burmese stacks marks above/below

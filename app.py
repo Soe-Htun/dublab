@@ -53,9 +53,13 @@ _settings = {"max_minutes": int(os.environ.get("DUBLAB_MAX_MINUTES") or 30),
              "logo_size": 12,   # % of the video width
              # Burmese captions: text size (% of video height); blur band that
              # hides burned-in original captions (% from bottom, % tall)
-             "caption_size": 5.5, "caption_bottom": 8, "blur_bottom": 4, "blur_height": 16}
+             "caption_size": 5.5, "caption_bottom": 8, "blur_bottom": 4, "blur_height": 16,
+             # portrait (TikTok/Shorts) videos: TikTok's own UI covers the bottom
+             # ~20%, and burned-in captions there usually sit higher up
+             "caption_bottom_v": 24, "blur_bottom_v": 20, "blur_height_v": 12}
 _RANGES = {"caption_size": (3, 10), "caption_bottom": (0, 40),
-           "blur_bottom": (0, 60), "blur_height": (4, 40)}
+           "blur_bottom": (0, 60), "blur_height": (4, 40),
+           "caption_bottom_v": (0, 60), "blur_bottom_v": (0, 70), "blur_height_v": (4, 40)}
 try:
     _saved = json.loads(SETTINGS_FILE.read_text())
     if isinstance(_saved.get("max_minutes"), int) and 1 <= _saved["max_minutes"] <= MAX_MINUTES_LIMIT:
@@ -352,16 +356,21 @@ def _voice_and_mux(job):
                 "size": _settings["logo_size"] / 100}
         jlog(job, f"adding logo ({_settings['logo_position']}, {_settings['logo_size']}%)")
     captions = blur = None
+    try:
+        vw, vh = video_size(src)
+    except Exception:  # noqa: BLE001
+        vw, vh = 1920, 1080
+    sfx = "_v" if vh > vw else ""        # portrait video → its own positions
     if job.get("blur"):
-        blur = {"bottom": _settings["blur_bottom"] / 100, "height": _settings["blur_height"] / 100}
-        jlog(job, f"blurring original captions (bottom {_settings['blur_bottom']}%, "
-                  f"{_settings['blur_height']}% tall)")
+        bb, bh = _settings["blur_bottom" + sfx], _settings["blur_height" + sfx]
+        blur = {"bottom": bb / 100, "height": bh / 100}
+        jlog(job, f"blurring original captions ({'portrait' if sfx else 'landscape'}: "
+                  f"bottom {bb}%, {bh}% tall)")
     if job.get("captions"):
         try:
-            vw, vh = video_size(src)
             lst, strip_h = render_captions(cues, vw, vh, d / "caps", _settings["caption_size"])
             captions = {"list": lst, "height": strip_h,
-                        "bottom": _settings["caption_bottom"] / 100}
+                        "bottom": _settings["caption_bottom" + sfx] / 100}
             jlog(job, f"burning {len(cues)} Burmese captions")
         except Exception as e:  # noqa: BLE001 - never lose the dub over captions
             jlog(job, f"captions skipped: {e}")
@@ -694,6 +703,8 @@ def admin_get_settings():
                    logo_size=_settings["logo_size"], caption_size=_settings["caption_size"],
                    caption_bottom=_settings["caption_bottom"],
                    blur_bottom=_settings["blur_bottom"], blur_height=_settings["blur_height"],
+                   caption_bottom_v=_settings["caption_bottom_v"],
+                   blur_bottom_v=_settings["blur_bottom_v"], blur_height_v=_settings["blur_height_v"],
                    disk_free_gb=round(du.free / 1e9, 1), disk_total_gb=round(du.total / 1e9, 1),
                    jobs_gb=round(jobs_bytes / 1e9, 2))
 

@@ -102,9 +102,10 @@ async function loadSettings() {
     $('#logosize').value = j.logo_size;
     $('#logosizev').textContent = j.logo_size + '%';
     showLogo(j.has_logo);
-    [['capsize', j.caption_size], ['capbottom', j.caption_bottom], ['blurbottom', j.blur_bottom], ['blurheight', j.blur_height]]
-      .forEach(([id, v]) => { $('#' + id).value = v; $('#' + id + 'v').textContent = v + '%'; });
-    drawBlurPreview();
+    $('#capsize').value = j.caption_size; $('#capsizev').textContent = j.caption_size + '%';
+    pos.h = { capbottom: j.caption_bottom, blurbottom: j.blur_bottom, blurheight: j.blur_height };
+    pos.v = { capbottom: j.caption_bottom_v, blurbottom: j.blur_bottom_v, blurheight: j.blur_height_v };
+    showOrient();
     $('#setnote').textContent = `🖴 Disk: ${j.disk_free_gb} GB လွတ်သေး / ${j.disk_total_gb} GB · ` +
       `jobs ဖိုင်တွေ ${j.jobs_gb} GB (၂၄ နာရီနေရင် အလိုလို ဖျက်တယ်) · ဖိုင်အရွယ်အစား အများဆုံး ${j.max_mb} MB (.env ထဲက DUBLAB_MAX_MB)`;
   } catch (e) { /* ignore */ }
@@ -117,8 +118,9 @@ $('#setsave').addEventListener('click', async () => {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ max_minutes: +$('#maxmin').value, outro: $('#outroin').value, channel_name: $('#chanin').value,
         logo_position: $('#logopos').value, logo_size: +$('#logosize').value,
-        caption_size: +$('#capsize').value, caption_bottom: +$('#capbottom').value, blur_bottom: +$('#blurbottom').value,
-        blur_height: +$('#blurheight').value }),
+        caption_size: +$('#capsize').value,
+        caption_bottom: +pos.h.capbottom, blur_bottom: +pos.h.blurbottom, blur_height: +pos.h.blurheight,
+        caption_bottom_v: +pos.v.capbottom, blur_bottom_v: +pos.v.blurbottom, blur_height_v: +pos.v.blurheight }),
     });
     const j = await r.json().catch(() => ({}));
     msg.textContent = r.ok ? `✅ သိမ်းပြီးပြီ — ${j.max_minutes} မိနစ်အထိ လက်ခံမယ်` : (j.error || 'သိမ်းမရဘူး');
@@ -136,6 +138,20 @@ function showLogo(has) {
   img.hidden = !has; $('#logonone').hidden = has; $('#logodel').hidden = !has;
   if (has) img.src = '/admin/api/logo?key=' + encodeURIComponent(key) + '&t=' + Date.now();
 }
+// caption / blur positions: one set for landscape (YouTube), one for portrait (TikTok)
+const pos = { h: {}, v: {} };
+let orient = 'h';
+function showOrient() {
+  document.querySelectorAll('.orient .mini').forEach((b) => b.classList.toggle('on', b.dataset.o === orient));
+  ['capbottom', 'blurbottom', 'blurheight'].forEach((id) => {
+    $('#' + id).value = pos[orient][id]; $('#' + id + 'v').textContent = pos[orient][id] + '%';
+  });
+  $('#blurprev').classList.toggle('v', orient === 'v');
+  drawBlurPreview();
+}
+document.querySelectorAll('.orient .mini').forEach((b) => b.addEventListener('click', () => {
+  orient = b.dataset.o; showOrient();
+}));
 function drawBlurPreview() {
   const b = +$('#blurbottom').value, h = +$('#blurheight').value;
   const band = $('#blurband');
@@ -143,6 +159,7 @@ function drawBlurPreview() {
 }
 ['capsize', 'capbottom', 'blurbottom', 'blurheight'].forEach((id) => $('#' + id).addEventListener('input', () => {
   $('#' + id + 'v').textContent = $('#' + id).value + '%';
+  if (id !== 'capsize') pos[orient][id] = +$('#' + id).value;
   drawBlurPreview();
 }));
 $('#logosize').addEventListener('input', () => ($('#logosizev').textContent = $('#logosize').value + '%'));

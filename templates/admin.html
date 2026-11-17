@@ -72,6 +72,10 @@
       <span>📝 Caption စာလုံး အရွယ်</span>
       <span class="setinput"><input type="range" id="capsize" min="3" max="10" step="0.5"> <b id="capsizev">5.5%</b></span>
     </label>
+    <div class="orient" role="tablist">
+      <button type="button" class="mini on" data-o="h">🖥️ YouTube <span class="dim">(ဘေးလိုက်)</span></button>
+      <button type="button" class="mini" data-o="v">📱 TikTok <span class="dim">(ဒေါင်လိုက်)</span></button>
+    </div>
     <label class="setrow" for="capbottom">
       <span>📝 Caption နေရာ <span class="dim">(အောက်ခြေကနေ · blur မသုံးရင်)</span></span>
       <span class="setinput"><input type="range" id="capbottom" min="0" max="40" step="1"> <b id="capbottomv">8%</b></span>
@@ -84,7 +88,7 @@
       <span>🌫️ Blur အမြင့်</span>
       <span class="setinput"><input type="range" id="blurheight" min="4" max="40" step="1"> <b id="blurheightv">16%</b></span>
     </label>
-    <div class="blurprev" aria-hidden="true"><div class="blurband" id="blurband"><span>မြန်မာ caption</span></div></div>
+    <div class="blurprev" id="blurprev" aria-hidden="true"><div class="blurband" id="blurband"><span>မြန်မာ caption</span></div></div>
     <p class="note left" id="setnote">–</p>
     <button class="cta" id="setsave">💾 သိမ်းမယ်</button>
     <p class="note" id="setmsg" hidden></p>
