@@ -185,3 +185,11 @@ textarea:focus{outline:none;border-color:var(--p1)}
 .tg{margin-top:18px;border-top:1px solid var(--card-br);padding-top:14px;display:flex;flex-direction:column;gap:10px}
 .tg h3{font-size:15px;margin:0}
 footer a{color:inherit}
+
+/* history: last 5 jobs */
+.hist{margin-top:18px}
+.hist h3{font-size:14px;margin:0 0 8px}
+.histrow{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;margin:0 0 8px;text-align:left;padding:10px 14px}
+.histrow .hname{font-weight:600;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.histrow .hstate{font-size:12px}
+.histrow:disabled{opacity:.55;cursor:default}

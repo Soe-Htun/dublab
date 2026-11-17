@@ -645,7 +645,7 @@ def separate_music(src_video, job_dir):
 
 
 def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
-        captions=None, blur=None, keyframes=None, lead=0.0):
+        captions=None, blur=None, keyframes=None, lead=0.0, tail=0.0, intro_img=None):
     """Combine picture + dub track.
 
     bg_wav: music/effects with the original voices removed (separate_music).
@@ -660,12 +660,23 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
     blur: optional dict(bottom=fraction, height=fraction) — blurs a full-width
     band (to hide burned-in original captions); captions are centred on it.
     lead: seconds to hold the first frame before the video starts (intro).
+    tail: seconds to hold the last frame after the video ends, so a dub that
+    runs past the picture (the channel outro) is still seen and heard.
+    intro_img: optional image (the cover) shown full-frame during the lead
+    instead of the held first frame, which is often black.
     """
     # Burned-in credit watermark, bottom-right; scale guard keeps even dims
     # for yuv420p.
     vf = "scale=trunc(iw/2)*2:trunc(ih/2)*2,"
+    pad = []
     if lead:
-        vf = f"tpad=start_duration={lead:.3f}:start_mode=clone," + vf
+        pad.append(f"start_duration={lead:.3f}:start_mode=clone")
+    if tail:
+        pad.append(f"stop_duration={tail:.3f}:stop_mode=clone")
+    if pad:
+        vf = f"tpad={':'.join(pad)}," + vf
+    if not lead:
+        intro_img = None
     watermark = bool(WATERMARK_TEXT and _drawtext_ok())
     if watermark:
         font = f"fontfile={_WM_FONT}:" if os.path.exists(_WM_FONT) else ""
@@ -697,7 +708,12 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
     logo_idx = 2 + (1 if bg_in else 0)
     cap_in = ["-f", "concat", "-safe", "0", "-i", str(captions["list"])] if captions else []
     cap_idx = logo_idx + (1 if logo else 0)
-    draw = bool(logo or captions or blur)
+    intro_in = (["-loop", "1", "-framerate", "25", "-t", f"{lead:.3f}", "-i", str(intro_img)]
+                if intro_img else [])
+    intro_idx = cap_idx + (1 if captions else 0)
+    if intro_img:
+        iw, ih = video_size(src_video)
+    draw = bool(logo or captions or blur or intro_img)
 
     def _cmd(copy_video, encoder="libx264"):
         if copy_video:   # nothing to draw: keep the original picture, no re-encode
@@ -714,9 +730,15 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
                     parts.append(f"[bb]crop=iw:ih*{bh:.4f}:0:{by},boxblur=luma_radius=18:luma_power=3[bz]")
                     parts.append(f"[bm][bz]overlay=0:H*{1 - b0 - bh:.4f}[s1]")
                     cur = "s1"
+                if intro_img:     # the cover over the held intro frame (it has the logo already)
+                    parts.append(f"[{intro_idx}:v]scale={iw}:{ih}:force_original_aspect_ratio=decrease,"
+                                 f"pad={iw}:{ih}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[ic]")
+                    parts.append(f"[{cur}][ic]overlay=0:0:enable='lt(t,{lead:.3f})':eof_action=pass[si]")
+                    cur = "si"
                 if logo:
                     parts.append(f"[{logo_idx}:v]scale={lw}:-1,format=rgba[lg]")
-                    parts.append(f"[{cur}][lg]overlay={x}:{y}[s2]")
+                    parts.append(f"[{cur}][lg]overlay={x}:{y}"
+                                 + (f":enable='gte(t,{lead:.3f})'" if intro_img else "") + "[s2]")
                     cur = "s2"
                 if captions:
                     ch = int(captions["height"])
@@ -740,13 +762,13 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
                 enc += ["-force_key_frames", ",".join(f"{t:.3f}" for t in keyframes)]
             vid = ["-map", "[v]", *enc]
         return ["ffmpeg", "-y", "-v", "error", "-i", str(src_video), "-i", str(dub_wav),
-                *bg_in, *logo_in, *cap_in, *fc, *vid, *amap, "-c:a", "aac", "-b:a", "128k",
+                *bg_in, *logo_in, *cap_in, *intro_in, *fc, *vid, *amap, "-c:a", "aac", "-b:a", "128k",
                 # No -shortest: the finish-the-sentence rule lets the tail of the
                 # last utterance run a little past the video end; -shortest would
                 # cut it off again.
                 "-movflags", "+faststart", str(out_mp4)]
 
-    if not watermark and not draw and not keyframes and not lead:
+    if not watermark and not draw and not keyframes and not lead and not tail:
         try:
             run(_cmd(copy_video=True))
             return

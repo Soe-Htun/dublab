@@ -214,6 +214,36 @@ for _old in JOBS.iterdir():
         pass
 
 
+# what a finished job needs to be shown again (history, after a restart)
+_META_KEYS = ("id", "name", "title_mm", "status", "stage", "pct", "error", "ext", "parts",
+              "part_times", "covers", "cover_pick", "created", "owner", "recap", "tg", "url")
+
+
+def _save_meta(job):
+    try:
+        meta = {k: job[k] for k in _META_KEYS if k in job}
+        if (meta.get("tg") or {}).get("state") == "sending":   # can't resume a send
+            meta["tg"] = {"state": "none"}
+        (job["dir"] / "job.json").write_text(json.dumps(meta, ensure_ascii=False))
+    except (OSError, TypeError, ValueError):
+        pass
+
+
+def _load_saved_jobs():
+    """Finished jobs from before a restart come back (until the TTL sweep)."""
+    for f in JOBS.glob("*/job.json"):
+        try:
+            meta = json.loads(f.read_text())
+            if meta.get("status") == "done" and time.time() - meta.get("created", 0) < TTL:
+                meta["dir"] = f.parent
+                jobs.setdefault(meta["id"], meta)
+        except (OSError, ValueError, KeyError):
+            pass
+
+
+_load_saved_jobs()
+
+
 def sweep_old():
     now = time.time()
     for jid, job in list(jobs.items()):
@@ -490,14 +520,9 @@ def _voice_and_mux(job):
             jlog(job, f"burning {len(cues)} Burmese captions")
         except Exception as e:  # noqa: BLE001 - never lose the dub over captions
             jlog(job, f"captions skipped: {e}")
-    cuts = split_points(cues, total, job.get("split") or 0)
-    if cuts:
-        jlog(job, f"splitting into {len(cuts) + 1} parts of ~{job['split']} min "
-                  f"(cuts at {', '.join(f'{c / 60:.1f}' for c in cuts)} min)")
-    mux(src, dub_wav, d / "dubbed.mp4", bg_wav=bg_wav, bg_volume=BG_VOLUME, logo=logo,
-        captions=captions, blur=blur, keyframes=cuts or None, lead=lead)
     if job.get("cover") and job.get("title_mm"):
-        # one cover for the whole film — every part uses the same one
+        # one cover for the whole film — every part uses the same one; made
+        # before the mux so cover 1 can also be the picture under the intro
         try:
             covers = make_covers(src, job["title_mm"], d, job["total"] * 0.06, job["total"] * 0.7,
                                  portrait=bool(sfx), blur=blur,
@@ -507,6 +532,25 @@ def _voice_and_mux(job):
             jlog(job, f"made {len(covers)} cover images")
         except Exception as e:  # noqa: BLE001 - never lose the dub over a cover
             jlog(job, f"cover skipped: {e}")
+    intro_img = d / job["covers"][0] if lead and job.get("covers") else None
+    # the outro (or the last line) can run past the picture: hold the last
+    # frame until the voice is done, or players stop before it is heard
+    tail = 0.0
+    try:
+        over = probe_duration(dub_wav) - total
+        if over > 0.05:
+            tail = over + 0.4
+            total += tail
+            jlog(job, f"holding the last frame {tail:.1f}s for the end of the voice")
+    except Exception:  # noqa: BLE001
+        pass
+    cuts = split_points(cues, total, job.get("split") or 0)
+    if cuts:
+        jlog(job, f"splitting into {len(cuts) + 1} parts of ~{job['split']} min "
+                  f"(cuts at {', '.join(f'{c / 60:.1f}' for c in cuts)} min)")
+    mux(src, dub_wav, d / "dubbed.mp4", bg_wav=bg_wav, bg_volume=BG_VOLUME, logo=logo,
+        captions=captions, blur=blur, keyframes=cuts or None, lead=lead, tail=tail,
+        intro_img=intro_img)
     if cuts:
         job.update(stage="split", pct=97)
         jlog(job, "cutting the parts…")
@@ -527,6 +571,7 @@ def _voice_and_mux(job):
     if job.get("telegram"):          # mark before "done" so the page never offers a 2nd send
         job["tg"] = {"state": "sending", "error": "", "pct": 0}
     job.update(status="done", stage="done", pct=100)
+    _save_meta(job)
     jlog(job, "done ✅")
     if job.get("telegram"):
         threading.Thread(target=_telegram_send, args=(job,), daemon=True).start()
@@ -719,6 +764,7 @@ def job_status(jid):
                    stage_pct=stage_pct, parts=parts,
                    covers=len(job.get("covers") or []) if job["status"] == "done" else 0,
                    cover_pick=job.get("cover_pick", 1), title=job.get("title_mm", ""),
+                   name=job.get("name", ""), created=int(job.get("created", 0)),
                    label=STAGE_LABEL.get(job["stage"], job["stage"]),
                    error=job["error"])
 
@@ -857,6 +903,40 @@ def _admin_ok():
     import hmac
     given = request.args.get("key") or request.headers.get("X-Admin-Key") or ""
     return bool(ADMIN_KEY) and hmac.compare_digest(given, ADMIN_KEY)
+
+
+HISTORY_MAX = 10
+
+
+@app.get("/admin/api/history")
+def admin_api_history():
+    """The newest jobs on the server (finished ones survive restarts for 24 h),
+    so a result lost to a refresh or a dropped connection can be fetched again."""
+    if not _admin_ok():
+        return jsonify(error="not found"), 404
+    rows = []
+    for jid, job in sorted(jobs.items(), key=lambda kv: kv[1].get("created", 0), reverse=True):
+        if len(rows) >= HISTORY_MAX:
+            break
+        done = job["status"] == "done"
+        outs = []
+        if done:
+            try:
+                outs = [{"n": i, "name": name, "mb": round(path.stat().st_size / 1048576)}
+                        for i, (path, name) in enumerate(_outputs(job), 1) if path.exists()]
+            except OSError:
+                outs = []
+        tg = job.get("tg") or {}
+        rows.append({"id": jid, "name": job.get("name") or "", "title": job.get("title_mm") or "",
+                     "url": job.get("url") or "", "created": int(job.get("created", 0)),
+                     "status": job["status"], "pct": job.get("pct", 0),
+                     "label": STAGE_LABEL.get(job["stage"], job["stage"]), "error": job.get("error", ""),
+                     "recap": job.get("recap") or 0, "outputs": outs,
+                     "covers": len(job.get("covers") or []) if done else 0,
+                     "cover_pick": job.get("cover_pick", 1),
+                     "tg": tg.get("state", "none"), "tg_pct": tg.get("pct", 0),
+                     "tg_error": tg.get("error", "")})
+    return jsonify(jobs=rows, ttl_hours=TTL // 3600)
 
 
 @app.get("/admin/api/reviews")
@@ -1114,10 +1194,10 @@ def telegram_disconnect():
     return jsonify(ok=True)
 
 
-def _cover_thumb(job):
+def _cover_thumb(job, n=None):
     """The chosen cover, shrunk to Telegram's thumbnail size (≤320 px JPEG)."""
     covers = job.get("covers") or []
-    n = job.get("cover_pick", 1)
+    n = n or job.get("cover_pick", 1)
     if not covers or not 1 <= n <= len(covers):
         return None
     src, out = job["dir"] / covers[n - 1], job["dir"] / f"tg_cover{n}.jpg"
@@ -1190,9 +1270,9 @@ def _telegram_prepare(job):
         _telegram_send(job)
 
 
-def _send_one(job, chat, path, name, caption, prog):
+def _send_one(job, chat, path, name, caption, prog, cover_n=None):
     size = path.stat().st_size
-    thumb = _cover_thumb(job) or _video_thumb(path, job["dir"] / f"tg_thumb_{path.stem}.jpg")
+    thumb = _cover_thumb(job, cover_n) or _video_thumb(path, job["dir"] / f"tg_thumb_{path.stem}.jpg")
     if size <= telegram.MAX_UPLOAD:
         telegram.send_file(chat, path, name, caption=caption, thumb=thumb)
         return "file"
@@ -1227,17 +1307,20 @@ def _telegram_send(job):
             raise telegram.TelegramError("Telegram not connected (admin page → Telegram)")
         outs = _outputs(job)
         hows = []
+        cover_n = job.get("cover_pick", 1)     # fixed for this send: every part gets the same cover
+        tg["cover"] = cover_n
         for i, (path, name) in enumerate(outs):
             jlog(job, f"sending {name} to Telegram ({path.stat().st_size / 1048576:.0f} MB)…")
             caption = f"🎬 {name[:-4]}" + (f"  ({i + 1}/{len(outs)})" if len(outs) > 1 else "")
             def prog(f, i=i):
                 tg["pct"] = int((i + f) * 100 / len(outs))
-            hows.append(_send_one(job, chat, path, name, caption, prog))
+            hows.append(_send_one(job, chat, path, name, caption, prog, cover_n))
             tg["pct"] = int((i + 1) * 100 / len(outs))
             tg["sent"] = i + 1
         tg["how"] = "link" if "link" in hows else "file"
         tg["state"] = "done"
         jlog(job, f"sent {len(outs)} file(s) to Telegram ({tg['how']})")
+        _save_meta(job)
     except Exception as e:  # noqa: BLE001 - shown in the UI
         tg.update(state="failed", error=str(e)[:300])
         jlog(job, f"Telegram send failed: {e}")
@@ -1306,6 +1389,7 @@ def pick_cover(jid):
     if not job or not 1 <= n <= len(job.get("covers") or []):
         return jsonify(error="မရှိဘူး"), 404
     job["cover_pick"] = n
+    _save_meta(job)
     return jsonify(ok=True)
 
 
