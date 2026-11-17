@@ -67,7 +67,7 @@ Requirements: Python 3.11+, `ffmpeg`, and a free
 [Gemini API key](https://aistudio.google.com/apikey).
 
 ```bash
-git clone https://github.com/khantbhoneko36-commits/dublab.git
+git clone https://github.com/Soe-Htun/dublab.git
 cd dublab
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
@@ -156,6 +156,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Maintainer
 
-Built and maintained by **Khant Bhone Ko** ([@khantbhoneko36-commits](https://github.com/khantbhoneko36-commits)) —
-sole maintainer: releases, issue triage, and the production deployment.
-More projects: https://pro.kxant.org
+Maintained by **Soe Htun** ([@Soe-Htun](https://github.com/Soe-Htun)).
