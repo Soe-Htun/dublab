@@ -426,10 +426,14 @@ def write_recap(lines, minutes, api_key, lang=None, channel=None, min_minutes=0,
 # The model sometimes slips Thai (or other scripts) into Burmese words, e.g.
 # "တပ်စည်းဆราบ". Such lines are sent back once to be rewritten; anything still
 # foreign after that is dropped so it is never spoken or burned in.
-_FOREIGN = re.compile("[\u0E00-\u0EFF\u1780-\u17FF\u0900-\u09FF\u0B80-\u0BFF"
-                      "\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF\u0400-\u04FF\u0600-\u06FF]")
+# Anything that is not Burmese, Latin (English words, the channel name), digits or
+# common punctuation counts: the model has slipped in Thai, Chinese, Punjabi, Kannada,
+# Telugu, Sinhala, Hebrew, Armenian… letters, which the font shows as □.
+_FOREIGN = re.compile("[^\u0000-\u024F\u1000-\u109F\uA9E0-\uA9FF\uAA60-\uAA7F"
+                      "\u2000-\u206F\u20A0-\u20CF\u2100-\u214F]")
 
-FIX_PROMPT = """These Burmese lines wrongly contain characters from other scripts (e.g. Thai, Chinese).
+FIX_PROMPT = """These Burmese lines wrongly contain characters from other scripts (e.g. Thai, Chinese, Hindi,
+Punjabi, Kannada, Telugu, Sinhala, Hebrew).
 Rewrite each line in correct Burmese (Myanmar script) only, keeping the meaning and style.
 Names may stay in Latin letters. Output exactly one line per input as "N|||line". Nothing else."""
 
