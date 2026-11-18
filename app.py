@@ -23,7 +23,7 @@ from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tt
                  build_recap_video, make_covers, mux, synthesize, probe_duration, probe_url, separate_music, split_points,
                  split_video, transcribe)
 from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, pick_cover_frames, translate_lines,
-                    write_cover_scene, write_intro, write_recap, write_title)
+                    write_cover_scene, write_intro, write_recap, write_title, movie_name)
 
 # Gemini TTS key rotation.
 # GEMINI_TTS_API_KEYS is comma-separated; falls back to the single GEMINI_API_KEY.
@@ -445,8 +445,18 @@ def _transcribe_and_translate(jid, job):
             jlog(job, f"intro skipped: {e}")
     if job.get("cover"):
         try:
-            job["title_mm"] = write_title([u["text"] for u in utter], api_key)
-            jlog(job, f"cover title: {job['title_mm']}")
+            # a known film keeps its real name on the cover, so people can search for it
+            name = ""
+            try:
+                name = movie_name(job.get("name") or "", api_key)
+            except Exception as e:  # noqa: BLE001 - fall back to a made-up Burmese title
+                jlog(job, f"movie name lookup failed: {str(e)[:120]}")
+            if name:
+                job["title_mm"] = name
+                jlog(job, f"cover title (the movie's name): {name}")
+            else:
+                job["title_mm"] = write_title([u["text"] for u in utter], api_key)
+                jlog(job, f"cover title: {job['title_mm']}")
             if AI_COVER:
                 try:
                     job["cover_scene"] = write_cover_scene([u["text"] for u in utter], api_key)

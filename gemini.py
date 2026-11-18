@@ -240,6 +240,28 @@ Rules:
 - Output only the title."""
 
 
+MOVIE_NAME_PROMPT = """Below is the name a video was shared under (a Telegram caption, file name or YouTube title).
+If it names a real movie or series, give that movie's name the way people search for it — in its usual Latin
+spelling, with the uploader's tricks undone: letters split by dashes, dots or spaces joined back
+("R-R-R" → "RRR", "K-i-n-g O-f B-e-g-g-a-r-s" → "King of Beggars", "Na..... ay..... ak" → "Nayak"), and without
+years, quality tags, language/subtitle notes (e.g. "မြန်မာစာတန်းထိုး", "Hindi", "HD", "1080p", "Full Movie"),
+channel names, hashtags and emojis.
+If it does not clearly name a movie (e.g. "video_123", a random sentence, a channel's description), answer NONE.
+Answer with the name only (or NONE)."""
+
+
+def movie_name(shared_as, api_key):
+    """The movie's real name from what it was shared as, or "" when unknown."""
+    shared_as = re.sub(r"\s+", " ", shared_as or "").strip()
+    if not shared_as:
+        return ""
+    raw = _call(MOVIE_NAME_PROMPT + "\n\nShared as: " + shared_as[:300], api_key, max_tokens=64)
+    name = raw.strip().splitlines()[0].strip().strip('"“”\'`*').strip() if raw.strip() else ""
+    if not name or name.upper().startswith("NONE") or len(name) > 60:
+        return ""
+    return name
+
+
 def write_title(lines, api_key, max_chars=6000):
     text, used = [], 0
     for ln in lines:
