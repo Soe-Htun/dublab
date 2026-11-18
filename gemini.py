@@ -29,12 +29,14 @@ PARALLEL = 4     # chunks translated at the same time
 NAME_RULE = """- CHARACTER NAMES: do NOT transliterate foreign character names. Give every character a familiar Burmese name,
   and never refer to a main character only as "ဒီကောင်လေး", "ဒီကောင်မလေး", "သူ", etc. when a name fits. Preferred names:
   young man / boy: ဂွေးတို, ကျော်ကြီး, လင်ဖူန်း, စိုးကြီး,အောင်လေး
-  young woman / girl: ဂွက်ထော်, မြမြ, ရှောင်မေ, ဖြူဖြူထွေး, လှလှ
+  young woman / girl: ဂွက်ထော်, မြမြ, ရှောင်မေ, ဖြူဖြူထွေး, လှလှ — and when there are more girls (e.g. one man
+    and many girls): နှင်းနှင်း, ခိုင်လေး, ပိုပို, နှင်းမြ, ချယ်ရီ, သီသီ, ဇင်ဇင်, ချစ်ချစ်, ဝါဝါ, ယုယု, စုစု, အိအိ, နွေနွေ
   older man: ကျော်ရဲ, ကျော်မျိုး, တင်မောင်
   older woman: ဒေါ်မြ, ဒေါ်လှ, ဂျမ်းစိန်
   little boy (child): လပ်ကီး, ဘနားနား
   baby / little girl: ဂျက်မ, ဂူးဂူး
-  Use these first, in this order, for the most important characters; for more characters pick other short, common Burmese names.
+  Use these first, in this order, for the most important characters; for more characters pick other SHORT, common
+  Burmese names (one or two syllables, often doubled like နှင်းနှင်း) that are easy to tell apart.
   Each character keeps the SAME name every time; never give two characters the same name.
   FAMILY of a main character (the hero OR the heroine, e.g. "ဂွက်ထော်ရဲ့ အမေ"): a parent or relative with a small
   part gets NO name of their own — call them by the
