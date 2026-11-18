@@ -71,7 +71,7 @@ $('#go').addEventListener('click', () => {
   if (tgMsg) fd.append('tg_msg', tgMsg); else if (ytUrl) fd.append('url', ytUrl); else fd.append('video', f);
   fd.append('direction', direction); fd.append('voice', voice);
   fd.append('review', $('#reviewchk').checked ? '1' : '0');
-  fd.append('keep_bg', $('#bgchk').checked ? '1' : '0');
+  fd.append('keep_bg', '0');          // background music option removed
   fd.append('model', model);
   fd.append('outro', $('#outrochk') && $('#outrochk').checked ? '1' : '0');
   fd.append('intro', $('#introchk').checked ? '1' : '0');
@@ -116,7 +116,7 @@ function showProgress(jid) {
   const isRecap = $('#recapchk').checked;
   if (rc) rc.hidden = !isRecap;
   const mu = document.querySelector('#stages li[data-s="music"]');
-  if (mu) mu.hidden = isRecap || !$('#bgchk').checked;
+  if (mu) mu.hidden = true;           // no background-music step any more
   const order = ['download', 'audio', 'transcribe', 'translate', 'review', 'music', 'voice', 'recap', 'mux', 'split'];
   addRings();
   const stopLog = startLiveLog(jid);
