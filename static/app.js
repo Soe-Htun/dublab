@@ -105,7 +105,9 @@ $('#go').addEventListener('click', () => {
   xhr.send(fd);
 });
 
+const JOBKEY = 'dublab_job';
 function showProgress(jid) {
+  try { localStorage.setItem(JOBKEY, jid); } catch (e) {}    // a refresh brings this job back
   ['card-upload', 'card-opts', 'card-review', 'card-result', 'card-error'].forEach((id) => ($('#' + id).hidden = true));
   $('#card-progress').hidden = false;
   $('#card-progress').scrollIntoView({ behavior: 'smooth' });
@@ -295,8 +297,8 @@ $('#resume').addEventListener('click', async () => {
   btn.disabled = false;
 });
 
-$('#again').addEventListener('click', () => location.reload());
-$('#retry').addEventListener('click', () => location.reload());
+$('#again').addEventListener('click', () => { try { localStorage.removeItem(JOBKEY); } catch (e) {} location.reload(); });
+$('#retry').addEventListener('click', () => { try { localStorage.removeItem(JOBKEY); } catch (e) {} location.reload(); });
 
 // ---- reviews ----
 function makeStars(id) {
@@ -559,3 +561,20 @@ syncRecap();
 
 // 🖼️ title: the text box only matters while "add a title" is ticked
 $('#titlechk').addEventListener('change', () => { $('#covertitle_in').hidden = !$('#titlechk').checked; });
+
+// after a refresh: bring back the job this browser was following while it is still
+// running, waiting for review, or failed (▶️ resume); a finished one is forgotten
+(async () => {
+  let jid = null;
+  try { jid = localStorage.getItem(JOBKEY); } catch (e) {}
+  if (!jid) return;
+  try {
+    const r = await fetch('/api/jobs/' + jid);
+    if (!r.ok) { localStorage.removeItem(JOBKEY); return; }
+    const j = await r.json();
+    if (j.status === 'processing' || j.status === 'queued') showProgress(jid);
+    else if (j.status === 'review') showReview(jid);
+    else if (j.status === 'done') localStorage.removeItem(JOBKEY);   // finished (sent to Telegram): fresh upload page
+    else if (j.status === 'failed') showError(j.error || 'အမှားရှိတယ်', j.resumable ? jid : null);
+  } catch (e) { /* server down: stay on the upload page */ }
+})();
