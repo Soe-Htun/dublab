@@ -1048,7 +1048,11 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
                     b0, bh = float(blur["bottom"]), float(blur["height"])
                     by = f"ih*{1 - b0 - bh:.4f}"
                     parts.append(f"[{cur}]split[bm][bb]")
-                    parts.append(f"[bb]crop=iw:ih*{bh:.4f}:0:{by},boxblur=luma_radius=18:luma_power=3[bz]")
+                    # strong blur (radius grows with the band, chroma too) so the old letters
+                    # can't be read through it
+                    parts.append(f"[bb]crop=iw:ih*{bh:.4f}:0:{by},"
+                                 "boxblur=luma_radius='min(h/3,48)':luma_power=4:"
+                                 "chroma_radius='min(ch/3,24)':chroma_power=4[bz]")
                     parts.append(f"[bm][bz]overlay=0:H*{1 - b0 - bh:.4f}[s1]")
                     cur = "s1"
                 for k, (x0, y0, x1, y1) in enumerate(hide or []):   # the video's own logos
@@ -1387,8 +1391,16 @@ def _grab(video, t, w, h, hide=None):
 
 
 def _layout(n, W, H, portrait):
-    """Panel boxes (x, y, w, h) for n = 3..5 photos. 4 = an even 2x2 grid."""
+    """Panel boxes (x, y, w, h) for n = 2..5 photos. 4 = an even 2x2 grid;
+    2 = side by side (landscape) or one above the other (portrait)."""
     g = 8
+    if n == 2:
+        g = 6
+        if portrait:
+            h2 = (H - g) // 2
+            return [(0, 0, W, h2), (0, h2 + g, W, H - h2 - g)]
+        w2 = (W - g) // 2
+        return [(0, 0, w2, H), (w2 + g, 0, W - w2 - g, H)]
     if n == 4:
         g = 6
         w2, h2 = (W - g) // 2, (H - g) // 2
@@ -1460,15 +1472,15 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
     """3–5 frames in panels with a big gold Burmese title across the bottom."""
     from PIL import Image, ImageEnhance, ImageFilter
     W, H = (1080, 1920) if portrait else (1280, 720)
-    n = max(3, min(5, len(times)))
+    n = 2 if len(times) == 2 else max(3, min(5, len(times)))
     times = (list(times) * 5)[:n]
-    canvas = Image.new("RGB", (W, H), (236, 178, 60) if n == 4 else (12, 8, 6))   # 2x2: thin gold lines
+    canvas = Image.new("RGB", (W, H), (236, 178, 60) if n in (2, 4) else (12, 8, 6))   # 2 / 2x2: thin gold lines
     for (x, y, w, h), t in zip(_layout(n, W, H, portrait), times):
         fr = _grab(video, t, w, h, hide)
         if blur:                                # hide burned-in captions inside each panel
             b0, bh = float(blur["bottom"]), float(blur["height"])
             box = (0, int(h * (1 - b0 - bh)), w, int(h * (1 - b0)))
-            fr.paste(fr.crop(box).filter(ImageFilter.GaussianBlur(14)), box[:2])
+            fr.paste(fr.crop(box).filter(ImageFilter.GaussianBlur(24)), box[:2])
         fr = ImageEnhance.Color(ImageEnhance.Contrast(fr).enhance(1.15)).enhance(1.2)
         canvas.paste(fr, (x, y))
     img = canvas.convert("RGBA")
@@ -1513,6 +1525,24 @@ def sample_frames(video, start, end, count=8, width=640):
     return out
 
 
+def _arrange(hero, others, layout=4):
+    """Photos for the cover. 4: two of the main character on one diagonal
+    (top-left, bottom-right) and two others on the other; 2: the main character
+    and one other. Short of either kind, the other kind fills in."""
+    def take(main, spare, k):
+        got = main[:k]
+        return got + [t for t in spare if t not in got][:k - len(got)]
+    if layout == 2:
+        h = take(hero, others, 1)
+        o = take([t for t in others if t not in h], [t for t in hero if t not in h], 1)
+        return (h + o)[:2]
+    h = take(hero, others, 2)
+    o = take([t for t in others if t not in h], [t for t in hero if t not in h], 2)
+    if len(h) == 2 and len(o) == 2:
+        return [h[0], o[0], o[1], h[1]]      # 2x2 order: TL, TR, BL, BR
+    return (h + o)[:4]
+
+
 def _cover_times_by_ai(video, start, end, chooser, samples=30):
     """Sample frames, let `chooser` (the model) pick the main character's
     close-ups and other key characters: returns (hero times, other times)."""
@@ -1526,8 +1556,10 @@ def _cover_times_by_ai(video, start, end, chooser, samples=30):
         if not r.returncode and r.stdout:
             shots.append(r.stdout)
             times.append(t)
-    hero, others = chooser(shots)
-    return [times[i] for i in hero], [times[i] for i in others]
+    got = chooser(shots)
+    hero, others = got[0], got[1]
+    layout = got[2] if len(got) > 2 else 4
+    return [times[i] for i in hero], [times[i] for i in others], layout
 
 
 def render_art_cover(art, title, out_jpg, portrait=False, logo=None, suffix=""):
@@ -1579,12 +1611,12 @@ def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, bl
     pick = None
     if chooser:
         try:
-            hero, others = _cover_times_by_ai(video, start, end, chooser)
+            hero, others, layout = _cover_times_by_ai(video, start, end, chooser)
             if log:
-                log(f"cover photos picked by AI: {len(hero)} of the main character, {len(others)} others")
+                log(f"cover photos picked by AI: {len(hero)} of the main character, {len(others)} others"
+                    f" · {layout}-photo cover")
             if hero or others:
-                lead = (hero or others)[0]
-                pick = ([lead] + [t for t in others + hero if t != lead])[:4]
+                pick = _arrange(hero, others, layout)
         except Exception as e:  # noqa: BLE001 - fall back to the frame scores
             if log:
                 log(f"AI cover pick failed ({str(e)[:120]}) — using the sharpest frames")

@@ -459,14 +459,16 @@ def fix_script(lines, api_key):
 COVER_PROMPT = """The numbered frames below (0 to {last}) come from one movie.
 First work out who the MAIN CHARACTER is (the protagonist: the person who appears most and the story is about).
 Then answer with JSON only, no other text:
-{{"hero": [...], "others": [...]}}
+{{"layout": 2 or 4, "hero": [...], "others": [...]}}
+- "layout": 4 (a 2x2 grid) for most movies; 2 (two big photos) when the video is simple — one or two characters,
+  one setting — or there are fewer than 4 good, different frames.
 - "hero": up to 5 frame numbers where the main character's FACE is clearly visible, large and sharp (close-up or medium shot, looking good, dramatic expression is a plus), best first.
 - "others": up to 8 frame numbers, best first, that together show what this movie is ABOUT: its main scenes and setting (e.g. a fishing movie: people fishing, the small boat, the sea; a war movie: soldiers, tanks, battle; a fantasy: the magic, creatures, the kingdom), plus the other important characters (villain, partner, love interest) with their faces visible. Mix scene shots and character shots.
 Never pick dark, blurry, black, fading, crowd-only, landscape-only, logo, title or text frames. A frame may appear in only one list."""
 
 
 def pick_cover_frames(jpegs, api_key):
-    """jpegs: [bytes]. Returns (hero indices, other indices); raises on failure."""
+    """jpegs: [bytes]. Returns (hero indices, other indices, 2 or 4 photos); raises on failure."""
     raw = _call(COVER_PROMPT.format(last=len(jpegs) - 1), api_key, max_tokens=1024,
                 images=[(f"Frame {i}:", b) for i, b in enumerate(jpegs)])
     m = re.search(r"\{.*\}", raw, re.S)
@@ -476,7 +478,8 @@ def pick_cover_frames(jpegs, api_key):
     others = [i for i in dict.fromkeys(ok(data.get("others"))) if i not in hero]
     if not hero and not others:
         raise ValueError("no cover frames picked")
-    return hero, others
+    layout = 2 if str(data.get("layout")).strip() == "2" else 4
+    return hero, others, layout
 
 
 # ---- find the burned-in captions to blur ----

@@ -227,9 +227,9 @@ def _find_blur(job, src, sfx):
         top, bot = band
         # generous margin: a two-line subtitle reaches higher than the
         # sampled frames may show, and outlines/shadows spread a little
-        top, bot = max(0.0, top - 0.06), min(1.0, bot + 0.025)
-        if bot - top < 0.15:                             # at least two lines' worth
-            top = max(0.0, bot - 0.15)
+        top, bot = max(0.0, top - 0.12), min(1.0, bot + 0.035)
+        if bot - top < 0.2:                              # at least two lines' worth, with room to spare
+            top = max(0.0, bot - 0.2)
         jlog(job, f"original captions found at {top * 100:.0f}–{bot * 100:.0f}% of the height — blurring there")
         return {"bottom": 1 - bot, "height": bot - top}
     except Exception as e:  # noqa: BLE001 - never lose the dub over this
@@ -1470,7 +1470,9 @@ def _telegram_send(job):
         hows, sent_covers = [], set()
         for i, (path, name) in enumerate(outs):
             jlog(job, f"sending {name} to Telegram ({path.stat().st_size / 1048576:.0f} MB)…")
-            caption = f"🎬 {name[:-4]}" + (f"  ({i + 1}/{len(outs)})" if len(outs) > 1 else "")
+            which, k = _out_kind(job, i + 1)
+            tag = ("📱 TikTok" if which == "covers_tt" else "📺 YouTube") if job.get("tt") else "🎬"
+            caption = f"{tag} {name[:-4]}" + (f"  ({i + 1}/{len(outs)})" if len(outs) > 1 else "")
             def prog(f, i=i):
                 tg["pct"] = int((i + f) * 100 / len(outs))
             hows.append(_send_one(job, chat, path, name, caption, prog, i + 1))
@@ -1478,7 +1480,8 @@ def _telegram_send(job):
             if cov and cov not in sent_covers:   # the part's cover, full size, to upload to TikTok etc.
                 sent_covers.add(cov)
                 try:
-                    telegram.send_image_file(chat, cov, name[:-4] + " cover.jpg", caption="🖼️ cover")
+                    telegram.send_image_file(chat, cov, name[:-4] + " cover.jpg",
+                                             caption=f"🖼️ {tag.split(' ')[-1] + ' ' if job.get('tt') else ''}cover")
                 except Exception as e:  # noqa: BLE001 - the video itself is what matters
                     jlog(job, f"cover send failed: {e}")
             tg["pct"] = int((i + 1) * 100 / len(outs))
