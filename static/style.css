@@ -144,7 +144,7 @@ textarea:focus{outline:none;border-color:var(--p1)}
 .part .ghost{margin:0;flex:1;text-align:left;padding:11px 14px}
 .part .ghost.on{border-color:var(--p1)}
 .part .dl{flex:0 0 auto;width:auto;padding:11px 16px;margin:0;text-decoration:none}
-.checkrow input{width:18px;height:18px;accent-color:var(--p1)}
+.checkrow input{width:18px;height:18px;flex:0 0 18px;accent-color:var(--p1)}   /* never squeezed by long text */
 .titlerow{margin:4px 0 16px;font-size:14px}
 .titlerow label{display:block}
 .titlerow .titlein{display:block;height:auto;padding:10px 12px;font-size:15px}
