@@ -330,6 +330,22 @@ def sweep_old():
         if now - job["created"] > TTL and job["status"] in ("done", "failed", "review"):
             shutil.rmtree(job["dir"], ignore_errors=True)
             jobs.pop(jid, None)
+    # folders no job knows about: left by a restart in the middle of a job
+    # (the source video, voice clips… — often gigabytes). Give a brand-new
+    # upload a few minutes before its job entry exists.
+    for d in JOBS.iterdir():
+        try:
+            if not d.is_dir() or d.name in jobs:
+                continue
+            # newest write inside (a slow phone upload keeps its file's time fresh)
+            last = max([d.stat().st_mtime] + [f.stat().st_mtime for f in d.iterdir()])
+            if now - last > 600:
+                shutil.rmtree(d, ignore_errors=True)
+        except OSError:
+            pass
+
+
+sweep_old()                     # also right at start-up
 
 
 def process_job(jid):
@@ -348,9 +364,11 @@ def process_job(jid):
         err = clean_err(e)
         jlog(job, f"FAILED: {type(e).__name__}: {err}")
         job.update(status="failed", error=err)
-        # a failed job can't be resumed (🔁 starts over): free the disk now
-        for f in ("input" + job.get("ext", ".mp4"), "audio.wav"):
-            (job["dir"] / f).unlink(missing_ok=True)
+        # a failed job can't be resumed (🔁 starts over): free the disk now —
+        # everything but the log (voice clips, scene cuts, the source…)
+        for f in job["dir"].iterdir():
+            if f.name != "job.log":
+                shutil.rmtree(f, ignore_errors=True) if f.is_dir() else f.unlink(missing_ok=True)
 
 
 def _transcribe_and_translate(jid, job):
