@@ -15,6 +15,7 @@ from flask import Flask, jsonify, redirect, render_template, request, send_file
 import telegram
 
 from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tts, frame_layout, render_frames,
+                 footage, speech_spans,
                  add_outro_tail, caption_y, normalize_logo, render_captions, sample_frames, video_size, write_srt,
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
@@ -504,6 +505,7 @@ def _write_recap(job, utter, lang, api_key):
                          "Gemini က ခဏ ပိတ်ထားတယ် — ၁–၂ မိနစ်နေရင် 🔁 ပြန်စမ်းပါ") from None
     if not beats:
         raise ValueError("Recap ရေးလို့ မရဘူး — ပြန်စမ်းပါ")
+    job["speech"] = speech_spans(utter)     # talking stretches: recap scenes come only from these
     job["utter"] = [{"start": utter[b["from"]]["start"], "end": utter[b["to"]]["end"],
                      "text": b["say"][:MAX_LINE],
                      "orig": " ".join(u["text"] for u in utter[b["from"]:b["to"] + 1])[:300]}
@@ -532,7 +534,8 @@ def _recap_cut(job, voice_name):
     with ThreadPoolExecutor(max(1, int(os.environ.get("DUBLAB_TTS_WORKERS") or 8))) as ex:
         voiced = list(ex.map(tts, range(len(utter))))
     GAP = 0.35
-    clips = [(u["start"], dur + GAP) for u, (_, dur) in zip(utter, voiced)]
+    spans = job.get("speech") or []
+    clips = [c for u, (_, dur) in zip(utter, voiced) for c in footage(u["start"], dur + GAP, spans)]
     job.update(stage="recap", pct=78)
     jlog(job, f"cutting {len(clips)} scenes into the recap…")
     def prog(i, n):

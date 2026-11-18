@@ -1598,6 +1598,43 @@ def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, bl
 
 # ---- recap version: cut the scenes that go with each narration beat ----
 
+def speech_spans(utterances, pad=1.0, join=3.0):
+    """Stretches of the film where people talk (from the transcript), merged.
+    Music-only moments (moody montages, dances without lyrics, silent ads)
+    fall between them."""
+    spans = []
+    for u in sorted(utterances, key=lambda u: u["start"]):
+        a, b = max(0.0, u["start"] - pad), u["end"] + pad
+        if spans and a - spans[-1][1] <= join:
+            spans[-1][1] = max(spans[-1][1], b)
+        else:
+            spans.append([a, b])
+    return [tuple(x) for x in spans]
+
+
+def footage(start, dur, spans, min_piece=1.5):
+    """[(start, length)] adding up to dur, taken from talking stretches from
+    `start` on: a recap beat longer than its scene skips the music-only part
+    that follows and goes on with the next talking scene instead."""
+    if not spans:
+        return [(start, dur)]
+    out, need, t = [], dur, start
+    for a, b in spans:
+        if b <= t:
+            continue
+        s = max(a, t)
+        avail = b - s
+        if avail >= min(min_piece, need):
+            take = min(avail, need)
+            out.append((s, take))
+            need -= take
+            if need <= 0.05:
+                return out
+        t = b
+    out.append((t, need))           # past the last talk: just carry on
+    return out
+
+
 def build_recap_video(src, clips, out_mp4, tmp, progress=None):
     """clips: [(source_start, duration)] in order. Each is cut (re-encoded,
     no audio, same size/fps so they join cleanly) and the pieces joined.

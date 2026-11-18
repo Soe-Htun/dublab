@@ -280,8 +280,8 @@ Rules:
   belong to the story (different topic, selling something, website names, prices, "download", "join our
   channel"). Never narrate them and never point a beat's line range at them or at the lines right next to them,
   so the ad is not shown.
-- SKIP SONGS AND DANCES: song-and-dance numbers, music videos and montages (common in Indian films) are not
-  story. Transcript lines that are song lyrics (rhyming, repeated chorus lines, poetic words unrelated to the
+- SKIP SONGS AND DANCES: song-and-dance numbers, music videos and montages (common in Indian films), and slow
+  moody moments where music plays over a character just feeling or walking, are not story. Transcript lines that are song lyrics (rhyming, repeated chorus lines, poetic words unrelated to the
   dialogue around them) belong to such a number: never narrate them and never point a beat's line range at them,
   so the dance scene is not shown. Jump straight to the next story scene.
 """ + NAME_RULE + """
