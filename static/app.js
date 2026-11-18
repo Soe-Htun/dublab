@@ -76,6 +76,7 @@ $('#go').addEventListener('click', () => {
   fd.append('outro', $('#outrochk') && $('#outrochk').checked ? '1' : '0');
   fd.append('intro', $('#introchk').checked ? '1' : '0');
   fd.append('youtube', $('#ytchk').checked ? '1' : '0');
+  fd.append('show_title', $('#titlechk').checked ? '1' : '0');
   fd.append('title', ($('#covertitle_in').value || '').trim());
   fd.append('cover', '1');            // every video gets a cover
   fd.append('split', split);
@@ -540,3 +541,6 @@ try {
   recapLen = localStorage.getItem('dublab_recap_len') || '20';
 } catch (e) { /* ignore */ }
 syncRecap();
+
+// 🖼️ title: the text box only matters while "add a title" is ticked
+$('#titlechk').addEventListener('change', () => { $('#covertitle_in').hidden = !$('#titlechk').checked; });

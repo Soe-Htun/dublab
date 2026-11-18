@@ -488,7 +488,10 @@ def _transcribe_and_translate(jid, job):
         except Exception as e:  # noqa: BLE001 - the dub works without it
             job["intro_text"] = ""
             jlog(job, f"intro skipped: {e}")
-    if job.get("cover"):
+    if job.get("cover") and job.get("no_title"):
+        job["title_mm"] = ""
+        jlog(job, "no title on the cover / TikTok frame (unticked)")
+    elif job.get("cover"):
         try:
             # the title typed on the form wins; else a known film keeps its real
             # name on the cover, so people can search for it
@@ -730,7 +733,7 @@ def _voice_and_mux(job):
     if cuts:
         jlog(job, f"splitting into {nparts} parts of ~{job['split']} min "
                   f"(cuts at {', '.join(f'{c / 60:.1f}' for c in cuts)} min)")
-    if job.get("cover") and job.get("title_mm"):
+    if job.get("cover") and (job.get("title_mm") or job.get("no_title")):
         # same photos for every part; a split film gets "title - 1", "title - 2"…
         # made before the mux so part 1's cover is also the picture under the intro
         try:
@@ -898,6 +901,7 @@ def create_job():
     intro = request.form.get("intro", "0") == "1"      # off unless ticked
     youtube = request.form.get("youtube", "0") == "1"  # TikTok 9:16 always; this adds the 16:9 YouTube one
     my_title = re.sub(r"\s+", " ", request.form.get("title") or "").strip()[:60]   # typed by the user
+    no_title = request.form.get("show_title", "1") != "1"   # unticked: covers / frame without a title
     cover = True                                          # every video gets a cover
     logo = request.form.get("logo", "1") == "1"
     send_tg = request.form.get("telegram") == "1" and _admin_ok() and telegram.configured()
@@ -986,7 +990,7 @@ def create_job():
                  "recap": recap,
                  "tg_src": tg_msg,
                  "id": jid, "telegram": send_tg, "owner": _admin_ok(),
-                 "captions": captions, "blur": blur, "split": split, "youtube": youtube, "my_title": my_title,
+                 "captions": captions, "blur": blur, "split": split, "youtube": youtube, "my_title": my_title, "no_title": no_title,
                  "created": time.time()}
     jlog(jobs[jid], "uploaded " + re.sub(r"[\r\n]", " ", label)[:160])
     with lock:

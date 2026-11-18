@@ -1602,6 +1602,8 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
         fr = ImageEnhance.Color(ImageEnhance.Contrast(fr).enhance(1.15)).enhance(1.2)
         canvas.paste(fr, (x, y))
     img = canvas.convert("RGBA")
+    if not title:                  # no title wanted: just the photos (and the logo)
+        return _cover_logo_save(img.convert("RGB"), logo, W, portrait, out_jpg)
     # warm dark band behind the title, across the middle
     band_h = int(H * (0.26 if portrait else 0.4))
     band_y = H // 2 - band_h // 2
@@ -1617,6 +1619,12 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
         _gold_title(img, title, int(W * 0.9), W // 2, H // 2, 3, int(W * 0.17), suffix)   # big: phones show it small
     else:
         _gold_title(img, title, int(W * 0.86), W // 2, H // 2, 2, int(H * 0.13), suffix)
+    return _cover_logo_save(img, logo, W, portrait, out_jpg)
+
+
+def _cover_logo_save(img, logo, W, portrait, out_jpg):
+    """Channel logo top-right, then save the cover."""
+    from PIL import Image
     if logo and Path(logo).exists():
         img = img.convert("RGBA")
         lg = Image.open(logo).convert("RGBA")
