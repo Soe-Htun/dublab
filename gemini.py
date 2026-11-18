@@ -476,6 +476,38 @@ def find_caption_band(jpegs, api_key):
     return top, bot
 
 
+LOGO_PROMPT = """These frames come from one video. Find the LOGOS that sit at the SAME place in at least two frames
+(some show only from time to time):
+TV-channel bugs, studio or uploader logos, watermarks (also faint / semi-transparent ones), channel names,
+website addresses and promotional text lines (e.g. "download free at www…", sponsor/betting ads) anywhere in the frame.
+Do NOT include subtitles or captions, and nothing that is part of the scene (signs, posters, clothes, screens).
+For each logo give its box on a 0-1000 scale (x from the LEFT edge, y from the TOP edge), covering the whole logo
+with its outline. At most 4 logos.
+Answer with JSON only: {"logos": [{"x0": <n>, "y0": <n>, "x1": <n>, "y1": <n>}, ...]} — or {"logos": []} when there is none."""
+
+
+def find_logos(jpegs, api_key):
+    """Boxes [(x0, y0, x1, y1)] as fractions of the frame of the video's own
+    fixed logos/watermarks, [] when there are none. Raises on API trouble."""
+    raw = _call(LOGO_PROMPT, api_key, max_tokens=512,
+                images=[(f"Frame {i}:", b) for i, b in enumerate(jpegs)])
+    m = re.search(r"\{.*\}", raw, re.S)
+    data = json.loads(m.group(0)) if m else {}
+    boxes = []
+    for b in data.get("logos") or []:
+        try:
+            x0, y0, x1, y1 = (float(b[k]) / 1000 for k in ("x0", "y0", "x1", "y1"))
+        except (KeyError, TypeError, ValueError):
+            continue
+        # a logo is small: skip anything that would blur a big part of the picture
+        w, h = x1 - x0, y1 - y0
+        small = w <= 0.4 and h <= 0.25
+        banner = w <= 0.8 and h <= 0.08          # a thin promo text line across the top/bottom
+        if 0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1 and (small or banner):
+            boxes.append((x0, y0, x1, y1))
+    return boxes[:4]
+
+
 # ---- AI-drawn cover art (like popular recap thumbnails) ----
 IMAGE_MODEL = __import__("os").environ.get("DUBLAB_IMAGE_MODEL") or "gemini-3.1-flash-image"
 

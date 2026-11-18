@@ -888,8 +888,77 @@ def separate_music(src_video, job_dir):
     raise RuntimeError(f"music separation failed: {err}")
 
 
+FRAME_W, FRAME_H = 1080, 1920      # TikTok / Shorts frame for landscape films
+
+
+def frame_layout(vw, vh):
+    """Where a landscape picture goes in the 9:16 frame: full width, a little
+    above the middle (TikTok's own buttons and text cover the bottom)."""
+    hv = int(round(FRAME_W * vh / vw / 2)) * 2
+    vy = max(420, int(880 - hv / 2)) // 2 * 2
+    return {"w": FRAME_W, "h": FRAME_H, "vh": hv, "vy": vy, "cap_y": vy + hv + 10}
+
+
+def render_frames(title, windows, out_dir, layout, logo=None, extra=30.0):
+    """One 1080x1920 frame per part (dark background, channel logo, gold title,
+    "အပိုင်း N/M"), with a see-through window where the picture goes.
+    windows: [(start, end)] of each part on the video's timeline.
+    Returns an ffconcat list that shows each part's frame during that part."""
+    from PIL import Image, ImageDraw
+    out_dir = Path(out_dir)
+    out_dir.mkdir(exist_ok=True)
+    W, H, vy, hv = layout["w"], layout["h"], layout["vy"], layout["vh"]
+    n = len(windows)
+    base = Image.new("RGBA", (W, H))
+    px = base.load()
+    for y in range(H):                       # deep navy → plum, top to bottom
+        f = y / H
+        c = (int(10 + 18 * f), int(9 + 4 * f), int(22 + 16 * f), 255)
+        for x in range(W):
+            px[x, y] = c
+    top_y = 70
+    if logo and Path(logo).exists():
+        lg = Image.open(logo).convert("RGBA")
+        lg.thumbnail((240, 150))
+        base.alpha_composite(lg, ((W - lg.width) // 2, top_y))
+        top_y += lg.height + 20
+    files = []
+    for i in range(1, n + 1):
+        img = base.copy().convert("RGB")
+        pill_h = 86 if n > 1 else 0
+        title_cy = (top_y + vy - pill_h - 30) // 2
+        if title:
+            _gold_title(img, title, int(W * 0.9), W // 2, title_cy, 2, 96)
+        if n > 1:                            # "အပိုင်း 2/3" pill just above the picture
+            d = ImageDraw.Draw(img)
+            font = _caption_font(50)
+            label = f"အပိုင်း {i}/{n}"
+            tw = _tlen(d, label, font)
+            py = vy - pill_h - 28
+            d.rounded_rectangle(((W - tw) / 2 - 36, py, (W + tw) / 2 + 36, py + pill_h),
+                                radius=pill_h // 2, fill=(236, 178, 60))
+            bb = _tbbox(d, (0, 0), label, font)
+            _tdraw(d, ((W - tw) / 2, py + (pill_h - (bb[3] - bb[1])) / 2 - bb[1]), label, font,
+                   fill=(30, 12, 0))
+        img = img.convert("RGBA")
+        hole = Image.new("RGBA", (W, hv), (0, 0, 0, 0))
+        img.paste(hole, (0, vy))             # the picture shows through here
+        f = out_dir / f"frame{i}.png"
+        img.save(f)
+        files.append(f)
+    lst = out_dir / "frames.txt"
+    with open(lst, "w") as fh:
+        fh.write("ffconcat version 1.0\n")
+        for k, (f, (a, b)) in enumerate(zip(files, windows)):
+            dur = (b - a) + (extra if k == n - 1 else 0.0)
+            fh.write(f"file '{f.name}'\nduration {max(dur, 0.1):.3f}\n")
+        fh.write(f"file '{files[-1].name}'\n")
+    return lst
+
+
 def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
-        captions=None, blur=None, keyframes=None, lead=0.0, tail=0.0, intro_img=None):
+        captions=None, blur=None, keyframes=None, lead=0.0, tail=0.0, intro_img=None, hide=None,
+        frame=None):
     """Combine picture + dub track.
 
     bg_wav: music/effects with the original voices removed (separate_music).
@@ -908,6 +977,10 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
     runs past the picture (the channel outro) is still seen and heard.
     intro_img: optional image (the cover) shown full-frame during the lead
     instead of the held first frame, which is often black.
+    hide: optional [(x0, y0, x1, y1)] fractions — the video's own logos, blurred.
+    frame: optional frame_layout() dict plus list=render_frames() ffconcat — the
+    picture goes into a 9:16 TikTok frame; captions go below the picture and
+    the logo is already drawn in the frame.
     """
     # Burned-in credit watermark, bottom-right; scale guard keeps even dims
     # for yuv420p.
@@ -955,9 +1028,13 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
     intro_in = (["-loop", "1", "-framerate", "25", "-t", f"{lead:.3f}", "-i", str(intro_img)]
                 if intro_img else [])
     intro_idx = cap_idx + (1 if captions else 0)
+    frame_in = ["-f", "concat", "-safe", "0", "-i", str(frame["list"])] if frame else []
+    frame_idx = intro_idx + (1 if intro_img else 0)
+    if frame:
+        logo = None                     # drawn in the frame's header instead
     if intro_img:
         iw, ih = video_size(src_video)
-    draw = bool(logo or captions or blur or intro_img)
+    draw = bool(logo or captions or blur or intro_img or hide or frame)
 
     def _cmd(copy_video, encoder="libx264"):
         if copy_video:   # nothing to draw: keep the original picture, no re-encode
@@ -974,11 +1051,24 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
                     parts.append(f"[bb]crop=iw:ih*{bh:.4f}:0:{by},boxblur=luma_radius=18:luma_power=3[bz]")
                     parts.append(f"[bm][bz]overlay=0:H*{1 - b0 - bh:.4f}[s1]")
                     cur = "s1"
+                for k, (x0, y0, x1, y1) in enumerate(hide or []):   # the video's own logos
+                    parts.append(f"[{cur}]split[hm{k}][hb{k}]")
+                    parts.append(f"[hb{k}]crop=iw*{x1 - x0:.4f}:ih*{y1 - y0:.4f}:iw*{x0:.4f}:ih*{y0:.4f},"
+                                 "boxblur=luma_radius='min(w,h)/4':luma_power=3:"
+                                 f"chroma_radius='min(cw,ch)/4':chroma_power=3[hz{k}]")
+                    parts.append(f"[hm{k}][hz{k}]overlay=W*{x0:.4f}:H*{y0:.4f}[hd{k}]")
+                    cur = f"hd{k}"
                 if intro_img:     # the cover over the held intro frame (it has the logo already)
                     parts.append(f"[{intro_idx}:v]scale={iw}:{ih}:force_original_aspect_ratio=decrease,"
                                  f"pad={iw}:{ih}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[ic]")
                     parts.append(f"[{cur}][ic]overlay=0:0:enable='lt(t,{lead:.3f})':eof_action=pass[si]")
                     cur = "si"
+                if frame:         # picture into the 9:16 frame (the frame has a see-through window)
+                    parts.append(f"[{cur}]scale={frame['w']}:{frame['vh']},setsar=1,"
+                                 f"pad={frame['w']}:{frame['h']}:0:{frame['vy']}:black[pv]")
+                    parts.append(f"[{frame_idx}:v]format=rgba[fr]")
+                    parts.append("[pv][fr]overlay=0:0:eof_action=repeat:shortest=1[sf]")
+                    cur = "sf"
                 if logo:
                     parts.append(f"[{logo_idx}:v]scale={lw}:-1,format=rgba[lg]")
                     parts.append(f"[{cur}][lg]overlay={x}:{y}"
@@ -986,7 +1076,7 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
                     cur = "s2"
                 if captions:
                     ch = int(captions["height"])
-                    cy = caption_y(ch, blur, captions.get("bottom", 0.08))
+                    cy = frame["cap_y"] if frame else caption_y(ch, blur, captions.get("bottom", 0.08))
                     parts.append(f"[{cap_idx}:v]format=rgba[cp]")
                     parts.append(f"[{cur}][cp]overlay=0:{cy}:eof_action=pass[s3]")
                     cur = "s3"
@@ -1003,7 +1093,7 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
                 enc += ["-force_key_frames", ",".join(f"{t:.3f}" for t in keyframes)]
             vid = ["-map", "[v]", *enc]
         return ["ffmpeg", "-y", "-v", "error", "-i", str(src_video), "-i", str(dub_wav),
-                *bg_in, *logo_in, *cap_in, *intro_in, *fc, *vid, *amap, "-c:a", "aac", "-b:a", "128k",
+                *bg_in, *logo_in, *cap_in, *intro_in, *frame_in, *fc, *vid, *amap, "-c:a", "aac", "-b:a", "128k",
                 # No -shortest: the finish-the-sentence rule lets the tail of the
                 # last utterance run a little past the video end; -shortest would
                 # cut it off again.
@@ -1271,9 +1361,9 @@ def render_cover(video, t, title, out_jpg, portrait=False, logo=None, blur=None)
     return Path(out_jpg)
 
 
-def _grab(video, t, w, h):
+def _grab(video, t, w, h, hide=None):
     """Frame at t, black letterbox bars trimmed, scaled and centre-cropped
-    to w x h (PIL RGB)."""
+    to w x h (PIL RGB). hide: [(x0, y0, x1, y1)] fractions blurred first (old logos)."""
     from PIL import Image, ImageOps
     import io
     import numpy as np
@@ -1282,6 +1372,13 @@ def _grab(video, t, w, h):
     if r.returncode or not r.stdout:
         raise RuntimeError("frame grab failed")
     img = Image.open(io.BytesIO(r.stdout)).convert("RGB")
+    if hide:
+        from PIL import ImageFilter
+        W0, H0 = img.size
+        for x0, y0, x1, y1 in hide:
+            box = (int(W0 * x0), int(H0 * y0), int(W0 * x1), int(H0 * y1))
+            if box[2] > box[0] and box[3] > box[1]:
+                img.paste(img.crop(box).filter(ImageFilter.GaussianBlur(max(6, (box[3] - box[1]) // 3))), box[:2])
     g = np.asarray(img.convert("L"), dtype=np.float32)
     rows, cols = np.where(g.mean(1) > 18)[0], np.where(g.mean(0) > 18)[0]
     if len(rows) > g.shape[0] * 0.4 and len(cols) > g.shape[1] * 0.4:
@@ -1359,7 +1456,7 @@ def _gold_title(img, title, box_w, center_x, center_y, max_lines, size, suffix="
     return img
 
 
-def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur=None, suffix=""):
+def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur=None, suffix="", hide=None):
     """3–5 frames in panels with a big gold Burmese title across the bottom."""
     from PIL import Image, ImageEnhance, ImageFilter
     W, H = (1080, 1920) if portrait else (1280, 720)
@@ -1367,7 +1464,7 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
     times = (list(times) * 5)[:n]
     canvas = Image.new("RGB", (W, H), (236, 178, 60) if n == 4 else (12, 8, 6))   # 2x2: thin gold lines
     for (x, y, w, h), t in zip(_layout(n, W, H, portrait), times):
-        fr = _grab(video, t, w, h)
+        fr = _grab(video, t, w, h, hide)
         if blur:                                # hide burned-in captions inside each panel
             b0, bh = float(blur["bottom"]), float(blur["height"])
             box = (0, int(h * (1 - b0 - bh)), w, int(h * (1 - b0)))
@@ -1469,7 +1566,7 @@ def render_art_cover(art, title, out_jpg, portrait=False, logo=None, suffix=""):
 
 
 def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, blur=None, parts=1,
-                chooser=None, log=None, art=None):
+                chooser=None, log=None, art=None, hide=None):
     """The film's cover: 4 photos in a 2x2 grid with the title in the middle.
     With `chooser` (Gemini) the first photo is the main character and the rest
     show the main scenes / other characters; otherwise the sharpest frames.
@@ -1494,9 +1591,9 @@ def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, bl
     if not pick:
         pick = pick_cover_times(video, start, end, 4, samples=36, tmp=out_dir)
     if parts <= 1:
-        return [render_collage(video, pick, title, out_dir / "cover1.jpg", portrait, logo, blur)]
+        return [render_collage(video, pick, title, out_dir / "cover1.jpg", portrait, logo, blur, hide=hide)]
     return [render_collage(video, pick, title, out_dir / f"cover{i}.jpg", portrait, logo, blur,
-                           suffix=f" - {i}") for i in range(1, parts + 1)]
+                           suffix=f" - {i}", hide=hide) for i in range(1, parts + 1)]
 
 
 # ---- recap version: cut the scenes that go with each narration beat ----

@@ -75,6 +75,7 @@ $('#go').addEventListener('click', () => {
   fd.append('model', model);
   fd.append('outro', $('#outrochk') && $('#outrochk').checked ? '1' : '0');
   fd.append('intro', $('#introchk').checked ? '1' : '0');
+  fd.append('frame', $('#framechk').checked ? '1' : '0');
   fd.append('cover', '1');            // every video gets a cover
   fd.append('split', split);
   fd.append('recap', $('#recapchk').checked ? recapLen : '0');
@@ -141,7 +142,7 @@ function showProgress(jid) {
       if (j.status === 'review') { stopAll(); showReview(jid); }
       if (j.status === 'done') {
         stopAll();
-        showResult(jid, j.parts); showCovers(jid, j.covers, j.title);
+        showResult(jid, j.parts); showCovers(jid, j.covers, j.title, j.covers_main);
       }
       if (j.status === 'failed') { stopAll(); showError(j.error || 'အမှားရှိတယ်'); }
     } catch (e) { stopAll(); showError(e.message); }
@@ -256,7 +257,7 @@ function showResult(jid, parts) {
     parts.forEach((p) => {
       const row = document.createElement('div'); row.className = 'part';
       const play = document.createElement('button'); play.className = 'ghost' + (p.n === 1 ? ' on' : '');
-      play.textContent = `▶️ အပိုင်း ${p.n}  ·  ${mmss(p.start)}–${mmss(p.end)}`;
+      play.textContent = (p.tt ? '📱 TikTok ' : '▶️ ') + `အပိုင်း ${p.k || p.n}  ·  ${mmss(p.start)}–${mmss(p.end)}`;
       play.addEventListener('click', () => {
         $('#resultvideo').src = '/r/' + jid + '/' + p.n; setSpeed(1);
         box.querySelectorAll('.ghost').forEach((b) => b.classList.toggle('on', b === play));
@@ -380,7 +381,8 @@ async function loadTgVideos() {
 }
 
 // ---- cover: one for the whole film, used for every part ----
-function showCovers(jid, n, title) {
+function showCovers(jid, n, title, nMain) {
+  nMain = nMain || n;
   const box = $('#coverbox'), grid = $('#covergrid');
   box.hidden = !n; grid.innerHTML = '';
   if (!n) return;
@@ -392,7 +394,10 @@ function showCovers(jid, n, title) {
     const im = document.createElement('img');
     im.src = `/r/${jid}/cover/${k}`; im.alt = 'cover ' + k; im.loading = 'lazy';
     a.append(im);
-    if (n > 1) { const c = document.createElement('span'); c.textContent = `⬇️ အပိုင်း ${k}`; a.append(c); }
+    if (n > 1) {
+      const tt = k > nMain, kk = tt ? k - nMain : k;
+      const c = document.createElement('span'); c.textContent = `⬇️ ${tt ? '📱 TikTok ' : ''}အပိုင်း ${kk}`; a.append(c);
+    }
     grid.append(a);
   }
   $('#coverdl').hidden = n > 1;
@@ -502,7 +507,7 @@ function partsNote() {
     const n = Math.max(1, Math.round(len / (sp * 60)));
     txt = `≈ ${n} ပိုင်း ထွက်မယ် (${sp} မိနစ်စီ) — နာမည်-1 … နာမည်-${n}`;
   }
-  $('#splitnote').textContent = txt + (+sp ? ' · like & follow က နောက်ဆုံးပိုင်းမှာ' : '');
+  $('#splitnote').textContent = txt + (+sp ? ' · like & follow က အပိုင်းတိုင်းရဲ့ အဆုံးမှာ' : '');
 }
 let recapLen = '20';
 function setRecapLen(v) {

@@ -14,14 +14,14 @@ from flask import Flask, jsonify, redirect, render_template, request, send_file
 
 import telegram
 
-from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tts,
+from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tts, frame_layout, render_frames,
                  add_outro_tail, caption_y, normalize_logo, render_captions, sample_frames, video_size, write_srt,
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
                  build_recap_video, make_covers, mux, synthesize, probe_duration, probe_url, separate_music, split_points,
                  split_video, transcribe)
-from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, pick_cover_frames, translate_lines,
+from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, pick_cover_frames, translate_lines,
                     write_cover_scene, write_intro, write_recap, write_title)
 
 # Gemini TTS key rotation.
@@ -42,7 +42,7 @@ SETTINGS_FILE = BASE / "settings.json"
 MAX_MINUTES_LIMIT = 180
 OUTRO_MAX = 200   # chars
 AI_COVER = (os.environ.get("DUBLAB_AI_COVER") or "0") == "1"   # AI-drawn cover (needs a paid Gemini key); off = photo collage
-SPLIT_CHOICES = (0, 10, 15, 20, 30)
+SPLIT_CHOICES = (0, 5, 10, 15, 20)
 OWNER_MAX_MINUTES = int(os.environ.get("DUBLAB_OWNER_MAX_MINUTES") or 240)   # owner: 4 h   # minutes per part; 0 = one video
 CHANNEL_MAX = 60
 # channel logo burned into the video corner (uploaded on the admin page)
@@ -185,16 +185,17 @@ def clean_err(e):
     return s.replace(str(BASE), "[app]").replace(str(JOBS), "[jobs]")[:300]
 
 
-def _outro_on_parts(job, parts, d, outro, captions, blur, vw, vh):
+def _outro_on_parts(job, parts, d, outro, captions, blur, vw, vh, frame=None):
     """Every part ends with the channel outro ("like and follow…"), not only
     the last one (which already has it from the dub track)."""
     jlog(job, f"adding the outro to the end of {len(parts)} more part(s)…")
     png = cy = None
     if captions:
         try:
-            lst, ch = render_captions([(0.0, 5.0, outro)], vw, vh, d / "caps_outro", _settings["caption_size"])
+            cw, chh = (frame["w"], frame["h"]) if frame else (vw, vh)
+            lst, ch = render_captions([(0.0, 5.0, outro)], cw, chh, d / "caps_outro", _settings["caption_size"])
             png = lst.parent / "c0.png"
-            cy = caption_y(ch, blur, captions.get("bottom", 0.08))
+            cy = frame["cap_y"] if frame else caption_y(ch, blur, captions.get("bottom", 0.08))
         except Exception as e:  # noqa: BLE001 - the voice still goes on without a caption
             jlog(job, f"outro caption skipped: {e}")
             png = None
@@ -237,6 +238,30 @@ def _find_blur(job, src, sfx):
         return {"bottom": bb / 100, "height": bh / 100}
 
 
+def _find_logos(job, src):
+    """The video's own fixed logos/watermarks (found by Gemini), padded a little,
+    to blur before our logo goes on. [] when none or on any error."""
+    key = os.environ.get("GEMINI_API_KEY")
+    if not key:
+        return []
+    try:
+        total = job["total"]
+        # 1000 px wide: small corner logos and website text are missed at 640
+        boxes = find_logos(sample_frames(src, total * 0.05, total * 0.95, 8, width=1000), key)
+    except Exception as e:  # noqa: BLE001 - never lose the dub over this
+        jlog(job, f"logo search failed ({str(e)[:120]}) — not blurring logos")
+        return []
+    pad = 0.012
+    boxes = [(max(0.0, x0 - pad), max(0.0, y0 - pad), min(1.0, x1 + pad), min(1.0, y1 + pad))
+             for x0, y0, x1, y1 in boxes]
+    if boxes:
+        jlog(job, "original logo(s) found — blurring " + ", ".join(
+            f"x {x0 * 100:.0f}–{x1 * 100:.0f}% y {y0 * 100:.0f}–{y1 * 100:.0f}%" for x0, y0, x1, y1 in boxes))
+    else:
+        jlog(job, "no original logo found")
+    return boxes
+
+
 def _client_ip():
     # nginx sets X-Forwarded-For; first entry is the real client
     fwd = request.headers.get("X-Forwarded-For", "")
@@ -270,7 +295,7 @@ for _old in JOBS.iterdir():
 
 # what a finished job needs to be shown again (history, after a restart)
 _META_KEYS = ("id", "name", "title_mm", "status", "stage", "pct", "error", "ext", "parts",
-              "part_times", "covers", "cover_pick", "created", "owner", "recap", "tg", "url", "files_gone")
+              "part_times", "covers", "covers_tt", "tt", "cover_pick", "created", "owner", "recap", "tg", "url", "files_gone")
 
 
 def _save_meta(job):
@@ -576,14 +601,22 @@ def _voice_and_mux(job):
     sfx = "_v" if vh > vw else ""        # portrait video → its own positions
     if job.get("blur"):
         blur = _find_blur(job, src, sfx)
-    if job.get("captions"):
+    hide = _find_logos(job, src)
+    want_tt = bool(job.get("frame") and vw > vh)    # also make a 9:16 TikTok version
+    logo_png = LOGO_FILE if job.get("logo") and LOGO_FILE.exists() else None
+
+    def _caps(w, h, sub):
+        if not job.get("captions"):
+            return None
         try:
-            lst, strip_h = render_captions(cues, vw, vh, d / "caps", _settings["caption_size"])
-            captions = {"list": lst, "height": strip_h,
-                        "bottom": _settings["caption_bottom" + sfx] / 100}
-            jlog(job, f"burning {len(cues)} Burmese captions")
+            lst, strip_h = render_captions(cues, w, h, d / sub, _settings["caption_size"])
+            return {"list": lst, "height": strip_h, "bottom": _settings["caption_bottom" + sfx] / 100}
         except Exception as e:  # noqa: BLE001 - never lose the dub over captions
             jlog(job, f"captions skipped: {e}")
+            return None
+    captions = _caps(vw, vh, "caps")
+    if captions:
+        jlog(job, f"burning {len(cues)} Burmese captions")
     # the outro (or the last line) can run past the picture: hold the last
     # frame until the voice is done, or players stop before it is heard
     tail = 0.0
@@ -596,14 +629,16 @@ def _voice_and_mux(job):
     except Exception:  # noqa: BLE001
         pass
     cuts = split_points(cues, total, job.get("split") or 0)
+    nparts = len(cuts) + 1 if cuts else 1
     if cuts:
-        jlog(job, f"splitting into {len(cuts) + 1} parts of ~{job['split']} min "
+        jlog(job, f"splitting into {nparts} parts of ~{job['split']} min "
                   f"(cuts at {', '.join(f'{c / 60:.1f}' for c in cuts)} min)")
     if job.get("cover") and job.get("title_mm"):
         # same photos for every part; a split film gets "title - 1", "title - 2"…
         # made before the mux so part 1's cover is also the picture under the intro
         try:
             key = os.environ.get("GEMINI_API_KEY")
+            chooser = (lambda shots: pick_cover_frames(shots, key)) if key else None
             art = None
             if key and job.get("cover_scene"):
                 try:
@@ -615,28 +650,54 @@ def _voice_and_mux(job):
                     art = None
                     jlog(job, f"AI cover picture failed ({str(e)[:150]}) — using a photo collage")
             covers = make_covers(src, job["title_mm"], d, job["total"] * 0.04, job["total"] * 0.9,
-                                 portrait=bool(sfx), blur=blur,
-                                 logo=LOGO_FILE if job.get("logo") and LOGO_FILE.exists() else None,
-                                 parts=len(cuts) + 1 if cuts else 1,
-                                 chooser=(lambda shots: pick_cover_frames(shots, key)) if key else None,
-                                 log=lambda m: jlog(job, m), art=art)
+                                 portrait=bool(sfx), blur=blur, hide=hide, logo=logo_png, parts=nparts,
+                                 chooser=chooser, log=lambda m: jlog(job, m), art=art)
             job["covers"] = [c.name for c in covers]
-            jlog(job, f"made {len(covers)} cover image(s)")
+            if want_tt:                  # 9:16 covers for the TikTok version
+                (d / "tt").mkdir(exist_ok=True)
+                tt = make_covers(src, job["title_mm"], d / "tt", job["total"] * 0.04, job["total"] * 0.9,
+                                 portrait=True, blur=blur, hide=hide, logo=logo_png, parts=nparts,
+                                 chooser=chooser, log=lambda m: jlog(job, m))
+                job["covers_tt"] = ["tt/" + c.name for c in tt]
+            jlog(job, f"made {len(job['covers']) + len(job.get('covers_tt') or [])} cover image(s)")
         except Exception as e:  # noqa: BLE001 - never lose the dub over a cover
             jlog(job, f"cover skipped: {e}")
     intro_img = d / job["covers"][0] if lead and job.get("covers") else None
-    mux(src, dub_wav, d / "dubbed.mp4", bg_wav=bg_wav, bg_volume=BG_VOLUME, logo=logo,
-        captions=captions, blur=blur, keyframes=cuts or None, lead=lead, tail=tail,
-        intro_img=intro_img)
-    if cuts:
+
+    def _render(frame, name, caps):
+        """mux, then split into parts and give each part the outro; returns file names."""
+        out = d / f"{name}.mp4"
+        mux(src, dub_wav, out, bg_wav=bg_wav, bg_volume=BG_VOLUME, logo=logo,
+            captions=caps, blur=blur, hide=hide, keyframes=cuts or None, lead=lead, tail=tail,
+            intro_img=intro_img, frame=frame)
+        if not cuts:
+            return [out.name]
         job.update(stage="split", pct=97)
         jlog(job, "cutting the parts…")
-        parts = split_video(d / "dubbed.mp4", cuts, d)
-        (d / "dubbed.mp4").unlink(missing_ok=True)        # the parts replace it
+        parts = split_video(out, cuts, d, stem=f"{name}_part")
+        out.unlink(missing_ok=True)                       # the parts replace it
         if outro and (d / "outro.mp3").exists():
-            _outro_on_parts(job, parts[:-1], d, outro, captions, blur, vw, vh)
-        job["parts"] = [p.name for p in parts]
+            _outro_on_parts(job, parts[:-1], d, outro, caps, blur, vw, vh, frame)
+        return [p.name for p in parts]
+
+    names = _render(None, "dubbed", captions)
+    if cuts:
+        job["parts"] = names
         job["part_times"] = list(zip([0.0, *cuts], [*cuts, total]))
+    if want_tt:
+        jlog(job, "making the TikTok (9:16) version too…")
+        job.update(stage="mux", pct=93)
+        try:
+            frame = frame_layout(vw, vh)
+            bounds = [0.0, *cuts, total]
+            frame["list"] = render_frames(job.get("title_mm") or "", list(zip(bounds, bounds[1:])),
+                                          d / "frames", frame, logo_png)
+            job["tt"] = _render(frame, "tiktok", _caps(frame["w"], frame["h"], "caps_tt"))
+            job["part_times"] = list(zip([0.0, *cuts], [*cuts, total]))
+        except Exception as e:  # noqa: BLE001 - the normal version is still there
+            jlog(job, f"TikTok version failed: {str(e)[:200]}")
+        shutil.rmtree(d / "frames", ignore_errors=True)
+        shutil.rmtree(d / "caps_tt", ignore_errors=True)
     shutil.rmtree(d / "sep", ignore_errors=True)
     cleanup_segments(d)
     (d / "dub.wav").unlink(missing_ok=True)
@@ -727,6 +788,7 @@ def create_job():
     keep_bg = request.form.get("keep_bg", "0") == "1"
     outro = request.form.get("outro", "1") == "1"
     intro = request.form.get("intro", "0") == "1"      # off unless ticked
+    frame = request.form.get("frame", "0") == "1"      # 9:16 TikTok frame for landscape films
     cover = True                                          # every video gets a cover
     logo = request.form.get("logo", "1") == "1"
     send_tg = request.form.get("telegram") == "1" and _admin_ok() and telegram.configured()
@@ -815,7 +877,7 @@ def create_job():
                  "recap": recap,
                  "tg_src": tg_msg,
                  "id": jid, "telegram": send_tg, "owner": _admin_ok(),
-                 "captions": captions, "blur": blur, "split": split,
+                 "captions": captions, "blur": blur, "split": split, "frame": frame,
                  "created": time.time()}
     jlog(jobs[jid], "uploaded " + re.sub(r"[\r\n]", " ", label)[:160])
     with lock:
@@ -839,12 +901,19 @@ def job_status(jid):
     if job["stage"] == "download" and job.get("dl_pct") is not None:
         stage_pct = job["dl_pct"]          # the real download %, not the coarse overall one
     parts = []
-    if job["status"] == "done" and job.get("parts"):
-        parts = [{"n": i, "name": name, "start": round(a), "end": round(b)}
-                 for i, ((_, name), (a, b)) in enumerate(zip(_outputs(job), job["part_times"]), 1)]
+    if job["status"] == "done" and (job.get("parts") or job.get("tt")):
+        outs = _outputs(job)
+        times = job.get("part_times") or [(0, job.get("total") or 0)]
+        for i, (_, name) in enumerate(outs, 1):
+            which, k = _out_kind(job, i)
+            a, b = times[min(k, len(times)) - 1]
+            parts.append({"n": i, "k": k, "tt": which == "covers_tt", "name": name,
+                          "start": round(a), "end": round(b)})
     return jsonify(status=job["status"], stage=job["stage"], pct=job["pct"],
                    stage_pct=stage_pct, parts=parts,
-                   covers=len(job.get("covers") or []) if job["status"] == "done" else 0,
+                   covers=len(job.get("covers") or []) + len(job.get("covers_tt") or [])
+                   if job["status"] == "done" else 0,
+                   covers_main=len(job.get("covers") or []),
                    cover_pick=job.get("cover_pick", 1), title=job.get("title_mm", ""),
                    name=job.get("name", ""), created=int(job.get("created", 0)),
                    gone=bool(job.get("files_gone")),
@@ -1243,27 +1312,28 @@ def telegram_disconnect():
     return jsonify(ok=True)
 
 
-def _cover_n(job, part):
+def _cover_n(job, part, which="covers"):
     """Which cover a part uses: its own ("title - N") or the film's one."""
-    covers = job.get("covers") or []
+    covers = job.get(which) or []
     return part if 1 <= part <= len(covers) and len(covers) > 1 else 1
 
 
-def _cover_file(job, part=1):
-    covers = job.get("covers") or []
+def _cover_file(job, part=1, which="covers"):
+    covers = job.get(which) or []
     if not covers:
         return None
-    p = job["dir"] / covers[_cover_n(job, part) - 1]
+    p = job["dir"] / covers[_cover_n(job, part, which) - 1]
     return p if p.exists() else None
 
 
-def _cover_thumb(job, part=1):
+def _cover_thumb(job, part=1, which="covers"):
     """The part's cover, shrunk to Telegram's thumbnail size (≤320 px JPEG)."""
-    covers = job.get("covers") or []
+    covers = job.get(which) or []
     if not covers:
         return None
-    n = _cover_n(job, part)
-    src, out = job["dir"] / covers[n - 1], job["dir"] / f"tg_cover{n}.jpg"
+    n = _cover_n(job, part, which)
+    src = job["dir"] / covers[n - 1]
+    out = job["dir"] / f"tg_cover{'_tt' if which == 'covers_tt' else ''}{n}.jpg"
     try:
         if not out.exists():
             subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-vf",
@@ -1290,11 +1360,24 @@ _tg_lock = threading.Lock()
 
 
 def _outputs(job):
-    """[(path, download name)] — one file, or the parts of a split video."""
+    """[(path, download name)] — one file, or the parts of a split video;
+    then the TikTok (9:16) version's file(s), when one was made."""
     d = job["dir"]
     if job.get("parts"):
-        return [(d / f, _download_name(job, ".mp4", i)) for i, f in enumerate(job["parts"], 1)]
-    return [(d / "dubbed.mp4", _download_name(job, ".mp4"))]
+        outs = [(d / f, _download_name(job, ".mp4", i)) for i, f in enumerate(job["parts"], 1)]
+    else:
+        outs = [(d / "dubbed.mp4", _download_name(job, ".mp4"))]
+    tt = job.get("tt") or []
+    for i, f in enumerate(tt, 1):
+        name = _download_name(job, ".mp4", i if len(tt) > 1 else None).replace(" - mm", " - mm-tiktok", 1)
+        outs.append((d / f, name))
+    return outs
+
+
+def _out_kind(job, idx):
+    """Output idx (1-based) → ("covers" or "covers_tt", its part number)."""
+    n_main = len(job.get("parts") or []) or 1
+    return ("covers", idx) if idx <= n_main else ("covers_tt", idx - n_main)
 
 
 def _should_preupload(job):
@@ -1335,8 +1418,9 @@ def _telegram_prepare(job):
 
 def _send_one(job, chat, path, name, caption, prog, part=1):
     size = path.stat().st_size
-    cover = _cover_file(job, part)
-    thumb = _cover_thumb(job, part) or _video_thumb(path, job["dir"] / f"tg_thumb_{path.stem}.jpg")
+    which, part = _out_kind(job, part)
+    cover = _cover_file(job, part, which)
+    thumb = _cover_thumb(job, part, which) or _video_thumb(path, job["dir"] / f"tg_thumb_{path.stem}.jpg")
     if size <= telegram.MAX_UPLOAD:
         telegram.send_file(chat, path, name, caption=caption, thumb=thumb, cover=cover)
         return "file"
@@ -1377,7 +1461,7 @@ def _telegram_send(job):
             def prog(f, i=i):
                 tg["pct"] = int((i + f) * 100 / len(outs))
             hows.append(_send_one(job, chat, path, name, caption, prog, i + 1))
-            cov = _cover_file(job, i + 1)
+            cov = _cover_file(job, *reversed(_out_kind(job, i + 1)))
             if cov and cov not in sent_covers:   # the part's cover, full size, to upload to TikTok etc.
                 sent_covers.add(cov)
                 try:
@@ -1446,10 +1530,11 @@ def _download_name(job, ext, part=None):
 @app.get("/r/<jid>/cover/<int:n>")
 def result_cover(jid, n):
     job = jobs.get(jid)
-    covers = (job or {}).get("covers") or []
+    covers = ((job or {}).get("covers") or []) + ((job or {}).get("covers_tt") or [])   # landscape, then 9:16
     if not job or not 1 <= n <= len(covers):
         return jsonify(error="မရှိဘူး"), 404
-    name = _download_name(job, ".jpg").replace(" - mm.jpg", " - cover" + (f"-{n}" if len(covers) > 1 else "") + ".jpg")
+    tag = "tiktok-cover" if n > len(job.get("covers") or []) else "cover"
+    name = _download_name(job, ".jpg").replace(" - mm.jpg", f" - {tag}" + (f"-{n}" if len(covers) > 1 else "") + ".jpg")
     return send_file(job["dir"] / covers[n - 1], mimetype="image/jpeg",
                      as_attachment=request.args.get("dl") == "1", download_name=name)
 
