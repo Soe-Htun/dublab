@@ -144,7 +144,7 @@ function showProgress(jid) {
       if (j.status === 'review') { stopAll(); showReview(jid); }
       if (j.status === 'done') {
         stopAll();
-        showResult(jid, j.parts); showCovers(jid, j.covers, j.title, j.covers_main);
+        showResult(jid, j.parts); $('#coverbox').hidden = true;   // covers go to Telegram; not shown here
       }
       if (j.status === 'failed') { stopAll(); showError(j.error || 'အမှားရှိတယ်'); }
     } catch (e) { stopAll(); showError(e.message); }
