@@ -213,8 +213,41 @@ def _collapse_repeats(text, keep=2):
     return " ".join(out).strip()
 
 
+def _vote_language(wav, name, spots=(0.15, 0.3, 0.45, 0.6, 0.75, 0.9), clip=30):
+    """Whisper guesses the language from the first 30 s only — a Burmese ad or
+    channel intro before an Indian film made it 'my'. Listen at several points
+    through the video instead and add up the votes."""
+    import tempfile
+    from faster_whisper import decode_audio
+    model = _get_model(name)
+    total = probe_duration(wav)
+    if total < clip * 4:
+        return None                      # short clip: whisper's own guess is fine
+    votes = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        for f in spots:
+            piece = Path(tmp) / "spot.wav"
+            try:
+                run(["ffmpeg", "-y", "-v", "error", "-ss", f"{total * f:.1f}", "-t", str(clip),
+                     "-i", str(wav), "-ac", "1", "-ar", "16000", str(piece)])
+                lang, prob, _ = model.detect_language(decode_audio(str(piece)), vad_filter=True)
+            except Exception:  # noqa: BLE001 - e.g. a silent spot
+                continue
+            votes[lang] = votes.get(lang, 0.0) + prob
+    if not votes:
+        return None
+    best = max(votes, key=votes.get)
+    print(f"[whisper] language votes: { {k: round(v, 2) for k, v in votes.items()} } → {best}")
+    return best
+
+
 def _transcribe(wav, lang_hint, progress, name):
     global _mlx_broken
+    if not lang_hint:
+        try:
+            lang_hint = _vote_language(wav, name)
+        except Exception as e:  # noqa: BLE001 - fall back to whisper's own guess
+            print(f"[whisper] language vote failed: {e}")
     if _use_mlx():
         try:
             out = _transcribe_mlx(wav, lang_hint, progress, name)
