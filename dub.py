@@ -1050,9 +1050,13 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
                     parts.append(f"[{cur}]split[bm][bb]")
                     # strong blur (radius grows with the band, chroma too) so the old letters
                     # can't be read through it
-                    parts.append(f"[bb]crop=iw:ih*{bh:.4f}:0:{by},"
-                                 "boxblur=luma_radius='min(h/3,48)':luma_power=4:"
-                                 "chroma_radius='min(ch/3,24)':chroma_power=4[bz]")
+                    # (done on a 1/8-size copy of the band and scaled back: the same look,
+                    # far less work than a big blur at full size)
+                    parts.append(f"[bb]crop=iw:ih*{bh:.4f}:0:{by},split[bc][bref];"
+                                 "[bc]scale=trunc(iw/16)*2:trunc(ih/16)*2,"
+                                 "boxblur=luma_radius='min(h/3,6)':luma_power=3:"
+                                 "chroma_radius='min(ch/3,3)':chroma_power=3[bs];"
+                                 "[bs][bref]scale2ref=flags=bicubic[bz][bdrop];[bdrop]nullsink")
                     parts.append(f"[bm][bz]overlay=0:H*{1 - b0 - bh:.4f}[s1]")
                     cur = "s1"
                 for k, (x0, y0, x1, y1) in enumerate(hide or []):   # the video's own logos
@@ -1156,7 +1160,75 @@ def split_video(src, cuts, out_dir, stem="part"):
 
 def add_outro_tail(part, outro_audio, out, caption_png=None, caption_y=None):
     """Append the channel outro to the end of a part: the last frame is held
-    while the outro voice plays (with its caption strip, if given)."""
+    while the outro voice plays (with its caption strip, if given).
+    Fast way: encode only the few-second tail and join it to the untouched part
+    (stream copy) — re-encoding a whole 10-minute part took ~1 min each."""
+    try:
+        _outro_tail_fast(part, outro_audio, out, caption_png, caption_y)
+        return
+    except Exception as e:  # noqa: BLE001 - fall back to re-encoding the whole part
+        print(f"[outro] fast tail failed ({str(e)[:200]}); re-encoding the part")
+    _outro_tail_slow(part, outro_audio, out, caption_png, caption_y)
+
+
+def _stream_info(path):
+    import json as _json
+    p = run(["ffprobe", "-v", "error", "-show_entries",
+             "stream=codec_type,codec_name,width,height,r_frame_rate,time_base,sample_rate,channels,pix_fmt",
+             "-of", "json", str(path)])
+    info = {}
+    for st in _json.loads(p.stdout).get("streams", []):
+        info.setdefault(st.get("codec_type"), st)
+    return info
+
+
+def _outro_tail_fast(part, outro_audio, out, caption_png, caption_y):
+    info = _stream_info(part)
+    v, a = info["video"], info["audio"]
+    if v.get("codec_name") != "h264" or a.get("codec_name") != "aac":
+        raise RuntimeError("not h264/aac")
+    w, h, fps = int(v["width"]), int(v["height"]), v["r_frame_rate"]
+    tb = int(v["time_base"].split("/")[1])
+    sr, ch = int(a.get("sample_rate", 44100)), int(a.get("channels", 2))
+    odur = probe_duration(outro_audio)
+    hold = odur + 1.2                      # 0.3 s pause, the outro, a short rest
+    tmp = Path(out).with_name(Path(part).stem + "_tail")
+    tmp.mkdir(exist_ok=True)
+    try:
+        last = tmp / "last.png"
+        run(["ffmpeg", "-y", "-v", "error", "-sseof", "-0.5", "-i", str(part), "-update", "1",
+             "-frames:v", "100", str(last)])
+        ins = ["-loop", "1", "-framerate", fps, "-t", f"{hold:.3f}", "-i", str(last), "-i", str(outro_audio)]
+        vf = f"[0:v]scale={w}:{h},setsar=1,format=yuv420p[v0]"
+        if caption_png:
+            ins += ["-loop", "1", "-t", f"{hold:.3f}", "-i", str(caption_png)]
+            vf += f";[2:v]format=rgba[cp];[v0][cp]overlay=0:{caption_y}:enable='gte(t,0.3)'[v1];[v1]format=yuv420p[v]"
+        else:
+            vf += ";[v0]null[v]"
+        lay = "stereo" if ch == 2 else "mono"
+        af = (f"[1:a]aformat=sample_rates={sr}:channel_layouts={lay},adelay=300:all=1,"
+              f"apad=whole_dur={hold:.3f}[a]")
+        enc = (["-c:v", "h264_videotoolbox", "-q:v", "65", "-allow_sw", "1"] if _has_encoder("h264_videotoolbox")
+               else ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"])
+        tail = tmp / "tail.mp4"
+        run(["ffmpeg", "-y", "-v", "error", *ins, "-filter_complex", vf + ";" + af,
+             "-map", "[v]", "-map", "[a]", *enc, "-pix_fmt", "yuv420p", "-r", fps,
+             "-c:a", "aac", "-b:a", "128k", "-ar", str(sr), "-ac", str(ch),
+             "-video_track_timescale", str(tb), "-t", f"{hold:.3f}", str(tail)])
+        lst = tmp / "list.txt"
+        lst.write_text(f"file '{Path(part).resolve()}'\nfile '{tail.resolve()}'\n")
+        run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(lst),
+             "-c", "copy", "-movflags", "+faststart", str(out)])
+        want = probe_duration(part) + hold
+        got = probe_duration(out)
+        if abs(got - want) > 1.0:
+            raise RuntimeError(f"joined length {got:.1f}s, expected {want:.1f}s")
+    finally:
+        import shutil as _sh
+        _sh.rmtree(tmp, ignore_errors=True)
+
+
+def _outro_tail_slow(part, outro_audio, out, caption_png=None, caption_y=None):
     dur = probe_duration(part)
     odur = probe_duration(outro_audio)
     t0, hold = dur + 0.3, odur + 0.9

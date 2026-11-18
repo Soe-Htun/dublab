@@ -633,7 +633,12 @@ def _voice_and_mux(job):
     if job.get("blur"):
         blur = _find_blur(job, src, sfx)
     hide = _find_logos(job, src)
-    want_tt = bool(job.get("frame") and vw > vh)    # also make a 9:16 TikTok version
+    # TikTok (9:16) is the default for a landscape film; ticking "YouTube" also
+    # (or, for a portrait source, only) keeps the normal 16:9 video
+    landscape = vw > vh
+    tt_only = landscape and not job.get("youtube")      # just the 9:16 TikTok video
+    want_tt = landscape and bool(job.get("youtube"))     # 16:9 YouTube video + a 9:16 TikTok one
+    main_frame = frame_layout(vw, vh) if tt_only else None
     logo_png = LOGO_FILE if job.get("logo") and LOGO_FILE.exists() else None
 
     def _caps(w, h, sub):
@@ -645,7 +650,7 @@ def _voice_and_mux(job):
         except Exception as e:  # noqa: BLE001 - never lose the dub over captions
             jlog(job, f"captions skipped: {e}")
             return None
-    captions = _caps(vw, vh, "caps")
+    captions = _caps(*((main_frame["w"], main_frame["h"]) if main_frame else (vw, vh)), "caps")
     if captions:
         jlog(job, f"burning {len(cues)} Burmese captions")
     # the outro (or the last line) can run past the picture: hold the last
@@ -681,8 +686,8 @@ def _voice_and_mux(job):
                     art = None
                     jlog(job, f"AI cover picture failed ({str(e)[:150]}) — using a photo collage")
             covers = make_covers(src, job["title_mm"], d, job["total"] * 0.04, job["total"] * 0.9,
-                                 portrait=bool(sfx), blur=blur, hide=hide, logo=logo_png, parts=nparts,
-                                 chooser=chooser, log=lambda m: jlog(job, m), art=art)
+                                 portrait=bool(sfx or tt_only), blur=blur, hide=hide, logo=logo_png,
+                                 parts=nparts, chooser=chooser, log=lambda m: jlog(job, m), art=art)
             job["covers"] = [c.name for c in covers]
             if want_tt:                  # 9:16 covers for the TikTok version
                 (d / "tt").mkdir(exist_ok=True)
@@ -711,12 +716,23 @@ def _voice_and_mux(job):
             _outro_on_parts(job, parts[:-1], d, outro, caps, blur, vw, vh, frame)
         return [p.name for p in parts]
 
-    names = _render(None, "dubbed", captions)
+    if main_frame:
+        jlog(job, "making the TikTok (9:16) video")
+        try:
+            bounds = [0.0, *cuts, total]
+            main_frame["list"] = render_frames(job.get("title_mm") or "", list(zip(bounds, bounds[1:])),
+                                               d / "frames", main_frame, logo_png)
+        except Exception as e:  # noqa: BLE001 - fall back to the normal 16:9 video
+            jlog(job, f"TikTok frame failed ({str(e)[:150]}) — making a normal video")
+            main_frame = None
+            captions = _caps(vw, vh, "caps")
+    names = _render(main_frame, "dubbed", captions)
+    shutil.rmtree(d / "frames", ignore_errors=True)
     if cuts:
         job["parts"] = names
         job["part_times"] = list(zip([0.0, *cuts], [*cuts, total]))
     if want_tt:
-        jlog(job, "making the TikTok (9:16) version too…")
+        jlog(job, "YouTube video done — making the TikTok (9:16) version too…")
         job.update(stage="mux", pct=93)
         try:
             frame = frame_layout(vw, vh)
@@ -819,7 +835,7 @@ def create_job():
     keep_bg = request.form.get("keep_bg", "0") == "1"
     outro = request.form.get("outro", "1") == "1"
     intro = request.form.get("intro", "0") == "1"      # off unless ticked
-    frame = request.form.get("frame", "0") == "1"      # 9:16 TikTok frame for landscape films
+    youtube = request.form.get("youtube", "0") == "1"  # TikTok 9:16 always; this adds the 16:9 YouTube one
     cover = True                                          # every video gets a cover
     logo = request.form.get("logo", "1") == "1"
     send_tg = request.form.get("telegram") == "1" and _admin_ok() and telegram.configured()
@@ -908,7 +924,7 @@ def create_job():
                  "recap": recap,
                  "tg_src": tg_msg,
                  "id": jid, "telegram": send_tg, "owner": _admin_ok(),
-                 "captions": captions, "blur": blur, "split": split, "frame": frame,
+                 "captions": captions, "blur": blur, "split": split, "youtube": youtube,
                  "created": time.time()}
     jlog(jobs[jid], "uploaded " + re.sub(r"[\r\n]", " ", label)[:160])
     with lock:
