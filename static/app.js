@@ -261,7 +261,8 @@ function showResult(jid, parts) {
     parts.forEach((p) => {
       const row = document.createElement('div'); row.className = 'part';
       const play = document.createElement('button'); play.className = 'ghost' + (p.n === 1 ? ' on' : '');
-      play.textContent = (p.tt ? '📱 TikTok ' : '▶️ ') + `အပိုင်း ${p.k || p.n}  ·  ${mmss(p.start)}–${mmss(p.end)}`;
+      play.textContent = p.full ? `📺 YouTube (အပြည့်)  ·  ${mmss(p.end)}`
+        : (p.tt ? '📱 TikTok ' : '▶️ ') + `အပိုင်း ${p.k || p.n}  ·  ${mmss(p.start)}–${mmss(p.end)}`;
       play.addEventListener('click', () => {
         $('#resultvideo').src = '/r/' + jid + '/' + p.n; setSpeed(1);
         box.querySelectorAll('.ghost').forEach((b) => b.classList.toggle('on', b === play));

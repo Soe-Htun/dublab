@@ -777,7 +777,7 @@ def _voice_and_mux(job):
     cuts = split_points(cues, total, job.get("split") or 0)
     nparts = len(cuts) + 1 if cuts else 1
     if cuts:
-        jlog(job, f"splitting into {nparts} parts of ~{job['split']} min "
+        jlog(job, ("TikTok version: " if want_tt else "") + f"splitting into {nparts} parts of ~{job['split']} min "
                   f"(cuts at {', '.join(f'{c / 60:.1f}' for c in cuts)} min)")
     if job.get("cover") and (job.get("title_mm") or job.get("no_title")):
         # same photos for every part; a split film gets "title - 1", "title - 2"…
@@ -797,7 +797,8 @@ def _voice_and_mux(job):
                     jlog(job, f"AI cover picture failed ({str(e)[:150]}) — using a photo collage")
             covers = make_covers(src, job["title_mm"], d, job["total"] * 0.04, job["total"] * 0.9,
                                  portrait=bool(sfx or tt_only), blur=blur, hide=hide, logo=logo_png,
-                                 parts=nparts, chooser=chooser, log=lambda m: jlog(job, m), art=art)
+                                 parts=1 if want_tt else nparts,      # the YouTube video stays whole
+                                 chooser=chooser, log=lambda m: jlog(job, m), art=art)
             job["covers"] = [c.name for c in covers]
             if want_tt:                  # 9:16 covers for the TikTok version
                 (d / "tt").mkdir(exist_ok=True)
@@ -810,7 +811,7 @@ def _voice_and_mux(job):
             jlog(job, f"cover skipped: {e}")
     intro_img = d / job["covers"][0] if lead and job.get("covers") else None
 
-    def _render(frame, name, caps):
+    def _render(frame, name, caps, cuts):
         """mux, then split into parts and give each part the outro; returns file names."""
         out = d / f"{name}.mp4"
         mux(src, dub_wav, out, bg_wav=bg_wav, bg_volume=BG_VOLUME, logo=logo,
@@ -836,9 +837,11 @@ def _voice_and_mux(job):
             jlog(job, f"TikTok frame failed ({str(e)[:150]}) — making a normal video")
             main_frame = None
             captions = _caps(vw, vh, "caps")
-    names = _render(main_frame, "dubbed", captions)
+    # YouTube + TikTok: the YouTube video stays whole (watch hours); only TikTok is split
+    main_cuts = [] if want_tt else cuts
+    names = _render(main_frame, "dubbed", captions, main_cuts)
     shutil.rmtree(d / "frames", ignore_errors=True)
-    if cuts:
+    if main_cuts:
         job["parts"] = names
         job["part_times"] = list(zip([0.0, *cuts], [*cuts, total]))
     if want_tt:
@@ -849,7 +852,7 @@ def _voice_and_mux(job):
             bounds = [0.0, *cuts, total]
             frame["list"] = render_frames(job.get("title_mm") or "", list(zip(bounds, bounds[1:])),
                                           d / "frames", frame, logo_png)
-            job["tt"] = _render(frame, "tiktok", _caps(frame["cap_w"], frame["cap_h"], "caps_tt"))
+            job["tt"] = _render(frame, "tiktok", _caps(frame["cap_w"], frame["cap_h"], "caps_tt"), cuts)
             job["part_times"] = list(zip([0.0, *cuts], [*cuts, total]))
         except Exception as e:  # noqa: BLE001 - the normal version is still there
             jlog(job, f"TikTok version failed: {str(e)[:200]}")
@@ -1066,7 +1069,10 @@ def job_status(jid):
         for i, (_, name) in enumerate(outs, 1):
             which, k = _out_kind(job, i)
             a, b = times[min(k, len(times)) - 1]
+            if which == "covers" and not job.get("parts"):     # the whole (YouTube) video
+                a, b = 0, job.get("total") or b
             parts.append({"n": i, "k": k, "tt": which == "covers_tt", "name": name,
+                          "full": which == "covers" and not job.get("parts"),
                           "start": round(a), "end": round(b)})
     return jsonify(status=job["status"], stage=job["stage"], pct=job["pct"],
                    stage_pct=stage_pct, parts=parts,

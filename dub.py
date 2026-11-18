@@ -982,8 +982,7 @@ def render_frames(title, windows, out_dir, layout, logo=None, extra=30.0):
         img = base.copy().convert("RGB")
         title_cy = (top_y + vy - 30) // 2
         if title:                            # "Jaat - 1", "Jaat - 2"… like the covers
-            _gold_title(img, title, int(W * 0.9), W // 2, title_cy, 2, 104,
-                        f" - {i}" if n > 1 else "")
+            _gold_title(img, title, int(W * 0.9), W // 2, title_cy, 2, 104, part_suffix(i, n))
         img = img.convert("RGBA")
         hole = Image.new("RGBA", (W, hv), (0, 0, 0, 0))
         img.paste(hole, (0, vy))             # the picture shows through here
@@ -1113,12 +1112,15 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
                     sw, sh = video_size(src_video)            # its edges) — a blur left them readable
                     sw, sh = sw // 2 * 2, sh // 2 * 2
                     dl = []
-                    for x0, y0, x1, y1 in hide:     # (own names: x / y are the logo's spot)
+                    for box in hide:                # (own names: x / y are the logo's spot)
+                        x0, y0, x1, y1 = box[:4]
                         dx, dy = max(1, int(sw * x0)), max(1, int(sh * y0))
                         dw = min(int(sw * x1), sw - 2) - dx
                         dh = min(int(sh * y1), sh - 2) - dy
                         if dw > 4 and dh > 4:
-                            dl.append(f"delogo=x={dx}:y={dy}:w={dw}:h={dh}")
+                            when = (f":enable='between(t,{box[4] + lead:.2f},{box[5] + lead:.2f})'"
+                                    if len(box) >= 6 else "")      # a moving logo: only while it shows
+                            dl.append(f"delogo=x={dx}:y={dy}:w={dw}:h={dh}{when}")
                     if dl:
                         parts.append(f"[{cur}]{','.join(dl)}[hd]")
                         cur = "hd"
@@ -1769,6 +1771,13 @@ def render_art_cover(art, title, out_jpg, portrait=False, logo=None, suffix=""):
     return Path(out_jpg)
 
 
+def part_suffix(i, n):
+    """What follows the title on part i of n: " - 1", " - 2"… and " - End" on the last."""
+    if n <= 1:
+        return ""
+    return " - End" if i == n else f" - {i}"
+
+
 def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, blur=None, parts=1,
                 chooser=None, log=None, art=None, hide=None):
     """The film's cover: 4 photos in a 2x2 grid with the title in the middle.
@@ -1779,7 +1788,7 @@ def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, bl
     if art:                       # an AI-drawn picture: same picture for every part
         names = ["cover1.jpg"] if parts <= 1 else [f"cover{i}.jpg" for i in range(1, parts + 1)]
         return [render_art_cover(art, title, out_dir / n, portrait, logo,
-                                 "" if parts <= 1 else f" - {i}") for i, n in enumerate(names, 1)]
+                                 part_suffix(i, parts)) for i, n in enumerate(names, 1)]
     pick, focus = None, {}
     if chooser:
         try:
@@ -1809,7 +1818,7 @@ def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, bl
         return [render_collage(video, pick, title, out_dir / "cover1.jpg", portrait, logo, blur, hide=hide,
                                focus=focus)]
     return [render_collage(video, pick, title, out_dir / f"cover{i}.jpg", portrait, logo, blur,
-                           suffix=f" - {i}", hide=hide, focus=focus) for i in range(1, parts + 1)]
+                           suffix=part_suffix(i, parts), hide=hide, focus=focus) for i in range(1, parts + 1)]
 
 
 # ---- recap version: cut the scenes that go with each narration beat ----
