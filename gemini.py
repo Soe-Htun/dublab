@@ -275,6 +275,11 @@ Rules:
 - Beats are in story order. Each beat tells what happens during a short range of transcript lines, so the
   matching scene can be shown while it is narrated; cover the whole section from start to end.
 - Each beat's line range must be in order and not go backwards; ranges should be short (the scene shown).
+- SKIP ADVERTISEMENTS: re-uploaded films often have ads cut into them (betting/casino sites such as 1XBET,
+  apps, shops, "download free movies at www…", channel promos, trailers of other films). Their lines do not
+  belong to the story (different topic, selling something, website names, prices, "download", "join our
+  channel"). Never narrate them and never point a beat's line range at them or at the lines right next to them,
+  so the ad is not shown.
 - SKIP SONGS AND DANCES: song-and-dance numbers, music videos and montages (common in Indian films) are not
   story. Transcript lines that are song lyrics (rhyming, repeated chorus lines, poetic words unrelated to the
   dialogue around them) belong to such a number: never narrate them and never point a beat's line range at them,
@@ -311,6 +316,7 @@ def _chars(beats):
 
 
 CAST_PROMPT = """Below is the transcript of a movie ({lang}, from speech recognition — may contain mistakes).
+Ignore advertisements cut into the video (betting sites, apps, channel promos) — their people are not characters.
 List its characters (at most 12, most important first) and give each one a Burmese name for a
 Myanmar recap narration.
 
