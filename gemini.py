@@ -127,9 +127,11 @@ def _call(prompt, api_key, max_tokens=8192, images=None):
         except urllib.error.HTTPError as e:
             if e.code != 429:
                 attempt += 1
-                if attempt >= MAX_RETRIES:
+                # 500/502/503/504 = Gemini overloaded for a while: keep trying ~4 minutes
+                limit = MAX_RETRIES + 6 if e.code >= 500 else MAX_RETRIES
+                if attempt >= limit:
                     raise
-                time.sleep(2 ** attempt * 2)
+                time.sleep(min(30, 2 ** attempt * 2))
                 continue
             # rate limited: wait as long as Gemini asks (per-minute quota), a few times
             limited += 1
