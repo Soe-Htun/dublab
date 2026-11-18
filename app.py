@@ -229,9 +229,11 @@ def _find_blur(job, src, sfx):
         top, bot = band
         # generous margin: a two-line subtitle reaches higher than the
         # sampled frames may show, and outlines/shadows spread a little
-        top, bot = max(0.0, top - 0.12), min(1.0, bot + 0.035)
-        if bot - top < 0.2:                              # at least two lines' worth, with room to spare
-            top = max(0.0, bot - 0.2)
+        # the model reads the top of a one-line subtitle; a two-line one starts
+        # ~6-8% higher (Jaat: said 84-86%, really 78%)
+        top, bot = max(0.0, top - 0.085), min(1.0, bot + 0.02)
+        if bot - top < 0.16:                             # at least two lines' worth
+            top = max(0.0, bot - 0.16)
         jlog(job, f"original captions found at {top * 100:.0f}–{bot * 100:.0f}% of the height — blurring there")
         return {"bottom": 1 - bot, "height": bot - top}
     except Exception as e:  # noqa: BLE001 - never lose the dub over this
@@ -254,9 +256,20 @@ def _find_logos(job, src):
     except Exception as e:  # noqa: BLE001 - never lose the dub over this
         jlog(job, f"logo search failed ({str(e)[:120]}) — not blurring logos")
         return []
-    pad = 0.012
-    boxes = [(max(0.0, x0 - pad), max(0.0, y0 - pad), min(1.0, x1 + pad), min(1.0, y1 + pad))
+    # generous room: the model's boxes are often a bit tight, and a logo that
+    # drifts a little or a second one right next to it must be covered too
+    px, py = 0.025, 0.04
+    boxes = [(max(0.0, x0 - px), max(0.0, y0 - py), min(1.0, x1 + px), min(1.0, y1 + py))
              for x0, y0, x1, y1 in boxes]
+    merged = []                       # boxes that touch become one
+    for bx in sorted(boxes):
+        for i, m in enumerate(merged):
+            if bx[0] <= m[2] and m[0] <= bx[2] and bx[1] <= m[3] and m[1] <= bx[3]:
+                merged[i] = (min(m[0], bx[0]), min(m[1], bx[1]), max(m[2], bx[2]), max(m[3], bx[3]))
+                break
+        else:
+            merged.append(bx)
+    boxes = merged
     if boxes:
         jlog(job, "original logo(s) found — blurring " + ", ".join(
             f"x {x0 * 100:.0f}–{x1 * 100:.0f}% y {y0 * 100:.0f}–{y1 * 100:.0f}%" for x0, y0, x1, y1 in boxes))

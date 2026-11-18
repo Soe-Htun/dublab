@@ -904,15 +904,23 @@ def separate_music(src_video, job_dir):
 FRAME_W, FRAME_H = 1080, 1920      # TikTok / Shorts frame for landscape films
 
 
-def frame_layout(vw, vh):
+def frame_layout(vw, vh, blur=None):
     """Where a landscape picture goes in the 9:16 frame: full width, a little
-    above the middle (TikTok's own buttons and text cover the bottom)."""
-    hv = int(round(FRAME_W * vh / vw / 2)) * 2
+    above the middle (TikTok's own buttons and text cover the bottom).
+    blur: the old captions' band — when it is at the bottom, that strip is cut
+    off the picture instead of blurred, and our captions go below the picture."""
+    keep = 1.0
+    if blur:
+        b0, bh = float(blur["bottom"]), float(blur["height"])
+        if b0 < 0.15 and 1 - b0 - bh >= 0.5:
+            keep = 1 - b0 - bh
+    hv = int(round(FRAME_W * vh * keep / vw / 2)) * 2
     vy = max(420, int(880 - hv / 2)) // 2 * 2
-    # captions are drawn for the picture's size (not the tall frame), so they
-    # stay in proportion to it; cap_w/cap_h go to render_captions
-    return {"w": FRAME_W, "h": FRAME_H, "vh": hv, "vy": vy,
-            "cap_w": FRAME_W, "cap_h": max(hv, FRAME_W * 9 // 16)}
+    # captions are drawn for the picture's full size (not the tall frame), so
+    # they stay in proportion to it; cap_w/cap_h go to render_captions
+    full = int(round(FRAME_W * vh / vw))
+    return {"w": FRAME_W, "h": FRAME_H, "vh": hv, "vy": vy, "keep": keep,
+            "cap_w": FRAME_W, "cap_h": max(full, FRAME_W * 9 // 16)}
 
 
 def frame_caption_y(frame, strip_h, blur=None):
@@ -920,6 +928,8 @@ def frame_caption_y(frame, strip_h, blur=None):
     (over the old captions), like the normal video — or near the picture's
     bottom when nothing is blurred."""
     vy, hv = frame["vy"], frame["vh"]
+    if frame.get("keep", 1.0) < 1.0:     # old captions cut off: ours go just below the picture
+        return int(vy + hv + 6)
     if blur:      # centred on the blurred band (the text is centred in its strip)
         b0, bh = float(blur["bottom"]), float(blur["height"])
         return int(vy + hv * (1 - b0 - bh / 2) - strip_h / 2)
@@ -1062,19 +1072,25 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
                     # (done on a 1/8-size copy of the band and scaled back: the same look,
                     # far less work than a big blur at full size)
                     parts.append(f"[bb]crop=iw:ih*{bh:.4f}:0:{by},split[bc][bref];"
-                                 "[bc]scale=trunc(iw/16)*2:trunc(ih/16)*2,"
-                                 "boxblur=luma_radius='min(h/3,6)':luma_power=3:"
-                                 "chroma_radius='min(ch/3,3)':chroma_power=3[bs];"
+                                 "[bc]scale=trunc(iw/12)*2:trunc(ih/12)*2,"
+                                 "boxblur=luma_radius='min(h/4,4)':luma_power=2:"
+                                 "chroma_radius='min(ch/4,2)':chroma_power=2[bs];"
                                  "[bs][bref]scale2ref=flags=bicubic[bz][bdrop];[bdrop]nullsink")
                     parts.append(f"[bm][bz]overlay=0:H*{1 - b0 - bh:.4f}[s1]")
                     cur = "s1"
-                for k, (x0, y0, x1, y1) in enumerate(hide or []):   # the video's own logos
-                    parts.append(f"[{cur}]split[hm{k}][hb{k}]")
-                    parts.append(f"[hb{k}]crop=iw*{x1 - x0:.4f}:ih*{y1 - y0:.4f}:iw*{x0:.4f}:ih*{y0:.4f},"
-                                 "boxblur=luma_radius='min(w,h)/4':luma_power=3:"
-                                 f"chroma_radius='min(cw,ch)/4':chroma_power=3[hz{k}]")
-                    parts.append(f"[hm{k}][hz{k}]overlay=W*{x0:.4f}:H*{y0:.4f}[hd{k}]")
-                    cur = f"hd{k}"
+                if hide:          # the video's own logos: erased (delogo fills each box in from
+                    sw, sh = video_size(src_video)            # its edges) — a blur left them readable
+                    sw, sh = sw // 2 * 2, sh // 2 * 2
+                    dl = []
+                    for x0, y0, x1, y1 in hide:     # (own names: x / y are the logo's spot)
+                        dx, dy = max(1, int(sw * x0)), max(1, int(sh * y0))
+                        dw = min(int(sw * x1), sw - 2) - dx
+                        dh = min(int(sh * y1), sh - 2) - dy
+                        if dw > 4 and dh > 4:
+                            dl.append(f"delogo=x={dx}:y={dy}:w={dw}:h={dh}")
+                    if dl:
+                        parts.append(f"[{cur}]{','.join(dl)}[hd]")
+                        cur = "hd"
                 if intro_img:     # the cover over the held intro frame (it has the logo already)
                     parts.append(f"[{intro_idx}:v]scale={iw}:{ih}:force_original_aspect_ratio=decrease,"
                                  f"pad={iw}:{ih}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[ic]")
@@ -1086,7 +1102,9 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
                                  + (f":enable='gte(t,{lead:.3f})'" if intro_img else "") + "[s2]")
                     cur = "s2"
                 if frame:         # picture (with its logo) into the 9:16 frame (the frame has a see-through window)
-                    parts.append(f"[{cur}]scale={frame['w']}:{frame['vh']},setsar=1,"
+                    crop = (f"crop=iw:trunc(ih*{frame['keep']:.4f}/2)*2:0:0,"
+                            if frame.get("keep", 1.0) < 1.0 else "")
+                    parts.append(f"[{cur}]{crop}scale={frame['w']}:{frame['vh']},setsar=1,"
                                  f"pad={frame['w']}:{frame['h']}:0:{frame['vy']}:black[pv]")
                     parts.append(f"[{frame_idx}:v]format=rgba[fr]")
                     parts.append("[pv][fr]overlay=0:0:eof_action=repeat:shortest=1[sf]")
@@ -1447,7 +1465,7 @@ def render_cover(video, t, title, out_jpg, portrait=False, logo=None, blur=None)
     return Path(out_jpg)
 
 
-def _grab(video, t, w, h, hide=None):
+def _grab(video, t, w, h, hide=None, blur=None):
     """Frame at t, black letterbox bars trimmed, scaled and centre-cropped
     to w x h (PIL RGB). hide: [(x0, y0, x1, y1)] fractions blurred first (old logos)."""
     from PIL import Image, ImageOps
@@ -1458,13 +1476,31 @@ def _grab(video, t, w, h, hide=None):
     if r.returncode or not r.stdout:
         raise RuntimeError("frame grab failed")
     img = Image.open(io.BytesIO(r.stdout)).convert("RGB")
-    if hide:
-        from PIL import ImageFilter
-        W0, H0 = img.size
+    if hide:          # old logos erased like ffmpeg's delogo: filled in from the box edges
+        a = np.asarray(img, dtype=np.float32).copy()
+        H0, W0 = a.shape[:2]
         for x0, y0, x1, y1 in hide:
-            box = (int(W0 * x0), int(H0 * y0), int(W0 * x1), int(H0 * y1))
-            if box[2] > box[0] and box[3] > box[1]:
-                img.paste(img.crop(box).filter(ImageFilter.GaussianBlur(max(6, (box[3] - box[1]) // 3))), box[:2])
+            l, t = max(1, int(W0 * x0)), max(1, int(H0 * y0))
+            r, b = min(W0 - 2, int(W0 * x1)), min(H0 - 2, int(H0 * y1))
+            if r - l < 3 or b - t < 3:
+                continue
+            top, bot = a[t - 1, l:r + 1], a[b + 1, l:r + 1]          # edge rows / columns
+            lef, rig = a[t:b + 1, l - 1], a[t:b + 1, r + 1]
+            fy = np.linspace(0, 1, b - t + 1)[:, None, None]
+            fx = np.linspace(0, 1, r - l + 1)[None, :, None]
+            vert = top[None] * (1 - fy) + bot[None] * fy
+            horz = lef[:, None] * (1 - fx) + rig[:, None] * fx
+            a[t:b + 1, l:r + 1] = (vert + horz) / 2
+        img = Image.fromarray(a.clip(0, 255).astype(np.uint8))
+    if blur:          # the old captions: cut the band off (it sits at the bottom) — a photo
+        b0, bh = float(blur["bottom"]), float(blur["height"])          # looks better without
+        W0, H0 = img.size                                              # a smudge across it
+        if b0 < 0.15 and 1 - b0 - bh > 0.45:
+            img = img.crop((0, 0, W0, int(H0 * (1 - b0 - bh))))
+        else:
+            from PIL import ImageFilter
+            box = (0, int(H0 * (1 - b0 - bh)), W0, int(H0 * (1 - b0)))
+            img.paste(img.crop(box).filter(ImageFilter.GaussianBlur(24)), box[:2])
     g = np.asarray(img.convert("L"), dtype=np.float32)
     rows, cols = np.where(g.mean(1) > 18)[0], np.where(g.mean(0) > 18)[0]
     if len(rows) > g.shape[0] * 0.4 and len(cols) > g.shape[1] * 0.4:
@@ -1483,11 +1519,15 @@ def _layout(n, W, H, portrait):
             return [(0, 0, W, h2), (0, h2 + g, W, H - h2 - g)]
         w2 = (W - g) // 2
         return [(0, 0, w2, H), (w2 + g, 0, W - w2 - g, H)]
-    if n == 4:
+    if n == 4 and not portrait:
         g = 6
         w2, h2 = (W - g) // 2, (H - g) // 2
         return [(0, 0, w2, h2), (w2 + g, 0, W - w2 - g, h2),
                 (0, h2 + g, w2, H - h2 - g), (w2 + g, h2 + g, W - w2 - g, H - h2 - g)]
+    if portrait and n == 4:       # four film-shaped rows: whole scenes, no faces cut off
+        g = 6
+        hh = (H - 3 * g) // 4
+        return [(0, k * (hh + g), W, hh if k < 3 else H - 3 * (hh + g)) for k in range(4)]
     if portrait:
         top = int(H * 0.42)
         rows = {3: [(0, 0, W, top), (0, top + g, W // 2 - g // 2, H - top - g),
@@ -1558,11 +1598,7 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
     times = (list(times) * 5)[:n]
     canvas = Image.new("RGB", (W, H), (236, 178, 60) if n in (2, 4) else (12, 8, 6))   # 2 / 2x2: thin gold lines
     for (x, y, w, h), t in zip(_layout(n, W, H, portrait), times):
-        fr = _grab(video, t, w, h, hide)
-        if blur:                                # hide burned-in captions inside each panel
-            b0, bh = float(blur["bottom"]), float(blur["height"])
-            box = (0, int(h * (1 - b0 - bh)), w, int(h * (1 - b0)))
-            fr.paste(fr.crop(box).filter(ImageFilter.GaussianBlur(24)), box[:2])
+        fr = _grab(video, t, w, h, hide, blur)     # old captions cut off, old logos blurred
         fr = ImageEnhance.Color(ImageEnhance.Contrast(fr).enhance(1.15)).enhance(1.2)
         canvas.paste(fr, (x, y))
     img = canvas.convert("RGBA")
@@ -1578,7 +1614,7 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
     img.alpha_composite(shade, (0, band_y))
     img = img.convert("RGB")
     if portrait:
-        _gold_title(img, title, int(W * 0.88), W // 2, H // 2, 3, int(W * 0.12), suffix)
+        _gold_title(img, title, int(W * 0.9), W // 2, H // 2, 3, int(W * 0.17), suffix)   # big: phones show it small
     else:
         _gold_title(img, title, int(W * 0.86), W // 2, H // 2, 2, int(H * 0.13), suffix)
     if logo and Path(logo).exists():
@@ -1694,6 +1730,8 @@ def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, bl
     if chooser:
         try:
             hero, others, layout = _cover_times_by_ai(video, start, end, chooser)
+            if portrait:
+                layout = 2        # TikTok cover: two big photos, one above the other
             if log:
                 log(f"cover photos picked by AI: {len(hero)} of the main character, {len(others)} others"
                     f" · {layout}-photo cover")
@@ -1703,7 +1741,7 @@ def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, bl
             if log:
                 log(f"AI cover pick failed ({str(e)[:120]}) — using the sharpest frames")
     if not pick:
-        pick = pick_cover_times(video, start, end, 4, samples=36, tmp=out_dir)
+        pick = pick_cover_times(video, start, end, 2 if portrait else 4, samples=36, tmp=out_dir)
     if parts <= 1:
         return [render_collage(video, pick, title, out_dir / "cover1.jpg", portrait, logo, blur, hide=hide)]
     return [render_collage(video, pick, title, out_dir / f"cover{i}.jpg", portrait, logo, blur,

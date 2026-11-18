@@ -457,14 +457,18 @@ def fix_script(lines, api_key):
 
 # ---- cover photos: let the model find the main character ----
 COVER_PROMPT = """The numbered frames below (0 to {last}) come from one movie.
-First work out who the MAIN CHARACTER is (the protagonist: the person who appears most and the story is about).
+First work out its THREE MOST IMPORTANT CHARACTERS: the MAIN character (the protagonist, the person who appears
+most and the story is about), the SECOND (e.g. the villain or partner) and the THIRD (e.g. the love interest).
 Then answer with JSON only, no other text:
-{{"layout": 2 or 4, "hero": [...], "others": [...]}}
-- "layout": 4 (a 2x2 grid) for most movies; 2 (two big photos) when the video is simple — one or two characters,
-  one setting — or there are fewer than 4 good, different frames.
-- "hero": up to 5 frame numbers where the main character's FACE is clearly visible, large and sharp (close-up or medium shot, looking good, dramatic expression is a plus), best first.
-- "others": up to 8 frame numbers, best first, that together show what this movie is ABOUT: its main scenes and setting (e.g. a fishing movie: people fishing, the small boat, the sea; a war movie: soldiers, tanks, battle; a fantasy: the magic, creatures, the kingdom), plus the other important characters (villain, partner, love interest) with their faces visible. Mix scene shots and character shots.
-Never pick dark, blurry, black, fading, crowd-only, landscape-only, logo, title or text frames. A frame may appear in only one list."""
+{{"layout": 2 or 4, "hero": [...], "second": [...], "third": [...], "scenes": [...]}}
+- "layout": 4 for most movies; 2 (two big photos) when the video is simple — one or two characters, one setting —
+  or there are fewer than 4 good, different frames.
+- "hero": up to 5 frames of the MAIN character, "second": up to 4 of the second character, "third": up to 4 of the
+  third — each with that person's FACE clearly visible, large and sharp (close-up or medium shot; a dramatic
+  expression is a plus), best first.
+- "scenes": up to 4 striking frames of the movie's key action or setting with people in them, best first.
+Never pick dark, blurry, black, fading, empty or unclear frames (furniture, walls, backs of heads, crowds far away),
+landscape-only, logo, title, credit or text frames. A frame may appear in only one list."""
 
 
 def pick_cover_frames(jpegs, api_key):
@@ -475,7 +479,12 @@ def pick_cover_frames(jpegs, api_key):
     data = json.loads(m.group(0)) if m else {}
     ok = lambda xs: [int(x) for x in xs or [] if str(x).isdigit() and 0 <= int(x) < len(jpegs)]
     hero = list(dict.fromkeys(ok(data.get("hero"))))
-    others = [i for i in dict.fromkeys(ok(data.get("others"))) if i not in hero]
+    second = [i for i in dict.fromkeys(ok(data.get("second"))) if i not in hero]
+    third = [i for i in dict.fromkeys(ok(data.get("third"))) if i not in hero and i not in second]
+    scenes = [i for i in dict.fromkeys(ok(data.get("scenes") or data.get("others")))
+              if i not in hero and i not in second and i not in third]
+    # best of the 2nd and 3rd characters first: a 4-photo cover takes others[0:2]
+    others = second[:1] + third[:1] + second[1:] + third[1:] + scenes
     if not hero and not others:
         raise ValueError("no cover frames picked")
     layout = 2 if str(data.get("layout")).strip() == "2" else 4
@@ -509,7 +518,9 @@ CAPTION_BAND_PROMPT = """These frames come from one video. Some videos have subt
 (e.g. English or Chinese text lines, usually near the bottom). Look at ALL frames together.
 If there is burned-in subtitle text, give the vertical area that covers it in every frame where it appears,
 on a 0-1000 scale of the frame height measured from the TOP (0 = top edge, 1000 = bottom edge).
-Cover the whole text including its outline/shadow, and both lines when there are two.
+Cover the whole text including its outline/shadow. Subtitles are often TWO lines in some frames and one line in
+others: "top" must be the top of the HIGHEST line seen in ANY frame (the upper line of a two-line subtitle), and
+"bottom" the bottom of the LOWEST line in any frame.
 Ignore logos, watermarks, channel names in corners, and text that is part of the scene (signs, posters).
 Answer with JSON only: {"subtitles": true, "top": <number>, "bottom": <number>} or {"subtitles": false}"""
 
