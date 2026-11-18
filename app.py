@@ -138,7 +138,7 @@ VOICES = {
     "auto2mm": {"female": "my-MM-NilarNeural", "male": "my-MM-ThihaNeural"},
 }
 SRC_LANG = {"en2mm": "en", "mm2en": "my", "zh2mm": "zh", "auto2mm": None}  # whisper language
-LANG_NAMES = {"zh": "Chinese (Mandarin)", "yue": "Cantonese", "en": "English",
+LANG_NAMES = {"my": "Burmese", "zh": "Chinese (Mandarin)", "yue": "Cantonese", "en": "English",
               "ja": "Japanese", "ko": "Korean", "th": "Thai", "hi": "Hindi",
               "vi": "Vietnamese", "id": "Indonesian", "ms": "Malay",
               "ru": "Russian", "es": "Spanish", "fr": "French", "de": "German"}
@@ -496,9 +496,11 @@ def _transcribe_and_translate(jid, job):
         raise ValueError("အသံထဲမှာ စကားပြောသံ မတွေ့ဘူး")
     if direction == "auto2mm":
         jlog(job, f"detected language: {lang}")
+        if lang == "my" and not job.get("recap"):
+            raise ValueError("ဒီဗီဒီယိုက မြန်မာလို ပြောထားပြီးသားပါ — မြန်မာ ရုပ်ရှင်ဆို "
+                             "🎬 Recap ကို ရွေးပါ (AI အသံနဲ့ ဇာတ်ကြောင်းပြော recap လုပ်ပေးမယ်)")
         if lang == "my":
-            raise ValueError("ဒီဗီဒီယိုက မြန်မာလို ပြောထားပြီးသားပါ — "
-                             "တရုတ်/English စတဲ့ တခြားဘာသာ ဗီဒီယိုပဲ dub လို့ရတယ်")
+            jlog(job, "Burmese film — writing a Burmese recap (no translation; the original voices are dropped)")
         direction = {"zh": "zh2mm", "en": "en2mm"}.get(lang, "any2mm")
     utter = merge_segments(segs)
     jlog(job, f"transcribed {len(segs)} segments → {len(utter)} utterances")

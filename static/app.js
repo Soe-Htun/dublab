@@ -554,7 +554,7 @@ document.querySelectorAll('#recapgrid .opt').forEach((b) => b.addEventListener('
   try { localStorage.setItem('dublab_recap_len', recapLen); } catch (e) {}
 }));
 try {
-  $('#recapchk').checked = localStorage.getItem('dublab_recap_on') === '1';
+  $('#recapchk').checked = true;     // recap is the default every time; untick for a full dub
   recapLen = localStorage.getItem('dublab_recap_len') || '20';
 } catch (e) { /* ignore */ }
 syncRecap();

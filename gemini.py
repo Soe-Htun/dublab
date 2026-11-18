@@ -253,10 +253,12 @@ Rules:
 
 
 MOVIE_NAME_PROMPT = """Below is the name a video was shared under (a Telegram caption, file name or YouTube title).
-If it names a real movie or series, give that movie's name the way people search for it — in its usual Latin
-spelling, with the uploader's tricks undone: letters split by dashes, dots or spaces joined back
+If it names a real movie or series, give that movie's name the way people search for it — in its usual spelling
+(Latin letters for foreign films; a Burmese film keeps its Burmese title in Myanmar script), with the uploader's
+tricks undone: letters split by dashes, dots or spaces joined back
 ("R-R-R" → "RRR", "K-i-n-g O-f B-e-g-g-a-r-s" → "King of Beggars", "Na..... ay..... ak" → "Nayak"), and without
-years, quality tags, language/subtitle notes (e.g. "မြန်မာစာတန်းထိုး", "Hindi", "HD", "1080p", "Full Movie"),
+years, quality tags, language/subtitle notes (e.g. "မြန်မာစာတန်းထိုး", "Hindi", "HD", "1080p", "Full Movie",
+"မြန်မာဇာတ်ကား", "ရုပ်ရှင်"),
 channel names, hashtags and emojis.
 If it does not clearly name a movie (e.g. "video_123", a random sentence, a channel's description), answer NONE.
 Answer with the name only (or NONE)."""
@@ -363,6 +365,17 @@ Output one character per line as "Burmese name = who they are (role, gender, age
 Nothing else."""
 
 
+CAST_PROMPT_MM = """Below is the transcript of a BURMESE movie (from speech recognition — names may be misspelled).
+List its characters (at most 12, most important first) with the names the film itself uses for them, spelled
+correctly in Burmese (fix obvious speech-recognition mistakes). A character never called by name is written by
+role or relation, e.g. "ကိုအောင်ရဲ့ အမေ". Ignore advertisements cut into the video.
+Output one character per line as "name = who they are (role, gender, age)". Nothing else."""
+
+
+def _is_burmese(lang):
+    return (lang or "").strip().lower() in ("my", "burmese", "myanmar")
+
+
 def write_cast(lines, api_key, lang=None, max_chars=60000):
     """Burmese names for the characters, decided once for the whole film so
     every parallel recap section calls them the same."""
@@ -371,7 +384,8 @@ def write_cast(lines, api_key, lang=None, max_chars=60000):
         third = max_chars // 3
         mid = len(text) // 2
         text = text[:third] + "\n…\n" + text[mid - third // 2: mid + third // 2] + "\n…\n" + text[-third:]
-    raw = _call(CAST_PROMPT.format(lang=lang or "original language") + "\n\nTranscript:\n" + text,
+    prompt = CAST_PROMPT_MM if _is_burmese(lang) else CAST_PROMPT
+    raw = _call(prompt.format(lang=lang or "original language") + "\n\nTranscript:\n" + text,
                 api_key, max_tokens=2000)
     rows = [r.strip(" -*") for r in raw.strip().splitlines() if "=" in r]
     return "\n".join(rows[:12])
@@ -395,6 +409,10 @@ def write_recap(lines, minutes, api_key, lang=None, channel=None, min_minutes=0,
         cast = ""
         if log:
             log(f"character names skipped: {e}")
+    if _is_burmese(lang):        # a Burmese film: its own names, not the preferred-names list
+        extra += ("\n- This is a BURMESE film: call the characters by the film's OWN names (as listed below), "
+                  "NOT by the preferred-names list above. Retell it in your own words as a narrator — never copy "
+                  "the dialogue line by line.")
     if cast:
         if log:
             log("characters: " + " · ".join(r.split("=")[0].strip() for r in cast.splitlines()))
