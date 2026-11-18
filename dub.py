@@ -1050,8 +1050,13 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
     if logo:
         vw = _video_width(src_video)
         lw = max(16, int(vw * float(logo.get("size", 0.12))) // 2 * 2)
-        m = max(8, int(vw * 0.02))                 # margin from the edges
-        x = f"{m}" if "left" in logo.get("position", "") else f"W-w-{m}"
+        sw_, sh_ = video_size(src_video)
+        # 9:16 output (TikTok frame, or a portrait upload): phones taller than 9:16 make
+        # TikTok trim the sides, and its buttons sit on the right — keep well inside
+        tall = bool(frame) or sh_ > sw_
+        m = max(8, int(vw * 0.02))                       # margin from the top / bottom
+        mx = max(8, int(vw * (0.08 if tall else 0.02)))  # from the sides (more on 9:16)
+        x = f"{mx}" if "left" in logo.get("position", "") else f"W-w-{mx}"
         # inside the moving picture, not on bars around it (a portrait upload
         # with the film in the middle of coloured bars put the logo on the bar)
         top, bot = logo.get("area") or (0.0, 1.0)
@@ -1491,7 +1496,7 @@ def render_cover(video, t, title, out_jpg, portrait=False, logo=None, blur=None)
     return Path(out_jpg)
 
 
-def _grab(video, t, w, h, hide=None, blur=None):
+def _grab(video, t, w, h, hide=None, blur=None, cx=0.5):
     """Frame at t, black letterbox bars trimmed, scaled and centre-cropped
     to w x h (PIL RGB). hide: [(x0, y0, x1, y1)] fractions blurred first (old logos)."""
     from PIL import Image, ImageOps
@@ -1531,13 +1536,24 @@ def _grab(video, t, w, h, hide=None, blur=None):
     rows, cols = np.where(g.mean(1) > 18)[0], np.where(g.mean(0) > 18)[0]
     if len(rows) > g.shape[0] * 0.4 and len(cols) > g.shape[1] * 0.4:
         img = img.crop((cols[0], rows[0], cols[-1] + 1, rows[-1] + 1))
-    return ImageOps.fit(img, (w, h), Image.LANCZOS, centering=(0.5, 0.4))
+    # scale to cover w x h, then cut the window so the person (cx = their x across
+    # the frame, 0-1) sits in its middle. (ImageOps.fit's "centering" is not that:
+    # 0.15 meant "15% of the spare width", which slid the face off the side.)
+    W0, H0 = img.size
+    k = max(w / W0, h / H0)
+    sw, sh = max(w, round(W0 * k)), max(h, round(H0 * k))
+    img = img.resize((sw, sh), Image.LANCZOS)
+    left = int(min(max(cx * sw - w / 2, 0), sw - w))
+    top = int(min(max(0.4 * sh - h * 0.4, 0), sh - h))
+    return img.crop((left, top, left + w, top + h))
 
 
 def _layout(n, W, H, portrait):
-    """Panel boxes (x, y, w, h) for n = 2..5 photos. 4 = an even 2x2 grid;
+    """Panel boxes (x, y, w, h) for n = 1..5 photos. 4 = an even 2x2 grid;
     2 = side by side (landscape) or one above the other (portrait)."""
     g = 8
+    if n == 1:
+        return [(0, 0, W, H)]
     if n == 2:
         g = 6
         if portrait:
@@ -1616,23 +1632,26 @@ def _gold_title(img, title, box_w, center_x, center_y, max_lines, size, suffix="
     return img
 
 
-def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur=None, suffix="", hide=None):
+def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur=None, suffix="", hide=None,
+                   focus=None):
     """3–5 frames in panels with a big gold Burmese title across the bottom."""
     from PIL import Image, ImageEnhance, ImageFilter
     W, H = (1080, 1920) if portrait else (1280, 720)
-    n = 2 if len(times) == 2 else max(3, min(5, len(times)))
+    n = len(times) if len(times) in (1, 2) else max(3, min(5, len(times)))
     times = (list(times) * 5)[:n]
     canvas = Image.new("RGB", (W, H), (236, 178, 60) if n in (2, 4) else (12, 8, 6))   # 2 / 2x2: thin gold lines
     for (x, y, w, h), t in zip(_layout(n, W, H, portrait), times):
-        fr = _grab(video, t, w, h, hide, blur)     # old captions cut off, old logos blurred
+        fr = _grab(video, t, w, h, hide, blur, (focus or {}).get(t, 0.5))   # cropped around the person
         fr = ImageEnhance.Color(ImageEnhance.Contrast(fr).enhance(1.15)).enhance(1.2)
         canvas.paste(fr, (x, y))
     img = canvas.convert("RGBA")
     if not title:                  # no title wanted: just the photos (and the logo)
         return _cover_logo_save(img.convert("RGB"), logo, W, portrait, out_jpg)
-    # warm dark band behind the title, across the middle
+    # warm dark band behind the title: across the middle (between photos), or in
+    # the lower part when a single photo fills the cover (the face is higher up)
+    cy = int(H * 0.74) if n == 1 else H // 2
     band_h = int(H * (0.26 if portrait else 0.4))
-    band_y = H // 2 - band_h // 2
+    band_y = cy - band_h // 2
     grad = Image.new("L", (1, band_h))
     for yy in range(band_h):
         f = yy / band_h
@@ -1641,10 +1660,10 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
     shade.putalpha(grad.resize((W, band_h)))
     img.alpha_composite(shade, (0, band_y))
     img = img.convert("RGB")
-    if portrait:
-        _gold_title(img, title, int(W * 0.9), W // 2, H // 2, 3, int(W * 0.17), suffix)   # big: phones show it small
+    if portrait:      # big for phones, but at most 2 lines so it never buries the photos
+        _gold_title(img, title, int(W * 0.92), W // 2, cy, 2, int(W * 0.15), suffix)
     else:
-        _gold_title(img, title, int(W * 0.86), W // 2, H // 2, 2, int(H * 0.13), suffix)
+        _gold_title(img, title, int(W * 0.86), W // 2, cy, 2, int(H * 0.13), suffix)
     return _cover_logo_save(img, logo, W, portrait, out_jpg)
 
 
@@ -1709,9 +1728,10 @@ def _cover_times_by_ai(video, start, end, chooser, samples=30):
             shots.append(r.stdout)
             times.append(t)
     got = chooser(shots)
-    hero, others = got[0], got[1]
-    layout = got[2] if len(got) > 2 else 4
-    return [times[i] for i in hero], [times[i] for i in others], layout
+    T = lambda xs: [times[i] for i in xs]
+    return {"hero": T(got[0]), "others": T(got[1]), "layout": got[2] if len(got) > 2 else 4,
+            "action": T(got[3]) if len(got) > 3 else [], "tiktok": got[4] if len(got) > 4 else 2,
+            "focus": {times[i]: x for i, x in (got[5] if len(got) > 5 else {}).items()}}
 
 
 def render_art_cover(art, title, out_jpg, portrait=False, logo=None, suffix=""):
@@ -1760,26 +1780,36 @@ def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, bl
         names = ["cover1.jpg"] if parts <= 1 else [f"cover{i}.jpg" for i in range(1, parts + 1)]
         return [render_art_cover(art, title, out_dir / n, portrait, logo,
                                  "" if parts <= 1 else f" - {i}") for i, n in enumerate(names, 1)]
-    pick = None
+    pick, focus = None, {}
     if chooser:
         try:
-            hero, others, layout = _cover_times_by_ai(video, start, end, chooser)
-            if portrait:
-                layout = 2        # TikTok cover: two big photos, one above the other
+            ai = _cover_times_by_ai(video, start, end, chooser)
+            hero, others, action, focus = ai["hero"], ai["others"], ai["action"], ai["focus"]
+            if portrait:          # TikTok: the main character's face on top, the movie's main action below
+                top = (hero or action or others)[:1]   # (one action photo alone often had no face in it)
+                bot = [t for t in action + others + hero if t not in top][:1]
+                pick = top + bot
+                layout = len(pick)
+            else:
+                layout = ai["layout"]
+                if hero or others:
+                    pick = _arrange(hero, others, layout)
+                    act = [t for t in action if t not in pick]
+                    if act and len(pick) >= 2:   # always show what the movie is about (e.g. football)
+                        pick[1] = act[0]
             if log:
-                log(f"cover photos picked by AI: {len(hero)} of the main character, {len(others)} others"
-                    f" · {layout}-photo cover")
-            if hero or others:
-                pick = _arrange(hero, others, layout)
+                log(f"cover photos picked by AI: {len(hero)} of the main character, {len(action)} of the "
+                    f"main action, {len(others)} others · {layout}-photo cover")
         except Exception as e:  # noqa: BLE001 - fall back to the frame scores
             if log:
                 log(f"AI cover pick failed ({str(e)[:120]}) — using the sharpest frames")
     if not pick:
         pick = pick_cover_times(video, start, end, 2 if portrait else 4, samples=36, tmp=out_dir)
     if parts <= 1:
-        return [render_collage(video, pick, title, out_dir / "cover1.jpg", portrait, logo, blur, hide=hide)]
+        return [render_collage(video, pick, title, out_dir / "cover1.jpg", portrait, logo, blur, hide=hide,
+                               focus=focus)]
     return [render_collage(video, pick, title, out_dir / f"cover{i}.jpg", portrait, logo, blur,
-                           suffix=f" - {i}", hide=hide) for i in range(1, parts + 1)]
+                           suffix=f" - {i}", hide=hide, focus=focus) for i in range(1, parts + 1)]
 
 
 # ---- recap version: cut the scenes that go with each narration beat ----

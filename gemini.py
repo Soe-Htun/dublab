@@ -36,6 +36,12 @@ NAME_RULE = """- CHARACTER NAMES: do NOT transliterate foreign character names. 
   baby / little girl: ဂျက်မ, ဂူးဂူး
   Use these first, in this order, for the most important characters; for more characters pick other short, common Burmese names.
   Each character keeps the SAME name every time; never give two characters the same name.
+  FAMILY of a main character (the hero OR the heroine, e.g. "ရှောင်မေရဲ့ အမေ"): a parent or relative with a small
+  part gets NO name of their own — call them by the
+  relation to that character ("ဂွေးတိုရဲ့ အဖေ", "ဂွေးတိုရဲ့ အမေ", "ဂွေးတိုရဲ့ ညီလေး"), or "သူ့အဖေ", "သူ့အမေ" when that
+  main character is already in the sentence (e.g. "ဂွေးတိုလည်း သူ့အဖေကို ပြောလိုက်ပါတယ်"). But a family member
+  who is an important character too (e.g. two brothers who are both in the story a lot) DOES get a name: say the
+  relation with the name the first time ("ဂွေးတိုရဲ့ အကို ကျော်ကြီး"), then just the name.
 - Places may be transliterated into Burmese script."""
 
 
@@ -350,6 +356,9 @@ Myanmar recap narration.
 
 """ + NAME_RULE + """
 
+A main character's family members with small parts are written by relation instead of a name, e.g.
+"ဂွေးတိုရဲ့ အဖေ = the hero's father (original name if known)"; a family member with a big part gets a name and the
+relation, e.g. "ကျော်ကြီး = ဂွေးတိုရဲ့ အကို, the hero's elder brother (original name if known)".
 Output one character per line as "Burmese name = who they are (role, gender, age; their original name if known)".
 Nothing else."""
 
@@ -470,15 +479,24 @@ COVER_PROMPT = """The numbered frames below (0 to {last}) come from one movie.
 First work out its THREE MOST IMPORTANT CHARACTERS: the MAIN character (the protagonist, the person who appears
 most and the story is about), the SECOND (e.g. the villain or partner) and the THIRD (e.g. the love interest).
 Then answer with JSON only, no other text:
-{{"layout": 2 or 4, "hero": [...], "second": [...], "third": [...], "scenes": [...]}}
+{{"layout": 2 or 4, "hero": [...], "second": [...], "third": [...], "scenes": [...], "action": [...],
+  "tiktok": 1 or 2, "focus": {{...}}}}
 - "layout": 4 for most movies; 2 (two big photos) when the video is simple — one or two characters, one setting —
   or there are fewer than 4 good, different frames.
 - "hero": up to 5 frames of the MAIN character, "second": up to 4 of the second character, "third": up to 4 of the
-  third — each with that person's FACE clearly visible, large and sharp (close-up or medium shot; a dramatic
-  expression is a plus), best first.
+  third — each with that person's WHOLE FACE clearly visible and sharp, best first: a medium close-up (head and
+  shoulders) with the WHOLE HEAD inside the frame — never an extreme close-up that cuts off the forehead or chin,
+  never a face turned away or half hidden; a dramatic expression is a plus.
 - "scenes": up to 4 striking frames of the movie's key action or setting with people in them, best first.
+- "action": up to 4 frames that show what the movie is ABOUT with the main character in it, doing the movie's
+  main thing (a football movie: the hero playing football on the pitch; boxing: in the ring; a heist: the robbery;
+  a war movie: fighting), best first. They may repeat "hero"/"scenes" frames.
+- "tiktok": 1 when one "action" frame alone shows the movie well (the main character clearly visible in the
+  action), else 2.
+- "focus": for EVERY frame number you listed, where the main person (their face; or the action) is across the
+  frame on a 0-1000 scale from the LEFT edge, e.g. {{"12": 430, "7": 700}} — the photo is cropped narrow around it.
 Never pick dark, blurry, black, fading, empty or unclear frames (furniture, walls, backs of heads, crowds far away),
-landscape-only, logo, title, credit or text frames. A frame may appear in only one list."""
+landscape-only, logo, title, credit or text frames. Apart from "action", a frame may appear in only one list."""
 
 
 def pick_cover_frames(jpegs, api_key):
@@ -498,7 +516,16 @@ def pick_cover_frames(jpegs, api_key):
     if not hero and not others:
         raise ValueError("no cover frames picked")
     layout = 2 if str(data.get("layout")).strip() == "2" else 4
-    return hero, others, layout
+    action = list(dict.fromkeys(ok(data.get("action"))))
+    tiktok = 1 if str(data.get("tiktok")).strip() == "1" else 2
+    focus = {}
+    for k, v in (data.get("focus") or {}).items():
+        try:
+            if str(k).isdigit() and 0 <= int(k) < len(jpegs):
+                focus[int(k)] = min(1.0, max(0.0, float(v) / 1000))
+        except (TypeError, ValueError):
+            pass
+    return hero, others, layout, action, tiktok, focus
 
 
 MOVIE_BOUNDS_PROMPT = """Frames S0..S{ls} come (in order) from the START of a re-uploaded movie file, and frames
