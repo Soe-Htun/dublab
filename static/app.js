@@ -522,11 +522,13 @@ let srcDur = 0;          // seconds of the chosen video, when known
 function partsNote() {
   const sp = +split, rc = $('#recapchk').checked ? +recapLen * 1.25 : 0;
   const len = rc ? rc * 60 : srcDur;              // finished video length (s)
-  let txt = +sp ? `${sp} မိနစ်ထက် ရှည်ရင် ${sp} မိနစ်စီ ခွဲမယ် — နာမည်-1, နာမည်-2 …` : 'ဗီဒီယို တစ်ခုတည်း ထွက်မယ်';
+  const yt = $('#ytchk') && $('#ytchk').checked;
+  let txt = +sp ? `${sp} မိနစ်ထက် ရှည်ရင် ${sp} မိနစ်စီ ခွဲမယ် — နာမည်-1, နာမည်-2 … နာမည်-End` : 'ဗီဒီယို တစ်ခုတည်း ထွက်မယ်';
   if (+sp && len) {
     const n = Math.max(1, Math.round(len / (sp * 60)));
-    txt = `≈ ${n} ပိုင်း ထွက်မယ် (${sp} မိနစ်စီ) — နာမည်-1 … နာမည်-${n}`;
+    txt = n > 1 ? `≈ ${n} ပိုင်း ထွက်မယ် (${sp} မိနစ်စီ) — နာမည်-1 … နာမည်-End` : 'ဗီဒီယို တစ်ခုတည်း ထွက်မယ်';
   }
+  if (+sp && yt) txt = '📱 TikTok: ' + txt + ' · 📺 YouTube: တစ်ကားလုံး ၁ ခု';
   $('#splitnote').textContent = txt + (+sp ? ' · like & follow က အပိုင်းတိုင်းရဲ့ အဆုံးမှာ' : '');
 }
 let recapLen = '20';
@@ -579,3 +581,5 @@ $('#titlechk').addEventListener('change', () => { $('#covertitle_in').hidden = !
     else if (j.status === 'failed') showError(j.error || 'အမှားရှိတယ်', j.resumable ? jid : null);
   } catch (e) { /* server down: stay on the upload page */ }
 })();
+
+$('#ytchk').addEventListener('change', () => { try { partsNote(); } catch (e) { /* not ready */ } });
