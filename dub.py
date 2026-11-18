@@ -398,9 +398,31 @@ def _in_thread(fn, timeout):
     return bool(box.get("ok"))
 
 
+NET_RETRIES = 8          # a Wi-Fi drop must not kill a 2-hour job: wait for the internet
+NET_WAIT = 20            # seconds between tries (8 x 20 s ≈ 3 minutes in all)
+
+
+def _net_down(e):
+    t = f"{type(e).__name__} {e}".lower()
+    return any(k in t for k in ("dns", "nodename", "servname", "name resolution", "connect",
+                                "network is unreachable", "timed out", "timeout", "connection"))
+
+
 def synthesize(text, voice, out_path):
-    """TTS one utterance at SPEAK_SPEED (the TTS's own pace is a bit slow)."""
-    _synthesize_raw(text, voice, out_path)
+    """TTS one utterance at SPEAK_SPEED (the TTS's own pace is a bit slow).
+    When every TTS service fails because the internet dropped, wait and try again."""
+    import time
+    for attempt in range(NET_RETRIES + 1):
+        try:
+            _synthesize_raw(text, voice, out_path)
+            break
+        except QuotaExhausted:
+            raise
+        except Exception as e:  # noqa: BLE001
+            if attempt == NET_RETRIES or not _net_down(e):
+                raise
+            print(f"[tts] internet looks down ({str(e)[:80]}) — retrying in {NET_WAIT}s")
+            time.sleep(NET_WAIT)
     if abs(SPEAK_SPEED - 1.0) < 0.01:
         return
     out_path = Path(out_path)

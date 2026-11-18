@@ -129,6 +129,12 @@ def _call(prompt, api_key, max_tokens=8192, images=None):
             if daily or limited > RATE_RETRIES:
                 raise RateLimited(daily) from None
             time.sleep(min(90, max(wait, 15 * limited)))
+        except (urllib.error.URLError, ConnectionError, TimeoutError, OSError) as e:
+            # no internet for a moment (Wi-Fi drop, DNS): keep trying for ~3 minutes
+            attempt += 1
+            if attempt >= MAX_RETRIES + 6:
+                raise
+            time.sleep(min(30, 2 ** attempt * 2))
         except Exception:
             attempt += 1
             if attempt >= MAX_RETRIES:
