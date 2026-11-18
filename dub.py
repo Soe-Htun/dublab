@@ -199,6 +199,20 @@ def _transcribe_mlx(wav, lang_hint, progress, name):
     return segs, lang
 
 
+def _collapse_repeats(text, keep=2):
+    """'बजाँ बजाँ बजाँ बजाँ …' → 'बजाँ बजाँ': whisper sometimes gets stuck on one
+    word; a line that is nothing but that is dropped."""
+    words = text.split()
+    out = []
+    for w in words:
+        if len(out) >= keep and all(x == w for x in out[-keep:]):
+            continue
+        out.append(w)
+    if len(words) >= 6 and len(set(words)) <= 2:
+        return ""
+    return " ".join(out).strip()
+
+
 def _transcribe(wav, lang_hint, progress, name):
     global _mlx_broken
     if _use_mlx():
@@ -212,14 +226,20 @@ def _transcribe(wav, lang_hint, progress, name):
     model = _get_model(name)
     # beam 1 (greedy) is ~3x faster than the default 5 with near-identical text
     beam = int(os.environ.get("DUBLAB_WHISPER_BEAM") or 1)
+    # temperature 0 only + no conditioning on the previous text (2026-11-17,
+    # Jaat test clip): whisper's default retries at higher temperatures on noisy
+    # film audio (music, songs) ran at 2.9x real time and wrote garbage; this ran
+    # at 14x and wrote clean sentences. The one downside, a stuck repeated word,
+    # is cleaned up by _collapse_repeats.
     segments, info = model.transcribe(
         str(wav), language=lang_hint, vad_filter=True, beam_size=beam,
+        temperature=0.0, condition_on_previous_text=False,
         vad_parameters=dict(min_silence_duration_ms=400))
     segs = []
     for s in segments:  # lazy generator: decoding happens while we iterate
-        if s.text and s.text.strip():
-            segs.append({"start": float(s.start), "end": float(s.end),
-                         "text": s.text.strip()})
+        text = _collapse_repeats(s.text or "")
+        if text:
+            segs.append({"start": float(s.start), "end": float(s.end), "text": text})
         if progress and info.duration:
             progress(min(float(s.end) / info.duration, 1.0))
     return segs, (lang_hint or info.language)
