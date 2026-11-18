@@ -1029,7 +1029,10 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
         lw = max(16, int(vw * float(logo.get("size", 0.12))) // 2 * 2)
         m = max(8, int(vw * 0.02))                 # margin from the edges
         x = f"{m}" if "left" in logo.get("position", "") else f"W-w-{m}"
-        y = f"H-h-{m}" if "bottom" in logo.get("position", "") else f"{m}"
+        # inside the moving picture, not on bars around it (a portrait upload
+        # with the film in the middle of coloured bars put the logo on the bar)
+        top, bot = logo.get("area") or (0.0, 1.0)
+        y = (f"H*{bot:.4f}-h-{m}" if "bottom" in logo.get("position", "") else f"H*{top:.4f}+{m}")
     bg_in = []
     if bg_wav and bg_volume > 0:
         bg_in = ["-i", str(bg_wav)]
@@ -1777,6 +1780,28 @@ def trim_copy(src, start, end, out):
     run(cmd + ["-map", "0:v:0", "-map", "0:a:0?", "-c", "copy", "-avoid_negative_ts", "make_zero",
                "-movflags", "+faststart", str(out)])
     return k
+
+
+def picture_area(video, start, end, count=12):
+    """(top, bottom) fractions of the frame where the picture actually moves —
+    uploads often put the film between still bars (black or any colour, often
+    with text). Rows that stay the same in every sampled frame are bars.
+    (0, 1) when there are none."""
+    import io
+    import numpy as np
+    from PIL import Image
+    shots = [np.asarray(Image.open(io.BytesIO(j)).convert("L").resize((96, 170)), dtype=np.float32)
+             for j in sample_frames(video, start, end, count, width=192)]
+    if len(shots) < 4:
+        return 0.0, 1.0
+    rows = np.stack(shots).std(axis=0).mean(axis=1)      # how much each row changes over time
+    moving = np.where(rows > max(6.0, rows.max() * 0.15))[0]
+    if not len(moving):
+        return 0.0, 1.0
+    top, bot = moving[0] / len(rows), (moving[-1] + 1) / len(rows)
+    if bot - top < 0.15 or (top < 0.03 and bot > 0.97):      # (a wide film in 9:16 is ~24% tall)
+        return 0.0, 1.0
+    return round(float(top), 4), round(float(bot), 4)
 
 
 def speech_spans(utterances, pad=1.0, join=3.0):

@@ -16,7 +16,7 @@ import telegram
 
 from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tts, frame_layout, render_frames,
                  frame_caption_y,
-                 footage, speech_spans, trim_copy,
+                 footage, speech_spans, trim_copy, picture_area,
                  add_outro_tail, caption_y, normalize_logo, render_captions, sample_frames, video_size, write_srt,
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
@@ -686,6 +686,14 @@ def _voice_and_mux(job):
     if job.get("logo") and LOGO_FILE.exists():
         logo = {"path": LOGO_FILE, "position": _settings["logo_position"],
                 "size": _settings["logo_size"] / 100}
+        try:                                  # film between still bars: logo goes on the film
+            area = picture_area(src, job["total"] * 0.1, job["total"] * 0.9)
+            if area != (0.0, 1.0):
+                logo["area"] = area
+                jlog(job, f"picture sits at {area[0] * 100:.0f}–{area[1] * 100:.0f}% of the height "
+                          "(bars around it) — logo goes on the picture")
+        except Exception as e:  # noqa: BLE001 - corner of the whole frame then
+            jlog(job, f"picture area check skipped: {str(e)[:100]}")
         jlog(job, f"adding logo ({_settings['logo_position']}, {_settings['logo_size']}%)")
     captions = blur = None
     try:
