@@ -146,7 +146,7 @@ function showProgress(jid) {
         stopAll();
         showResult(jid, j.parts); $('#coverbox').hidden = true;   // covers go to Telegram; not shown here
       }
-      if (j.status === 'failed') { stopAll(); showError(j.error || 'အမှားရှိတယ်'); }
+      if (j.status === 'failed') { stopAll(); showError(j.error || 'အမှားရှိတယ်', j.resumable ? jid : null); }
     } catch (e) { stopAll(); showError(e.message); }
   }, 2000);
 }
@@ -273,12 +273,27 @@ function showResult(jid, parts) {
   $('#card-result').scrollIntoView({ behavior: 'smooth' });
 }
 
-function showError(msg) {
+let resumeJid = null;
+function showError(msg, canResume) {
   if (pollTimer) clearInterval(pollTimer);
   ['card-upload', 'card-opts', 'card-progress', 'card-review', 'card-result'].forEach((id) => ($('#' + id).hidden = true));
   $('#card-error').hidden = false;
   $('#errmsg').textContent = msg;
+  resumeJid = canResume || null;          // ▶️ only when the job's files are still kept
+  $('#resume').hidden = !resumeJid;
 }
+
+$('#resume').addEventListener('click', async () => {
+  if (!resumeJid) return;
+  const btn = $('#resume'); btn.disabled = true;
+  try {
+    const r = await fetch('/api/jobs/' + resumeJid + '/resume', { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'resume failed');
+    showProgress(resumeJid);
+  } catch (e) { $('#errmsg').textContent = e.message; $('#resume').hidden = true; }
+  btn.disabled = false;
+});
 
 $('#again').addEventListener('click', () => location.reload());
 $('#retry').addEventListener('click', () => location.reload());

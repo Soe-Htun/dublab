@@ -324,6 +324,27 @@ def _save_meta(job):
         pass
 
 
+RESUME_KEEP = 3600     # a failed job's files stay this long, for ▶️ resume
+
+
+def _save_failed(job):
+    """Everything about a failed job (lines, recap beats, settings…) so it can be
+    resumed even after a server restart."""
+    try:
+        meta = {}
+        for k, v in job.items():
+            if k == "dir":
+                continue
+            try:
+                json.dumps(v)
+                meta[k] = v
+            except (TypeError, ValueError):
+                pass
+        (job["dir"] / "job.json").write_text(json.dumps(meta, ensure_ascii=False))
+    except OSError:
+        pass
+
+
 def _load_saved_jobs():
     """Finished jobs from before a restart come back (until the TTL sweep)."""
     for f in JOBS.glob("*/job.json"):
@@ -331,6 +352,9 @@ def _load_saved_jobs():
             meta = json.loads(f.read_text())
             if meta.get("status") == "done" and time.time() - meta.get("created", 0) < TTL:
                 meta["dir"] = f.parent
+                jobs.setdefault(meta["id"], meta)
+            elif meta.get("status") == "failed" and time.time() - meta.get("failed_at", 0) < RESUME_KEEP:
+                meta["dir"] = f.parent                     # can still be resumed
                 jobs.setdefault(meta["id"], meta)
         except (OSError, ValueError, KeyError):
             pass
@@ -342,7 +366,9 @@ _load_saved_jobs()
 def sweep_old():
     now = time.time()
     for jid, job in list(jobs.items()):
-        if now - job["created"] > TTL and job["status"] in ("done", "failed", "review"):
+        old = (now - job.get("failed_at", job["created"]) > RESUME_KEEP if job["status"] == "failed"
+               else now - job["created"] > TTL and job["status"] in ("done", "review"))
+        if old:
             shutil.rmtree(job["dir"], ignore_errors=True)
             jobs.pop(jid, None)
     # folders no job knows about: left by a restart in the middle of a job
@@ -370,6 +396,7 @@ def process_job(jid):
             _voice_and_mux(job)
         else:
             _transcribe_and_translate(jid, job)
+            job["phase1_done"] = True        # ▶️ resume skips straight to the voice
             if job.get("review"):
                 job.update(status="review", stage="review", pct=55)
                 jlog(job, "waiting for you to check the translation ✏️")
@@ -378,12 +405,10 @@ def process_job(jid):
     except Exception as e:  # noqa: BLE001 - surfaced to UI
         err = clean_err(e)
         jlog(job, f"FAILED: {type(e).__name__}: {err}")
-        job.update(status="failed", error=err)
-        # a failed job can't be resumed (🔁 starts over): free the disk now —
-        # everything but the log (voice clips, scene cuts, the source…)
-        for f in job["dir"].iterdir():
-            if f.name != "job.log":
-                shutil.rmtree(f, ignore_errors=True) if f.is_dir() else f.unlink(missing_ok=True)
+        job.update(status="failed", error=err, failed_at=time.time())
+        # keep everything for an hour so ▶️ resume can go on from here
+        # (the sweep deletes it after RESUME_KEEP)
+        _save_failed(job)
 
 
 def _transcribe_and_translate(jid, job):
@@ -393,7 +418,10 @@ def _transcribe_and_translate(jid, job):
         raise RuntimeError("server config missing (GEMINI_API_KEY)")
     direction = job["direction"]
     jlog(job, f"job {jid} started · {direction} · {job['voice']} voice")
-    if job.get("url"):
+    have_src = bool(job.get("have_src")) and (d / ("input" + job["ext"])).exists()
+    if have_src:
+        jlog(job, "▶️ resuming: the video is already here")
+    if job.get("url") and not have_src:
         job.update(stage="download", pct=2)
         jlog(job, "downloading video from link…")
         try:
@@ -402,7 +430,7 @@ def _transcribe_and_translate(jid, job):
             jlog(job, f"download error: {str(e)[:300]}")
             raise ValueError("ဗီဒီယို ဒေါင်းမရဘူး — link စစ်ပါ၊ "
                              "ခဏနေ ပြန်စမ်းပါ") from None
-    if job.get("tg_src"):
+    if job.get("tg_src") and not have_src:
         job.update(stage="download", pct=2)
         jlog(job, "downloading video from Telegram…")
         last = [0]
@@ -422,7 +450,7 @@ def _transcribe_and_translate(jid, job):
     total = probe_duration(src)
     job["total"] = total
     # re-uploads often open/close with casino, lottery and app ads: keep only the film
-    a, b = _movie_bounds(job, api_key)
+    a, b = (0.0, total) if have_src else _movie_bounds(job, api_key)
     if a > 1.0 or b < total - 1.0:
         try:
             cut = d / ("film" + job["ext"])
@@ -433,6 +461,7 @@ def _transcribe_and_translate(jid, job):
             jlog(job, f"kept only the film: {k / 60:.1f}–{(k + total) / 60:.1f} min of the upload")
         except Exception as e:  # noqa: BLE001 - go on with the whole upload
             jlog(job, f"cutting the ads off failed: {str(e)[:150]}")
+    job["have_src"] = True
     if job.get("recap") and job["recap"] * RECAP_AIM * 60 >= total * 0.85:
         jlog(job, f"video is only {total / 60:.0f} min — no shorter recap possible, doing a full dub")
         job["recap"] = 0
@@ -442,10 +471,11 @@ def _transcribe_and_translate(jid, job):
     if not has_audio_stream(src):
         raise ValueError("ဒီဗီဒီယိုမှာ အသံမပါဘူး — အသံပါတဲ့ ဗီဒီယိုမှ dub လို့ရမယ်")
 
-    job.update(stage="audio", pct=4)
-    jlog(job, "extracting audio…")
     wav = d / "audio.wav"
-    extract_audio(src, wav)
+    if not (job.get("segs") and wav.exists()):
+        job.update(stage="audio", pct=4)
+        jlog(job, "extracting audio…")
+        extract_audio(src, wav)
 
     job.update(stage="transcribe", pct=8)
     jlog(job, "transcribing with whisper…")
@@ -455,8 +485,13 @@ def _transcribe_and_translate(jid, job):
         if frac * 100 >= last_log[0] + 10:
             last_log[0] = int(frac * 10) * 10
             jlog(job, f"transcribing… {last_log[0]}%")
-    jlog(job, f"speech model: {job.get('model') or default_whisper_model()}")
-    segs, lang = transcribe(wav, SRC_LANG[direction], stt_prog, job.get("model"))
+    if job.get("segs") and wav.exists():          # ▶️ resume: whisper already ran
+        segs, lang = job["segs"], job["seg_lang"]
+        jlog(job, "▶️ resuming: speech already transcribed")
+    else:
+        jlog(job, f"speech model: {job.get('model') or default_whisper_model()}")
+        segs, lang = transcribe(wav, SRC_LANG[direction], stt_prog, job.get("model"))
+        job["segs"], job["seg_lang"] = segs, lang
     if not segs:
         raise ValueError("အသံထဲမှာ စကားပြောသံ မတွေ့ဘူး")
     if direction == "auto2mm":
@@ -618,7 +653,8 @@ def _recap_cut(job, voice_name):
     done = [0]
     def tts(i):
         p = d / f"r{i}.mp3"
-        synthesize(utter[i]["text"], voice_name, p)
+        if not (p.exists() and p.stat().st_size > 0):      # ▶️ resume keeps voiced lines
+            synthesize(utter[i]["text"], voice_name, p)
         done[0] += 1
         job.update(pct=58 + int(20 * done[0] / len(utter)))
         return p, probe_duration(p)
@@ -1039,7 +1075,31 @@ def job_status(jid):
                    name=job.get("name", ""), created=int(job.get("created", 0)),
                    gone=bool(job.get("files_gone")),
                    label=STAGE_LABEL.get(job["stage"], job["stage"]),
-                   error=job["error"])
+                   error=job["error"], resumable=_resumable(job))
+
+
+def _resumable(job):
+    return (job.get("status") == "failed" and job["dir"].exists()
+            and time.time() - job.get("failed_at", 0) < RESUME_KEEP
+            and (job["dir"] / ("input" + job.get("ext", ".mp4"))).exists())
+
+
+@app.post("/api/jobs/<jid>/resume")
+def resume_job(jid):
+    """▶️ go on from where a failed job stopped: done steps are skipped
+    (download, whisper, translation/recap, lines already voiced)."""
+    job = jobs.get(jid)
+    if not job or not _resumable(job):
+        return jsonify(error="ဆက်လုပ်လို့ မရတော့ဘူး — 🔁 အစကနေ ပြန်စမ်းပါ"), 404
+    job.update(status="queued", stage="queue", error="", pct=job.get("pct", 0) if job.get("phase1_done") else 0,
+               phase=2 if job.get("phase1_done") else 1)
+    job.pop("failed_at", None)
+    (job["dir"] / "job.json").unlink(missing_ok=True)
+    jlog(job, "▶️ resuming from where it stopped")
+    with lock:
+        queue.append(jid)
+        lock.notify()
+    return jsonify(ok=True)
 
 
 @app.get("/api/jobs/<jid>/lines")

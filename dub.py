@@ -532,8 +532,9 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=N
         return Path(utterances[i].get("audio") or tmpdir / f"u{i}.mp3")
 
     def _tts(i):
-        if not utterances[i].get("audio"):
-            synthesize(utterances[i]["text"], voice, tmpdir / f"u{i}.mp3")
+        out = tmpdir / f"u{i}.mp3"
+        if not utterances[i].get("audio") and not (out.exists() and out.stat().st_size > 0):
+            synthesize(utterances[i]["text"], voice, out)      # (▶️ resume keeps voiced lines)
         with done_lock:
             done[0] += 1
             if progress:
