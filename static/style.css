@@ -145,6 +145,9 @@ textarea:focus{outline:none;border-color:var(--p1)}
 .part .ghost.on{border-color:var(--p1)}
 .part .dl{flex:0 0 auto;width:auto;padding:11px 16px;margin:0;text-decoration:none}
 .checkrow input{width:18px;height:18px;accent-color:var(--p1)}
+.titlerow{margin:4px 0 16px;font-size:14px}
+.titlerow label{display:block}
+.titlerow .titlein{display:block;height:auto;padding:10px 12px;font-size:15px}
 .note.left{text-align:left;margin:0 0 12px}
 .lines{display:flex;flex-direction:column;gap:12px;max-height:60vh;overflow-y:auto;margin-bottom:14px;padding-right:4px}
 .line-meta{font-size:12px;color:var(--dim);margin-bottom:4px;word-break:break-word}
