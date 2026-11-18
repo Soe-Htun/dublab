@@ -723,9 +723,10 @@ def _wrap(draw, text, font, max_w):
     return lines or [""]
 
 
-def render_captions(cues, video_w, video_h, out_dir, size_pct=5.5):
+def render_captions(cues, video_w, video_h, out_dir, size_pct=5.5, box=True):
     """Draw each cue as a transparent PNG strip (white text on a translucent
-    dark box, like YouTube captions) and
+    dark box, like YouTube captions — or, box=False, on the blurred band:
+    no box, a thick dark outline and a soft shadow instead) and
     write an ffconcat list that shows them at their times.
     Returns (concat_list_path, strip_height)."""
     from PIL import Image, ImageDraw
@@ -777,20 +778,32 @@ def render_captions(cues, video_w, video_h, out_dir, size_pct=5.5):
         boxes = [_tbbox(d, (x, yy), ln, font) for x, yy, ln in placed]
         top = min(b[1] for b in boxes) - pad_y
         bot = max(b[3] for b in boxes) + pad_y
-        dy = strip_h - 1 - bot                 # sit the box on the strip's bottom edge
+        # boxed: sit on the strip's bottom edge; on the blur: centred in the strip
+        dy = (strip_h - 1 - bot) if box else ((strip_h - (bot - top)) / 2 - top)
         placed = [(x, yy + dy, ln) for x, yy, ln in placed]
         top, bot = top + dy, bot + dy
         left = min(b[0] for b in boxes) - pad_x
         right = max(b[2] for b in boxes) + pad_x
-        box = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        ImageDraw.Draw(box).rounded_rectangle(
-            (max(0, left), max(0, top), min(video_w, right), min(strip_h, bot)),
-            radius=int(fsize * 0.25), fill=(8, 8, 8, 185))
-        img = Image.alpha_composite(img, box)
+        if box:
+            bx = Image.new("RGBA", img.size, (0, 0, 0, 0))
+            ImageDraw.Draw(bx).rounded_rectangle(
+                (max(0, left), max(0, top), min(video_w, right), min(strip_h, bot)),
+                radius=int(fsize * 0.25), fill=(8, 8, 8, 185))
+            img = Image.alpha_composite(img, bx)
+            sw = stroke
+        else:                                 # on the blur: outline + shadow keep it readable
+            from PIL import ImageFilter
+            sw = max(2, fsize // 11)
+            sh = Image.new("RGBA", img.size, (0, 0, 0, 0))
+            sd = ImageDraw.Draw(sh)
+            for x, yy, ln in placed:
+                _tdraw(sd, (x + sw, yy + sw), ln, font, fill=(0, 0, 0, 200),
+                       stroke_width=sw * 2, stroke_fill=(0, 0, 0, 200))
+            img = Image.alpha_composite(img, sh.filter(ImageFilter.GaussianBlur(sw)))
         d = ImageDraw.Draw(img)
         for x, yy, ln in placed:
             _tdraw(d, (x, yy), ln, font, fill=(255, 255, 255, 255),
-                   stroke_width=stroke, stroke_fill=(0, 0, 0, 200))
+                   stroke_width=sw, stroke_fill=(0, 0, 0, 230))
         p = out_dir / f"c{n}.png"
         img.save(p)
         items.append((p, b - a))
@@ -896,12 +909,26 @@ def frame_layout(vw, vh):
     above the middle (TikTok's own buttons and text cover the bottom)."""
     hv = int(round(FRAME_W * vh / vw / 2)) * 2
     vy = max(420, int(880 - hv / 2)) // 2 * 2
-    return {"w": FRAME_W, "h": FRAME_H, "vh": hv, "vy": vy, "cap_y": vy + hv + 10}
+    # captions are drawn for the picture's size (not the tall frame), so they
+    # stay in proportion to it; cap_w/cap_h go to render_captions
+    return {"w": FRAME_W, "h": FRAME_H, "vh": hv, "vy": vy,
+            "cap_w": FRAME_W, "cap_h": max(hv, FRAME_W * 9 // 16)}
+
+
+def frame_caption_y(frame, strip_h, blur=None):
+    """Caption strip y in the 9:16 frame: on the blurred band of the picture
+    (over the old captions), like the normal video — or near the picture's
+    bottom when nothing is blurred."""
+    vy, hv = frame["vy"], frame["vh"]
+    if blur:      # centred on the blurred band (the text is centred in its strip)
+        b0, bh = float(blur["bottom"]), float(blur["height"])
+        return int(vy + hv * (1 - b0 - bh / 2) - strip_h / 2)
+    return int(vy + hv * 0.97 - strip_h)
 
 
 def render_frames(title, windows, out_dir, layout, logo=None, extra=30.0):
-    """One 1080x1920 frame per part (dark background, channel logo, gold title,
-    "အပိုင်း N/M"), with a see-through window where the picture goes.
+    """One 1080x1920 frame per part (dark background, channel logo, gold title
+    "title - N" like the covers), with a see-through window where the picture goes.
     windows: [(start, end)] of each part on the video's timeline.
     Returns an ffconcat list that shows each part's frame during that part."""
     from PIL import Image, ImageDraw
@@ -916,30 +943,14 @@ def render_frames(title, windows, out_dir, layout, logo=None, extra=30.0):
         c = (int(10 + 18 * f), int(9 + 4 * f), int(22 + 16 * f), 255)
         for x in range(W):
             px[x, y] = c
-    top_y = 70
-    if logo and Path(logo).exists():
-        lg = Image.open(logo).convert("RGBA")
-        lg.thumbnail((240, 150))
-        base.alpha_composite(lg, ((W - lg.width) // 2, top_y))
-        top_y += lg.height + 20
+    top_y = 60          # the channel logo sits on the picture (top-right), not up here
     files = []
     for i in range(1, n + 1):
         img = base.copy().convert("RGB")
-        pill_h = 86 if n > 1 else 0
-        title_cy = (top_y + vy - pill_h - 30) // 2
-        if title:
-            _gold_title(img, title, int(W * 0.9), W // 2, title_cy, 2, 96)
-        if n > 1:                            # "အပိုင်း 2/3" pill just above the picture
-            d = ImageDraw.Draw(img)
-            font = _caption_font(50)
-            label = f"အပိုင်း {i}/{n}"
-            tw = _tlen(d, label, font)
-            py = vy - pill_h - 28
-            d.rounded_rectangle(((W - tw) / 2 - 36, py, (W + tw) / 2 + 36, py + pill_h),
-                                radius=pill_h // 2, fill=(236, 178, 60))
-            bb = _tbbox(d, (0, 0), label, font)
-            _tdraw(d, ((W - tw) / 2, py + (pill_h - (bb[3] - bb[1])) / 2 - bb[1]), label, font,
-                   fill=(30, 12, 0))
+        title_cy = (top_y + vy - 30) // 2
+        if title:                            # "Jaat - 1", "Jaat - 2"… like the covers
+            _gold_title(img, title, int(W * 0.9), W // 2, title_cy, 2, 104,
+                        f" - {i}" if n > 1 else "")
         img = img.convert("RGBA")
         hole = Image.new("RGBA", (W, hv), (0, 0, 0, 0))
         img.paste(hole, (0, vy))             # the picture shows through here
@@ -1030,8 +1041,6 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
     intro_idx = cap_idx + (1 if captions else 0)
     frame_in = ["-f", "concat", "-safe", "0", "-i", str(frame["list"])] if frame else []
     frame_idx = intro_idx + (1 if intro_img else 0)
-    if frame:
-        logo = None                     # drawn in the frame's header instead
     if intro_img:
         iw, ih = video_size(src_video)
     draw = bool(logo or captions or blur or intro_img or hide or frame)
@@ -1071,20 +1080,20 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
                                  f"pad={iw}:{ih}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[ic]")
                     parts.append(f"[{cur}][ic]overlay=0:0:enable='lt(t,{lead:.3f})':eof_action=pass[si]")
                     cur = "si"
-                if frame:         # picture into the 9:16 frame (the frame has a see-through window)
-                    parts.append(f"[{cur}]scale={frame['w']}:{frame['vh']},setsar=1,"
-                                 f"pad={frame['w']}:{frame['h']}:0:{frame['vy']}:black[pv]")
-                    parts.append(f"[{frame_idx}:v]format=rgba[fr]")
-                    parts.append("[pv][fr]overlay=0:0:eof_action=repeat:shortest=1[sf]")
-                    cur = "sf"
                 if logo:
                     parts.append(f"[{logo_idx}:v]scale={lw}:-1,format=rgba[lg]")
                     parts.append(f"[{cur}][lg]overlay={x}:{y}"
                                  + (f":enable='gte(t,{lead:.3f})'" if intro_img else "") + "[s2]")
                     cur = "s2"
+                if frame:         # picture (with its logo) into the 9:16 frame (the frame has a see-through window)
+                    parts.append(f"[{cur}]scale={frame['w']}:{frame['vh']},setsar=1,"
+                                 f"pad={frame['w']}:{frame['h']}:0:{frame['vy']}:black[pv]")
+                    parts.append(f"[{frame_idx}:v]format=rgba[fr]")
+                    parts.append("[pv][fr]overlay=0:0:eof_action=repeat:shortest=1[sf]")
+                    cur = "sf"
                 if captions:
                     ch = int(captions["height"])
-                    cy = frame["cap_y"] if frame else caption_y(ch, blur, captions.get("bottom", 0.08))
+                    cy = frame_caption_y(frame, ch, blur) if frame else caption_y(ch, blur, captions.get("bottom", 0.08))
                     parts.append(f"[{cap_idx}:v]format=rgba[cp]")
                     parts.append(f"[{cur}][cp]overlay=0:{cy}:eof_action=pass[s3]")
                     cur = "s3"
@@ -1255,10 +1264,11 @@ def caption_y(strip_h, blur=None, bottom=0.08, margin=0.035):
     blurred band (one line covers the band, a second line grows upwards),
     but never closer than `margin` to the frame's bottom — players and phone
     UIs cut the last few percent."""
-    if blur:
-        bot = 1 - float(blur["bottom"])
-    else:
-        bot = 1 - float(bottom)
+    if blur:      # text is centred in its strip (box=False): centre the strip on the band
+        b0, bh = float(blur["bottom"]), float(blur["height"])
+        mid = 1 - b0 - bh / 2
+        return f"H*{mid:.4f}-{int(strip_h) // 2}"
+    bot = 1 - float(bottom)
     return f"H*{min(bot, 1 - margin):.4f}-{int(strip_h)}"
 
 
@@ -1701,6 +1711,27 @@ def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, bl
 
 
 # ---- recap version: cut the scenes that go with each narration beat ----
+
+def trim_copy(src, start, end, out):
+    """Cut [start, end] out of src without re-encoding (seconds, not minutes,
+    for a 2 h film). The cut starts at the first keyframe at/after `start`, so
+    nothing from before it (an ad) slips in. Returns the real start used."""
+    k = start
+    if start > 0:
+        p = run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-skip_frame", "nokey",
+                 "-read_intervals", f"{start:.2f}%+30", "-show_entries", "frame=pts_time",
+                 "-of", "csv=p=0", str(src)])
+        keys = sorted(float(x) for x in p.stdout.split() if x.strip().replace(".", "", 1).isdigit())
+        after = [t for t in keys if t >= start - 0.05]
+        if after:
+            k = after[0]
+    cmd = ["ffmpeg", "-y", "-v", "error", "-ss", f"{k:.3f}", "-i", str(src)]
+    if end:
+        cmd += ["-t", f"{end - k:.3f}"]
+    run(cmd + ["-map", "0:v:0", "-map", "0:a:0?", "-c", "copy", "-avoid_negative_ts", "make_zero",
+               "-movflags", "+faststart", str(out)])
+    return k
+
 
 def speech_spans(utterances, pad=1.0, join=3.0):
     """Stretches of the film where people talk (from the transcript), merged.

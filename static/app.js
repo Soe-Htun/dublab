@@ -76,6 +76,7 @@ $('#go').addEventListener('click', () => {
   fd.append('outro', $('#outrochk') && $('#outrochk').checked ? '1' : '0');
   fd.append('intro', $('#introchk').checked ? '1' : '0');
   fd.append('youtube', $('#ytchk').checked ? '1' : '0');
+  fd.append('title', ($('#covertitle_in').value || '').trim());
   fd.append('cover', '1');            // every video gets a cover
   fd.append('split', split);
   fd.append('recap', $('#recapchk').checked ? recapLen : '0');

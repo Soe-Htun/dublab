@@ -15,14 +15,15 @@ from flask import Flask, jsonify, redirect, render_template, request, send_file
 import telegram
 
 from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tts, frame_layout, render_frames,
-                 footage, speech_spans,
+                 frame_caption_y,
+                 footage, speech_spans, trim_copy,
                  add_outro_tail, caption_y, normalize_logo, render_captions, sample_frames, video_size, write_srt,
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
                  build_recap_video, make_covers, mux, synthesize, probe_duration, probe_url, separate_music, split_points,
                  split_video, transcribe)
-from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, pick_cover_frames, translate_lines,
+from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, find_movie_bounds, pick_cover_frames, translate_lines,
                     write_cover_scene, write_intro, write_recap, write_title, movie_name)
 
 # Gemini TTS key rotation.
@@ -193,10 +194,11 @@ def _outro_on_parts(job, parts, d, outro, captions, blur, vw, vh, frame=None):
     png = cy = None
     if captions:
         try:
-            cw, chh = (frame["w"], frame["h"]) if frame else (vw, vh)
-            lst, ch = render_captions([(0.0, 5.0, outro)], cw, chh, d / "caps_outro", _settings["caption_size"])
+            cw, chh = (frame["cap_w"], frame["cap_h"]) if frame else (vw, vh)
+            lst, ch = render_captions([(0.0, 5.0, outro)], cw, chh, d / "caps_outro", _settings["caption_size"],
+                                      box=not blur)
             png = lst.parent / "c0.png"
-            cy = frame["cap_y"] if frame else caption_y(ch, blur, captions.get("bottom", 0.08))
+            cy = frame_caption_y(frame, ch, blur) if frame else caption_y(ch, blur, captions.get("bottom", 0.08))
         except Exception as e:  # noqa: BLE001 - the voice still goes on without a caption
             jlog(job, f"outro caption skipped: {e}")
             png = None
@@ -406,6 +408,18 @@ def _transcribe_and_translate(jid, job):
     src = d / ("input" + job["ext"])
     total = probe_duration(src)
     job["total"] = total
+    # re-uploads often open/close with casino, lottery and app ads: keep only the film
+    a, b = _movie_bounds(job, api_key)
+    if a > 1.0 or b < total - 1.0:
+        try:
+            cut = d / ("film" + job["ext"])
+            k = trim_copy(src, a, b if b < total - 1.0 else None, cut)
+            cut.replace(src)
+            total = probe_duration(src)
+            job["total"] = total
+            jlog(job, f"kept only the film: {k / 60:.1f}–{(k + total) / 60:.1f} min of the upload")
+        except Exception as e:  # noqa: BLE001 - go on with the whole upload
+            jlog(job, f"cutting the ads off failed: {str(e)[:150]}")
     if job.get("recap") and job["recap"] * RECAP_AIM * 60 >= total * 0.85:
         jlog(job, f"video is only {total / 60:.0f} min — no shorter recap possible, doing a full dub")
         job["recap"] = 0
@@ -463,13 +477,19 @@ def _transcribe_and_translate(jid, job):
             jlog(job, f"intro skipped: {e}")
     if job.get("cover"):
         try:
-            # a known film keeps its real name on the cover, so people can search for it
-            name = ""
-            try:
-                name = movie_name(job.get("name") or "", api_key)
-            except Exception as e:  # noqa: BLE001 - fall back to a made-up Burmese title
-                jlog(job, f"movie name lookup failed: {str(e)[:120]}")
+            # the title typed on the form wins; else a known film keeps its real
+            # name on the cover, so people can search for it
+            name = job.get("my_title") or ""
             if name:
+                jlog(job, f"cover title (typed): {name}")
+            else:
+                try:
+                    name = movie_name(job.get("name") or "", api_key)
+                except Exception as e:  # noqa: BLE001 - fall back to a made-up Burmese title
+                    jlog(job, f"movie name lookup failed: {str(e)[:120]}")
+            if job.get("my_title"):
+                job["title_mm"] = name
+            elif name:
                 job["title_mm"] = name
                 jlog(job, f"cover title (the movie's name): {name}")
             else:
@@ -516,6 +536,33 @@ def _translate(job, utter, direction, lang, api_key):
 
 RECAP_CHOICES = (0, 15, 20, 30, 40)   # recap: narration at least this many minutes (intro/outro not counted); 0 = full dub
 RECAP_AIM = 1.25                      # aim a bit over the minimum (20 → ~25 min)
+
+
+def _movie_bounds(job, api_key):
+    """Where the film itself starts and ends: re-uploads often open (and close)
+    with casino / lottery / app ads and channel intros that have speech too.
+    Gemini looks at frames from the first and last minutes. (0, total) on error."""
+    src = job["dir"] / ("input" + job["ext"])
+    total = job["total"]
+    if total < 600:                       # a short clip has no ad block worth looking for
+        return 0.0, total
+    try:
+        hs, ts = min(480.0, total * 0.15), min(420.0, total * 0.1)
+        nh, nt = 24, 16
+        head = sample_frames(src, 0.0, hs, nh, width=480)
+        tail = sample_frames(src, total - ts, total, nt, width=480)
+        si, ei = find_movie_bounds(head, tail, api_key)
+        step_h, step_t = hs / nh, ts / nt
+        start = 0.0 if si == 0 else step_h * (si + 0.5) - step_h / 2
+        end = total if ei >= nt - 1 else total - ts + step_t * (ei + 0.5) + step_t / 2
+        if start:
+            jlog(job, f"the film starts at {start / 60:.1f} min — skipping the ads before it")
+        if end < total:
+            jlog(job, f"the film ends at {end / 60:.1f} min — skipping the ads after it")
+        return start, end
+    except Exception as e:  # noqa: BLE001 - use the whole video
+        jlog(job, f"film start/end check skipped: {str(e)[:120]}")
+        return 0.0, total
 
 
 def _write_recap(job, utter, lang, api_key):
@@ -645,12 +692,13 @@ def _voice_and_mux(job):
         if not job.get("captions"):
             return None
         try:
-            lst, strip_h = render_captions(cues, w, h, d / sub, _settings["caption_size"])
+            lst, strip_h = render_captions(cues, w, h, d / sub, _settings["caption_size"],
+                                           box=not blur)    # on the blur: no dark box
             return {"list": lst, "height": strip_h, "bottom": _settings["caption_bottom" + sfx] / 100}
         except Exception as e:  # noqa: BLE001 - never lose the dub over captions
             jlog(job, f"captions skipped: {e}")
             return None
-    captions = _caps(*((main_frame["w"], main_frame["h"]) if main_frame else (vw, vh)), "caps")
+    captions = _caps(*((main_frame["cap_w"], main_frame["cap_h"]) if main_frame else (vw, vh)), "caps")
     if captions:
         jlog(job, f"burning {len(cues)} Burmese captions")
     # the outro (or the last line) can run past the picture: hold the last
@@ -739,7 +787,7 @@ def _voice_and_mux(job):
             bounds = [0.0, *cuts, total]
             frame["list"] = render_frames(job.get("title_mm") or "", list(zip(bounds, bounds[1:])),
                                           d / "frames", frame, logo_png)
-            job["tt"] = _render(frame, "tiktok", _caps(frame["w"], frame["h"], "caps_tt"))
+            job["tt"] = _render(frame, "tiktok", _caps(frame["cap_w"], frame["cap_h"], "caps_tt"))
             job["part_times"] = list(zip([0.0, *cuts], [*cuts, total]))
         except Exception as e:  # noqa: BLE001 - the normal version is still there
             jlog(job, f"TikTok version failed: {str(e)[:200]}")
@@ -836,6 +884,7 @@ def create_job():
     outro = request.form.get("outro", "1") == "1"
     intro = request.form.get("intro", "0") == "1"      # off unless ticked
     youtube = request.form.get("youtube", "0") == "1"  # TikTok 9:16 always; this adds the 16:9 YouTube one
+    my_title = re.sub(r"\s+", " ", request.form.get("title") or "").strip()[:60]   # typed by the user
     cover = True                                          # every video gets a cover
     logo = request.form.get("logo", "1") == "1"
     send_tg = request.form.get("telegram") == "1" and _admin_ok() and telegram.configured()
@@ -924,7 +973,7 @@ def create_job():
                  "recap": recap,
                  "tg_src": tg_msg,
                  "id": jid, "telegram": send_tg, "owner": _admin_ok(),
-                 "captions": captions, "blur": blur, "split": split, "youtube": youtube,
+                 "captions": captions, "blur": blur, "split": split, "youtube": youtube, "my_title": my_title,
                  "created": time.time()}
     jlog(jobs[jid], "uploaded " + re.sub(r"[\r\n]", " ", label)[:160])
     with lock:

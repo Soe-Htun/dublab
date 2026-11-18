@@ -482,6 +482,28 @@ def pick_cover_frames(jpegs, api_key):
     return hero, others, layout
 
 
+MOVIE_BOUNDS_PROMPT = """Frames S0..S{ls} come (in order) from the START of a re-uploaded movie file, and frames
+E0..E{le} (in order) from its END. Uploaders often put ADS and PROMOS before and after the film: casino / betting /
+lottery (2D 3D) ads, app or shop ads, channel intros, "subscribe" screens, other films' trailers, title cards of the
+uploader. The film itself shows its own actors and scenes (its opening logos and credits count as the film).
+Answer with JSON only: {{"start": <number of the FIRST S frame that is the film>, "end": <number of the LAST E frame
+that is still the film (before end ads)>}}. If all S frames are the film, start is 0; if all E frames are the film,
+end is {le}."""
+
+
+def find_movie_bounds(start_jpegs, end_jpegs, api_key):
+    """(first film frame index in start_jpegs, last film frame index in end_jpegs)."""
+    imgs = [(f"Frame S{i}:", b) for i, b in enumerate(start_jpegs)] + \
+           [(f"Frame E{i}:", b) for i, b in enumerate(end_jpegs)]
+    raw = _call(MOVIE_BOUNDS_PROMPT.format(ls=len(start_jpegs) - 1, le=len(end_jpegs) - 1), api_key,
+                max_tokens=128, images=imgs)
+    m = re.search(r"\{.*\}", raw, re.S)
+    data = json.loads(m.group(0)) if m else {}
+    s = int(data.get("start", 0) or 0)
+    e = int(data.get("end", len(end_jpegs) - 1) if data.get("end") is not None else len(end_jpegs) - 1)
+    return max(0, min(s, len(start_jpegs) - 1)), max(0, min(e, len(end_jpegs) - 1))
+
+
 # ---- find the burned-in captions to blur ----
 CAPTION_BAND_PROMPT = """These frames come from one video. Some videos have subtitles burned into the picture
 (e.g. English or Chinese text lines, usually near the bottom). Look at ALL frames together.
