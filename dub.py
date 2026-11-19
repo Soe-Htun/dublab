@@ -15,6 +15,34 @@ def run(cmd):
     return p
 
 
+def run_progress(cmd, length, cb):
+    """run() for a long ffmpeg encode, calling cb(fraction 0..1) as it goes."""
+    import tempfile
+    if not cb or not length:
+        return run(cmd)
+    cmd = cmd[:1] + ["-progress", "pipe:1", "-nostats"] + cmd[1:]
+    with tempfile.TemporaryFile("w+") as err:
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err, text=True)
+        last = -1
+        for line in p.stdout:
+            if line.startswith("out_time_us="):
+                try:
+                    f = min(1.0, int(line.split("=", 1)[1]) / 1e6 / length)
+                except ValueError:
+                    continue
+                if int(f * 100) != last:
+                    last = int(f * 100)
+                    try:
+                        cb(f)
+                    except Exception:  # noqa: BLE001 - progress must never stop the encode
+                        pass
+        p.wait()
+        if p.returncode != 0:
+            err.seek(0)
+            raise RuntimeError((err.read() or "ffmpeg failed").strip()[-400:])
+    return p
+
+
 def probe_duration(path):
     p = run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", str(path)])
@@ -33,9 +61,9 @@ def has_audio_stream(path):
     return "audio" in p.stdout
 
 
-def extract_audio(src, dst):
-    run(["ffmpeg", "-y", "-v", "error", "-i", str(src),
-         "-vn", "-ac", "1", "-ar", "16000", str(dst)])
+def extract_audio(src, dst, length=0, progress=None):
+    run_progress(["ffmpeg", "-y", "-v", "error", "-i", str(src),
+                  "-vn", "-ac", "1", "-ar", "16000", str(dst)], length, progress)
 
 
 from gemini_tts import QuotaExhausted
@@ -1021,8 +1049,8 @@ def render_frames(title, windows, out_dir, layout, logo=None, extra=30.0):
 
 def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
         captions=None, blur=None, keyframes=None, lead=0.0, tail=0.0, intro_img=None, hide=None,
-        frame=None):
-    """Combine picture + dub track.
+        frame=None, progress=None):
+    """Combine picture + dub track. progress: optional cb(fraction) while encoding.
 
     bg_wav: music/effects with the original voices removed (separate_music).
     It goes under the dub at bg_volume and dips a little whenever the dub
@@ -1193,13 +1221,17 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
             return
         except RuntimeError as e:   # codec not allowed in MP4 etc. — re-encode
             print(f"[mux] stream copy failed ({e}); re-encoding")
+    try:
+        length = probe_duration(dub_wav) + lead
+    except Exception:  # noqa: BLE001
+        length = 0
     if _has_encoder("h264_videotoolbox"):
         try:
-            run(_cmd(copy_video=False, encoder="h264_videotoolbox"))
+            run_progress(_cmd(copy_video=False, encoder="h264_videotoolbox"), length, progress)
             return
         except RuntimeError as e:
             print(f"[mux] hardware encoder failed ({e}); using libx264")
-    run(_cmd(copy_video=False))
+    run_progress(_cmd(copy_video=False), length, progress)
 
 
 def split_points(cues, total, minutes, min_tail=60.0, window=90.0):

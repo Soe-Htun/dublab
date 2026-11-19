@@ -245,7 +245,7 @@ CHANNEL_RULE = """
 - CHANNEL NAME: this dub is published on the channel "{channel}". Whenever a line names the original creator's channel or brand (e.g. "subscribe to Filmyvia Recaps", "welcome back to X", "follow X for more"), write "{channel}" instead of that name, keeping it in Latin letters exactly as given. Never mention any other channel's name."""
 
 
-def translate_lines(lines, direction, api_key, src_lang_name=None, channel=None):
+def translate_lines(lines, direction, api_key, src_lang_name=None, channel=None, prog=None):
     """lines: [str] -> [translated str], same order.
 
     direction "any2mm" translates from src_lang_name (e.g. "Japanese").
@@ -270,8 +270,16 @@ def translate_lines(lines, direction, api_key, src_lang_name=None, channel=None)
 
     # chunks are independent: send a few at once (a 24-min video is ~10 chunks)
     from concurrent.futures import ThreadPoolExecutor
+    starts = list(range(0, len(lines), CHUNK))
+    done = [0]
+    def _counted(start):
+        r = _chunk(start)
+        done[0] += 1
+        if prog:
+            prog(0.9 * done[0] / len(starts))       # the last 10%: the spelling check
+        return r
     with ThreadPoolExecutor(PARALLEL) as ex:
-        parts = list(ex.map(_chunk, range(0, len(lines), CHUNK)))
+        parts = list(ex.map(_counted, starts))
     out = [t for part in parts for t in part]
     return out if direction == "mm2en" else fix_script(out, api_key)
 
@@ -512,7 +520,7 @@ def write_cast(lines, api_key, lang=None, max_chars=60000):
     return "\n".join(rows[:12])
 
 
-def write_recap(lines, minutes, api_key, lang=None, channel=None, min_minutes=0, log=None):
+def write_recap(lines, minutes, api_key, lang=None, channel=None, min_minutes=0, log=None, prog=None):
     """lines: [(start_seconds, text)] of the whole video. Returns beats
     [{"from": i, "to": j, "say": burmese}] in order (i/j index into lines).
     Long targets are written in parallel sections of ~4 minutes.
@@ -540,9 +548,19 @@ def write_recap(lines, minutes, api_key, lang=None, channel=None, min_minutes=0,
         extra += ("\n- USE EXACTLY THESE CHARACTER NAMES (decided for the whole film; every section must "
                   "call each character the same):\n" + cast)
 
+    todo, done = [k], [0]                 # sections to write (rewrites add to it), sections written
+    def tick():
+        done[0] += 1
+        if prog:
+            prog(0.05 + 0.85 * done[0] / todo[0])     # 5%: the names · last 10%: the spelling check
+    if prog:
+        prog(0.05)
+
     def job(i):
         what = "a video" if k == 1 else f"part {i + 1} of {k} of a video (continue the story; do not re-introduce it)"
-        return _recap_chunk(lines, bounds[i], bounds[i + 1], per, lang, extra, api_key, what)
+        r = _recap_chunk(lines, bounds[i], bounds[i + 1], per, lang, extra, api_key, what)
+        tick()
+        return r
 
     with ThreadPoolExecutor(min(k, RECAP_PARALLEL)) as ex:
         parts = list(ex.map(job, range(k)))
@@ -566,8 +584,11 @@ def write_recap(lines, minutes, api_key, lang=None, channel=None, min_minutes=0,
                 what = ("a video" if k == 1 else f"part {i + 1} of {k} of a video (continue the story; "
                         "do not re-introduce it)") + (". Your previous version was far too short: tell "
                         "this part in much more detail, scene by scene")
-                return _recap_chunk(lines, bounds[i], bounds[i + 1], per * grow, lang, extra, api_key, what)
+                r = _recap_chunk(lines, bounds[i], bounds[i + 1], per * grow, lang, extra, api_key, what)
+                tick()
+                return r
 
+            todo[0] += len(short)
             for i, new in zip(short, ex.map(redo, short)):
                 if _chars(new) > _chars(parts[i]):
                     parts[i] = new

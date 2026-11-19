@@ -168,6 +168,12 @@ queue = []
 lock = threading.Condition()
 
 
+def _sp(job, frac):
+    """This stage's own progress (0..1), shown as % on its ring."""
+    job["spct"] = max(0, min(100, round(frac * 100)))
+    job["spct_stage"] = job["stage"]
+
+
 class Cancelled(Exception):
     """The user pressed ⏹ stop."""
 
@@ -210,11 +216,12 @@ def _outro_on_parts(job, parts, d, outro, captions, blur, vw, vh, frame=None):
         except Exception as e:  # noqa: BLE001 - the voice still goes on without a caption
             jlog(job, f"outro caption skipped: {e}")
             png = None
-    for p in parts:
+    for n, p in enumerate(parts, 1):
         tmp = p.with_name(p.stem + "_o.mp4")
         try:
             add_outro_tail(p, d / "outro.mp3", tmp, png, cy)
             tmp.replace(p)
+            _sp(job, 0.3 + 0.7 * n / len(parts))
         except Exception as e:  # noqa: BLE001 - keep the part without the outro
             tmp.unlink(missing_ok=True)
             jlog(job, f"outro on {p.name} failed: {str(e)[:150]}")
@@ -547,13 +554,14 @@ def _transcribe_and_translate(jid, job):
     if not (job.get("segs") and wav.exists()):
         job.update(stage="audio", pct=4)
         jlog(job, "extracting audio…")
-        extract_audio(src, wav)
+        extract_audio(src, wav, total, lambda f: _sp(job, f))
 
     job.update(stage="transcribe", pct=8)
     jlog(job, "transcribing with whisper…")
     last_log = [0]
     def stt_prog(frac):  # 8% → 44% while whisper works through the audio
         job.update(pct=8 + int(36 * frac))
+        _sp(job, frac)
         if frac * 100 >= last_log[0] + 10:
             last_log[0] = int(frac * 10) * 10
             jlog(job, f"transcribing… {last_log[0]}%")
@@ -571,6 +579,7 @@ def _transcribe_and_translate(jid, job):
         jlog(job, "Burmese speech — transcribing with Gemini (whisper can't write Burmese)…")
         def g_prog(i, n):
             job.update(pct=8 + int(36 * i / max(n, 1)))
+            _sp(job, i / max(n, 1))
             jlog(job, f"transcribing (gemini)… {i}/{n}")
         try:
             segs = transcribe_burmese(burmese_chunks(wav), api_key, g_prog)
@@ -661,7 +670,8 @@ def _translate(job, utter, direction, lang, api_key):
     jlog(job, "translating with gemini…")
     try:
         texts = translate_lines([u["text"] for u in utter], direction, api_key,
-                                LANG_NAMES.get(lang, lang), _settings["channel_name"] or None)
+                                LANG_NAMES.get(lang, lang), _settings["channel_name"] or None,
+                                prog=lambda f: _sp(job, f))
     except RateLimited as e:
         raise ValueError("Gemini ဘာသာပြန် quota ဒီနေ့အတွက် ကုန်သွားပြီ — မနက်ဖြန် ပြန်စမ်းပါ"
                          if e.daily else
@@ -713,7 +723,8 @@ def _write_recap(job, utter, lang, api_key):
     try:
         beats = write_recap([(u["start"], u["text"]) for u in utter], mins, api_key,
                             LANG_NAMES.get(lang, lang), _settings["channel_name"] or None,
-                            min_minutes=job["recap"], log=lambda m: jlog(job, m))
+                            min_minutes=job["recap"], log=lambda m: jlog(job, m),
+                            prog=lambda f: _sp(job, f))
     except RateLimited as e:
         raise ValueError("Gemini quota ဒီနေ့အတွက် ကုန်သွားပြီ — မနက်ဖြန် ပြန်စမ်းပါ" if e.daily else
                          "Gemini က ခဏ ပိတ်ထားတယ် — ၁–၂ မိနစ်နေရင် 🔁 ပြန်စမ်းပါ") from None
@@ -745,6 +756,7 @@ def _recap_cut(job, voice_name):
             synthesize(utter[i]["text"], voice_name, p)
         done[0] += 1
         job.update(pct=58 + int(20 * done[0] / len(utter)))
+        _sp(job, done[0] / len(utter))
         return p, probe_duration(p)
     with ThreadPoolExecutor(max(1, int(os.environ.get("DUBLAB_TTS_WORKERS") or 8))) as ex:
         voiced = list(ex.map(tts, range(len(utter))))
@@ -755,6 +767,7 @@ def _recap_cut(job, voice_name):
     jlog(job, f"cutting {len(clips)} scenes into the recap…")
     def prog(i, n):
         job.update(pct=78 + int(12 * i / max(n, 1)))
+        _sp(job, i / max(n, 1))
     out = d / "recap.mp4"
     total = build_recap_video(src, clips, out, d / "clips", prog)
     new, t = [], 0.0
@@ -780,6 +793,7 @@ def _condense(job, src, utter):
     out = job["dir"] / "condensed.mp4"
     def prog(i, n):
         job.update(pct=55 + int(5 * i / max(n, 1)))
+        _sp(job, i / max(n, 1))
     new_total = build_recap_video(src, [(a, b - a) for a, b in spans], out, job["dir"] / "clips", prog)
     starts, t = [], 0.0
     for a, b in spans:
@@ -820,6 +834,7 @@ def _voice_and_mux(job):
         if job.get("recap"):
             return
         job.update(pct=60 + int(30 * i / max(n, 1)))
+        _sp(job, i / max(n, 1))
         if i % 5 == 0 or i == n:
             jlog(job, f"tts {i}/{n}")
     outro = _settings["outro"] if job.get("outro") else ""
@@ -933,15 +948,19 @@ def _voice_and_mux(job):
     def _render(frame, name, caps, cuts):
         """mux, then split into parts and give each part the outro; returns file names."""
         out = d / f"{name}.mp4"
+        _sp(job, 0)
         mux(src, dub_wav, out, bg_wav=bg_wav, bg_volume=BG_VOLUME, logo=logo,
             captions=caps, blur=blur, hide=hide, keyframes=cuts or None, lead=lead, tail=tail,
-            intro_img=intro_img, frame=frame)
+            intro_img=intro_img, frame=frame,
+            progress=lambda f: _sp(job, f))
         if not cuts:
             return [out.name]
         job.update(stage="split", pct=97)
         jlog(job, "cutting the parts…")
+        _sp(job, 0)
         parts = split_video(out, cuts, d, stem=f"{name}_part")
         out.unlink(missing_ok=True)                       # the parts replace it
+        _sp(job, 0.3 if outro and (d / "outro.mp3").exists() else 1)
         if outro and (d / "outro.mp3").exists():
             _outro_on_parts(job, parts[:-1], d, outro, caps, blur, vw, vh, frame)
         return [p.name for p in parts]
@@ -1184,6 +1203,8 @@ def job_status(jid):
         stage_pct = max(0, min(100, round((job["pct"] - lo) * 100 / (hi - lo))))
     if job["stage"] == "download" and job.get("dl_pct") is not None:
         stage_pct = job["dl_pct"]          # the real download %, not the coarse overall one
+    if job.get("spct") is not None and job.get("spct_stage") == job["stage"]:
+        stage_pct = job["spct"]            # the stage's own progress (_sp)
     parts = []
     if job["status"] == "done" and (job.get("parts") or job.get("tt")):
         outs = _outputs(job)

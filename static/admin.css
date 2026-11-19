@@ -15,7 +15,7 @@
 .filters{display:flex;gap:6px;flex-wrap:wrap}
 .filters button{background:rgba(255,255,255,.05);border:1px solid var(--card-br);color:var(--dim);
   border-radius:99px;padding:7px 12px;font-size:13px;cursor:pointer;font-family:inherit}
-.filters button.on{background:rgba(168,85,247,.18);color:var(--txt);border-color:var(--p1)}
+.filters button.on{background:rgba(101,148,242,.18);color:var(--txt);border-color:var(--acc)}
 .mini{background:rgba(255,255,255,.05);border:1px solid var(--card-br);color:var(--txt);
   border-radius:12px;padding:7px 11px;font-size:15px;cursor:pointer}
 .rev{border:1px solid var(--card-br);border-radius:14px;padding:12px 14px;margin-bottom:10px;
@@ -33,7 +33,7 @@
 .setinput input{width:90px;background:rgba(255,255,255,.05);border:1px solid var(--card-br);border-radius:10px;
   color:var(--txt);padding:8px 10px;font:inherit;font-size:15px;text-align:right}
 .setinput input[type=text]{width:170px;text-align:left}
-.setinput input:focus{outline:none;border-color:var(--p1)}
+.setinput input:focus{outline:none;border-color:var(--acc)}
 .setcol{display:flex;flex-direction:column;gap:6px;font-size:14px;margin:6px 0 8px}
 .logorow{display:flex;align-items:center;gap:12px}
 .logobox{width:96px;height:96px;flex:none;border-radius:12px;border:1px dashed var(--card-br);display:flex;align-items:center;justify-content:center;
@@ -43,13 +43,13 @@
 .filebtn{display:inline-block;cursor:pointer;font-size:13px}
 .setselect{background:rgba(255,255,255,.05);border:1px solid var(--card-br);border-radius:10px;color:var(--txt);padding:8px 10px;font:inherit;font-size:14px}
 .setselect option{background:#141420}
-#logosize{accent-color:var(--p1);width:140px}
+#logosize{accent-color:var(--acc);width:140px}
 .blurprev{position:relative;width:100%;aspect-ratio:16/9;border-radius:10px;margin:4px 0 10px;overflow:hidden;
   background:linear-gradient(135deg,#334,#556 50%,#443)}
 .blurprev.v{aspect-ratio:9/16;width:auto;height:340px;margin:4px auto 10px}
 .orient{display:flex;gap:8px;margin:10px 0 4px}
 .orient .mini{flex:1;opacity:.6}
-.orient .mini.on{opacity:1;border-color:var(--p1)}
+.orient .mini.on{opacity:1;border-color:var(--acc)}
 .blurband{position:absolute;left:0;right:0;background:rgba(255,255,255,.18);backdrop-filter:blur(3px);
   border-top:1px dashed rgba(255,255,255,.5);border-bottom:1px dashed rgba(255,255,255,.5);display:flex;align-items:center;justify-content:center}
 .blurband span{font-size:12px;font-weight:700;color:#fff;text-shadow:0 0 3px #000}
@@ -58,7 +58,7 @@
 .tgline{font-size:14px;margin:4px 0}
 .tokin{width:100%;box-sizing:border-box;background:rgba(255,255,255,.05);border:1px solid var(--card-br);border-radius:10px;
   color:var(--txt);padding:10px 12px;font:inherit;font-size:14px}
-.tokin:focus{outline:none;border-color:var(--p1)}
+.tokin:focus{outline:none;border-color:var(--acc)}
 #tg-msg a{color:var(--p2)}
 .tgbtns{flex-wrap:wrap}
 .ghost.danger:hover{border-color:#e5484d;color:#ff8a8a}
