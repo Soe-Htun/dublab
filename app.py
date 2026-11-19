@@ -361,6 +361,12 @@ def _load_saved_jobs():
             if meta.get("status") == "done" and time.time() - meta.get("created", 0) < TTL:
                 meta["dir"] = f.parent
                 jobs.setdefault(meta["id"], meta)
+            elif meta.get("status") in ("processing", "queued", "review"):
+                # the server restarted mid-job: it comes back as ▶️ resumable
+                meta.update(status="failed", failed_at=time.time(),
+                            error="server ပြန်စလိုက်လို့ ရပ်သွားတယ် — ▶️ ဆက်လုပ်ပါ")
+                meta["dir"] = f.parent
+                jobs.setdefault(meta["id"], meta)
             elif meta.get("status") == "failed" and time.time() - meta.get("failed_at", 0) < RESUME_KEEP:
                 meta["dir"] = f.parent                     # can still be resumed
                 jobs.setdefault(meta["id"], meta)
@@ -423,6 +429,7 @@ def _queue_youtube_full(parent):
     jlog(child, f"📺 YouTube long version of job {parent['id']}: a ~{long_min} min recap (~80% of the film)")
     jlog(parent, f"📺 YouTube full version queued as job {jid} — it runs after this one")
     parent["yt_child_id"] = jid
+    _save_failed(child)          # survives a restart (comes back as ▶️ resumable)
     with lock:
         queue.append(jid)
         lock.notify()
@@ -436,6 +443,7 @@ def process_job(jid):
         else:
             _transcribe_and_translate(jid, job)
             job["phase1_done"] = True        # ▶️ resume skips straight to the voice
+            _save_failed(job)                # snapshot (transcript + recap) in case of a restart
             if job.get("yt_full") and job.get("recap") and not job.get("yt_child"):
                 _queue_youtube_full(job)
             if job.get("review"):
@@ -552,6 +560,8 @@ def _transcribe_and_translate(jid, job):
     if job.get("segs") and wav.exists():          # ▶️ resume: whisper already ran
         segs, lang = job["segs"], job["seg_lang"]
         jlog(job, "▶️ resuming: speech already transcribed")
+    elif job.get("seg_lang") == "my" and wav.exists():   # known Burmese: Gemini listens, no whisper
+        segs, lang = [], "my"
     else:
         jlog(job, f"speech model: {job.get('model') or default_whisper_model()}")
         segs, lang = transcribe(wav, SRC_LANG[direction], stt_prog, job.get("model"), title=job.get("name") or "")
@@ -1243,7 +1253,7 @@ def resume_job(jid):
     job.update(status="queued", stage="queue", error="", pct=job.get("pct", 0) if job.get("phase1_done") else 0,
                phase=2 if job.get("phase1_done") else 1)
     job.pop("failed_at", None)
-    (job["dir"] / "job.json").unlink(missing_ok=True)
+    _save_failed(job)            # snapshot: a server restart brings it back as resumable
     jlog(job, "▶️ resuming from where it stopped")
     with lock:
         queue.append(jid)

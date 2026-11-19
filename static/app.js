@@ -587,6 +587,8 @@ $('#titlechk').addEventListener('change', () => { $('#covertitle_in').hidden = !
 (async () => {
   let jid = null;
   try { jid = localStorage.getItem(JOBKEY); } catch (e) {}
+  const q = new URLSearchParams(location.search).get('job');    // /?job=<id> opens that job
+  if (q) jid = q;
   if (!jid) return;
   try {
     let r = await fetch('/api/jobs/' + jid);
