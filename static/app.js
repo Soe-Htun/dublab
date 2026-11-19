@@ -590,6 +590,9 @@ function syncRecap() {
 // recap / no recap are radios: either one changing re-syncs everything
 ['#recapchk', '#fullchk'].forEach((id) => $(id).addEventListener('change', () => {
   syncRecap(); syncOrig(); try { syncYtMode(); partsNote(); } catch (e) { /* not ready */ }
+  // 🖼️ title: on for a recap, off for the plain video (can still be changed by hand)
+  $('#titlechk').checked = $('#recapchk').checked;
+  $('#covertitle_in').hidden = !$('#titlechk').checked;
 }));
 document.querySelectorAll('#recapgrid .opt').forEach((b) => b.addEventListener('click', () => {
   setRecapLen(b.dataset.recap); recap = recapLen;
