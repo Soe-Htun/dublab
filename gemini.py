@@ -99,9 +99,44 @@ Rules:
 PROMPTS = {"en2mm": PROMPT_EN2MM, "mm2en": PROMPT_MM2EN, "zh2mm": PROMPT_ZH2MM}
 
 
+_spent = {}      # key -> day (YYYY-MM-DD, Pacific) its daily quota ran out
+
+
+def _quota_day():
+    # Gemini's free daily quota resets at midnight US Pacific time
+    return time.strftime("%Y-%m-%d", time.gmtime(time.time() - 8 * 3600))
+
+
+def _keys(first):
+    """Keys to try, in order: GEMINI_API_KEYS (comma-separated, one per Google
+    Cloud project — the free quota is per project) and the key passed in."""
+    keys = [k.strip() for k in os.environ.get("GEMINI_API_KEYS", "").split(",") if k.strip()]
+    if first and first not in keys:
+        keys.append(first)
+    return keys or [first]
+
+
 def _call(prompt, api_key, max_tokens=8192, images=None):
     """images: optional [(label, jpeg bytes)] sent after the prompt, each
-    preceded by its label so the model can refer to it."""
+    preceded by its label so the model can refer to it. When a key's daily
+    quota is used up, the next key in GEMINI_API_KEYS is used."""
+    today = _quota_day()
+    last = None
+    for key in _keys(api_key):
+        if _spent.get(key) == today:
+            continue
+        try:
+            return _call_one(prompt, key, max_tokens, images)
+        except RateLimited as e:
+            last = e
+            if not e.daily:
+                raise
+            _spent[key] = today
+            print(f"[gemini] key …{key[-4:]} used up for today — trying the next key")
+    raise last or RateLimited(True)
+
+
+def _call_one(prompt, api_key, max_tokens=8192, images=None):
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}"
            f":generateContent?key={api_key}")
     parts = [{"text": prompt}]
