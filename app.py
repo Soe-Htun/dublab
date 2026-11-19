@@ -396,6 +396,34 @@ def sweep_old():
 sweep_old()                     # also right at start-up
 
 
+def _queue_youtube_full(parent):
+    """📺 YouTube "full": a second job, queued after this one, that dubs the whole
+    film (music-only stretches left out, ~80% of it) as one 16:9 video. It reuses
+    this job's video and transcript, so there is no second download or whisper."""
+    jid = uuid.uuid4().hex[:12]
+    d = JOBS / jid
+    d.mkdir(parents=True, exist_ok=True)
+    name = "input" + parent["ext"]
+    try:
+        os.link(parent["dir"] / name, d / name)       # same file, no copy
+    except OSError:
+        shutil.copy2(parent["dir"] / name, d / name)
+    keep = ("ext", "direction", "voice", "model", "outro", "cover", "logo", "name", "telegram", "owner",
+            "captions", "blur", "my_title", "no_title", "url", "segs", "seg_lang", "total", "title_mm")
+    child = {k: parent[k] for k in keep if k in parent}
+    child.update(status="queued", stage="queue", pct=0, error="", dir=d, id=jid, phase=1,
+                 review=False, keep_bg=False, intro=False, recap=0, split=0, youtube=True,
+                 yt_only=True, condense=True, have_src=True, yt_child=True, tg_src=None,
+                 created=time.time())
+    jobs[jid] = child
+    jlog(child, f"📺 YouTube full version of job {parent['id']} (whole film, music-only parts left out)")
+    jlog(parent, f"📺 YouTube full version queued as job {jid} — it runs after this one")
+    parent["yt_child_id"] = jid
+    with lock:
+        queue.append(jid)
+        lock.notify()
+
+
 def process_job(jid):
     job = jobs[jid]
     try:
@@ -404,6 +432,8 @@ def process_job(jid):
         else:
             _transcribe_and_translate(jid, job)
             job["phase1_done"] = True        # ▶️ resume skips straight to the voice
+            if job.get("yt_full") and job.get("recap") and not job.get("yt_child"):
+                _queue_youtube_full(job)
             if job.get("review"):
                 job.update(status="review", stage="review", pct=55)
                 jlog(job, "waiting for you to check the translation ✏️")
@@ -504,7 +534,7 @@ def _transcribe_and_translate(jid, job):
         jlog(job, "▶️ resuming: speech already transcribed")
     else:
         jlog(job, f"speech model: {job.get('model') or default_whisper_model()}")
-        segs, lang = transcribe(wav, SRC_LANG[direction], stt_prog, job.get("model"))
+        segs, lang = transcribe(wav, SRC_LANG[direction], stt_prog, job.get("model"), title=job.get("name") or "")
         job["segs"], job["seg_lang"] = segs, lang
     if not segs:
         raise ValueError("အသံထဲမှာ စကားပြောသံ မတွေ့ဘူး")
@@ -693,6 +723,36 @@ def _recap_cut(job, voice_name):
     return out, new, total
 
 
+def _condense(job, src, utter):
+    """The film with its long stretches without speech (songs, dances, montages,
+    credits) cut out, and the lines moved onto the new timeline. Kept as long as
+    at least 60% of the film remains."""
+    spans = speech_spans(utter, pad=1.5, join=8.0)
+    kept = sum(b - a for a, b in spans)
+    total = job["total"]
+    if not spans or kept < total * 0.6 or kept > total * 0.97:
+        jlog(job, "keeping the whole film (little to leave out)")
+        return src, utter
+    job.update(stage="recap", pct=55)
+    jlog(job, f"leaving out music-only parts: {total / 60:.0f} → {kept / 60:.0f} min ({kept * 100 / total:.0f}%)")
+    out = job["dir"] / "condensed.mp4"
+    def prog(i, n):
+        job.update(pct=55 + int(5 * i / max(n, 1)))
+    new_total = build_recap_video(src, [(a, b - a) for a, b in spans], out, job["dir"] / "clips", prog)
+    starts, t = [], 0.0
+    for a, b in spans:
+        starts.append((a, b, t))
+        t += b - a
+    moved = []
+    for u in utter:
+        for a, b, t0 in starts:
+            if a <= u["start"] < b:
+                moved.append({**u, "start": t0 + u["start"] - a, "end": t0 + min(u["end"], b) - a})
+                break
+    job["total"] = new_total
+    return out, moved
+
+
 def _voice_and_mux(job):
     d = job["dir"]
     utter = job["utter"]
@@ -709,6 +769,8 @@ def _voice_and_mux(job):
         else:
             jlog(job, "demucs not installed — background music skipped "
                       "(pip install demucs)")
+    if job.get("condense"):              # 📺 YouTube full: leave out long music-only stretches
+        src, utter = _condense(job, src, utter)
     if not job.get("recap"):
         job.update(stage="voice", pct=60)
         jlog(job, f"synthesizing {len(utter)} utterances ({voice_name})…")
@@ -759,8 +821,9 @@ def _voice_and_mux(job):
     # TikTok (9:16) is the default for a landscape film; ticking "YouTube" also
     # (or, for a portrait source, only) keeps the normal 16:9 video
     landscape = vw > vh
-    tt_only = landscape and not job.get("youtube")      # just the 9:16 TikTok video
-    want_tt = landscape and bool(job.get("youtube"))     # 16:9 YouTube video + a 9:16 TikTok one
+    yt = job.get("youtube") and not job.get("yt_full")    # (yt_full: the YouTube one is a separate job)
+    tt_only = landscape and not yt and not job.get("yt_only")   # just the 9:16 TikTok video
+    want_tt = landscape and bool(yt) and not job.get("yt_only")  # 16:9 YouTube video + a 9:16 TikTok one
     main_frame = frame_layout(vw, vh) if tt_only else None
     logo_png = LOGO_FILE if job.get("logo") and LOGO_FILE.exists() else None
 
@@ -881,6 +944,7 @@ def _voice_and_mux(job):
         (d / tmp).unlink(missing_ok=True)
 
     (d / "recap.mp4").unlink(missing_ok=True)          # recap intermediate
+    (d / "condensed.mp4").unlink(missing_ok=True)      # YouTube-full intermediate
     for f in d.glob("r*.mp3"):
         f.unlink(missing_ok=True)
     if job.get("telegram"):          # mark before "done" so the page never offers a 2nd send
@@ -963,6 +1027,7 @@ def create_job():
     outro = request.form.get("outro", "1") == "1"
     intro = request.form.get("intro", "0") == "1"      # off unless ticked
     youtube = request.form.get("youtube", "0") == "1"  # TikTok 9:16 always; this adds the 16:9 YouTube one
+    yt_full = youtube and request.form.get("ytmode") == "full"   # YouTube = long dub (~80%), TikTok = recap
     my_title = re.sub(r"\s+", " ", request.form.get("title") or "").strip()[:60]   # typed by the user
     no_title = request.form.get("show_title", "1") != "1"   # unticked: covers / frame without a title
     cover = True                                          # every video gets a cover
@@ -1054,6 +1119,7 @@ def create_job():
                  "tg_src": tg_msg,
                  "id": jid, "telegram": send_tg, "owner": _admin_ok(),
                  "captions": captions, "blur": blur, "split": split, "youtube": youtube, "my_title": my_title, "no_title": no_title,
+                 "yt_full": yt_full,
                  "created": time.time()}
     jlog(jobs[jid], "uploaded " + re.sub(r"[\r\n]", " ", label)[:160])
     with lock:
@@ -1646,7 +1712,9 @@ def _send_one(job, chat, path, name, caption, prog, part=1):
     cover = _cover_file(job, part, which)
     thumb = _cover_thumb(job, part, which) or _video_thumb(path, job["dir"] / f"tg_thumb_{path.stem}.jpg")
     if size <= telegram.MAX_UPLOAD:
-        telegram.send_file(chat, path, name, caption=caption, thumb=thumb, cover=cover)
+        w, h = video_size(path)
+        telegram.send_file(chat, path, name, caption=caption, thumb=thumb, cover=cover,
+                           width=w, height=h, duration=probe_duration(path))
         return "file"
     if size <= telegram.BIG_MAX and telegram.big_available():
         w, h = video_size(path)

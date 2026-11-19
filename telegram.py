@@ -134,7 +134,8 @@ def send_message(chat_id, text):
                                  "disable_web_page_preview": True})
 
 
-def send_file(chat_id, path, filename, caption="", kind="video", thumb=None, cover=None):
+def send_file(chat_id, path, filename, caption="", kind="video", thumb=None, cover=None,
+              width=None, height=None, duration=None):
     """kind 'video' (plays inline) or 'document'. thumb: JPEG ≤320 px.
     cover: full-size JPEG Telegram shows on the video in the chat."""
     with open(path, "rb") as fh:
@@ -143,6 +144,10 @@ def send_file(chat_id, path, filename, caption="", kind="video", thumb=None, cov
     params = {"chat_id": chat_id, "caption": caption[:1000]}
     if kind == "video":
         params["supports_streaming"] = "true"
+        # without the real size Telegram guessed a square/landscape box for 9:16 videos
+        for k, v in (("width", width), ("height", height), ("duration", duration)):
+            if v:
+                params[k] = str(int(v))
     ctype = "video/mp4" if kind == "video" else "application/octet-stream"
     files = {field: (filename, data, ctype)}
     if thumb and os.path.exists(thumb):

@@ -76,6 +76,7 @@ $('#go').addEventListener('click', () => {
   fd.append('outro', $('#outrochk') && $('#outrochk').checked ? '1' : '0');
   fd.append('intro', $('#introchk').checked ? '1' : '0');
   fd.append('youtube', $('#ytchk').checked ? '1' : '0');
+  { const m = document.querySelector('input[name="ytmode"]:checked'); fd.append('ytmode', m && $('#recapchk').checked ? m.value : 'recap'); }
   fd.append('show_title', $('#titlechk').checked ? '1' : '0');
   fd.append('title', ($('#covertitle_in').value || '').trim());
   fd.append('cover', '1');            // every video gets a cover
@@ -592,3 +593,9 @@ $('#stopjob').addEventListener('click', async () => {
   if (jid) { try { await fetch('/api/jobs/' + jid + '/cancel', { method: 'POST' }); } catch (e) {} }
   location.reload();
 });
+
+// 📺 YouTube length choice: only when YouTube is ticked and it is a recap
+function syncYtMode() { $('#ytmode').hidden = !($('#ytchk').checked && $('#recapchk').checked); }
+$('#ytchk').addEventListener('change', syncYtMode);
+$('#recapchk').addEventListener('change', syncYtMode);
+syncYtMode();

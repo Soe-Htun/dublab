@@ -79,7 +79,7 @@ def default_whisper_model():
     return os.environ.get("DUBLAB_WHISPER_MODEL") or "small"
 
 
-def transcribe(wav, lang_hint=None, progress=None, model_name=None):
+def transcribe(wav, lang_hint=None, progress=None, model_name=None, title=""):
     """Return ([{start, end, text}], language).
 
     lang_hint: 'en', 'my', 'zh'… or None to let whisper detect the
@@ -88,14 +88,14 @@ def transcribe(wav, lang_hint=None, progress=None, model_name=None):
     global _cpu_only
     name = model_name or default_whisper_model()
     try:
-        return _transcribe(wav, lang_hint, progress, name)
+        return _transcribe(wav, lang_hint, progress, name, title)
     except Exception as e:  # noqa: BLE001 - GPU backends are experimental
         if _cpu_only:
             raise
         print(f"[whisper] GPU failed ({type(e).__name__}: {e}); retrying on CPU")
         _cpu_only = True
         _models.clear()
-        return _transcribe(wav, lang_hint, progress, name)
+        return _transcribe(wav, lang_hint, progress, name, title)
 
 
 def _whisper_device():
@@ -213,7 +213,18 @@ def _collapse_repeats(text, keep=2):
     return " ".join(out).strip()
 
 
-def _vote_language(wav, name, spots=(0.15, 0.3, 0.45, 0.6, 0.75, 0.9), clip=30):
+def burmese_title(title):
+    """The video's own title is mostly Burmese and doesn't say it's a subtitled /
+    dubbed foreign film ("မြန်မာစာတန်းထိုး", "[DUB]"…)."""
+    t = title or ""
+    mm = sum(1 for c in t if "\u1000" <= c <= "\u109f")
+    letters = sum(1 for c in t if c.isalpha())
+    foreign = re.search(r"စာတန်းထိုး|ဘာသာပြန်|subtitle|\bsub\b|dub|translated|hindi|chinese|korean|thai|"
+                        r"english|movie\s*recap", t, re.I)
+    return letters > 0 and mm / letters > 0.4 and not foreign
+
+
+def _vote_language(wav, name, spots=(0.15, 0.3, 0.45, 0.6, 0.75, 0.9), clip=30, title=""):
     """Whisper guesses the language from the first 30 s only — a Burmese ad or
     channel intro before an Indian film made it 'my'. Listen at several points
     through the video instead and add up the votes."""
@@ -223,29 +234,38 @@ def _vote_language(wav, name, spots=(0.15, 0.3, 0.45, 0.6, 0.75, 0.9), clip=30):
     total = probe_duration(wav)
     if total < clip * 4:
         return None                      # short clip: whisper's own guess is fine
-    votes = {}
+    votes, my_score, heard = {}, [0.0], [0]
     with tempfile.TemporaryDirectory() as tmp:
         for f in spots:
             piece = Path(tmp) / "spot.wav"
             try:
                 run(["ffmpeg", "-y", "-v", "error", "-ss", f"{total * f:.1f}", "-t", str(clip),
                      "-i", str(wav), "-ac", "1", "-ar", "16000", str(piece)])
-                lang, prob, _ = model.detect_language(decode_audio(str(piece)), vad_filter=True)
+                lang, prob, allp = model.detect_language(decode_audio(str(piece)), vad_filter=True)
             except Exception:  # noqa: BLE001 - e.g. a silent spot
                 continue
-            votes[lang] = votes.get(lang, 0.0) + prob
+            for l, q in allp[:5]:        # add up whole guesses, not just the winner (Burmese
+                votes[l] = votes.get(l, 0.0) + q   # often comes second to Chinese)
+            my_score[0] += dict(allp).get("my", 0.0)
+            heard[0] += 1
     if not votes:
         return None
     best = max(votes, key=votes.get)
+    # whisper hears little Burmese and often calls it Chinese: a Burmese-titled
+    # video whose speech isn't clearly another language is Burmese
+    conf = votes[best] / max(1, heard[0])
+    if best != "my" and burmese_title(title) and (conf < 0.85 or my_score[0] / max(1, heard[0]) > 0.05):
+        print(f"[whisper] Burmese title and unsure speech ({best} {conf:.2f}) → my")
+        best = "my"
     print(f"[whisper] language votes: { {k: round(v, 2) for k, v in votes.items()} } → {best}")
     return best
 
 
-def _transcribe(wav, lang_hint, progress, name):
+def _transcribe(wav, lang_hint, progress, name, title=""):
     global _mlx_broken
     if not lang_hint:
         try:
-            lang_hint = _vote_language(wav, name)
+            lang_hint = _vote_language(wav, name, title=title)
         except Exception as e:  # noqa: BLE001 - fall back to whisper's own guess
             print(f"[whisper] language vote failed: {e}")
     if _use_mlx():

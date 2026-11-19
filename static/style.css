@@ -190,3 +190,6 @@ footer a{color:inherit}
 
 .covergrid.many{grid-template-columns:repeat(2,1fr)}
 .coverlink{display:flex;flex-direction:column;gap:4px;text-decoration:none;color:var(--dim);font-size:12px;text-align:center}
+
+.ytmode{margin:-6px 0 12px 30px}
+.ytmode .checkrow{margin:4px 0 8px}
