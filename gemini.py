@@ -23,7 +23,7 @@ _SSL = _ssl_context()
 MODEL = "gemini-3.5-flash-lite"
 MAX_RETRIES = 4
 CHUNK = 25
-PARALLEL = 4     # chunks translated at the same time
+PARALLEL = 6     # chunks translated at the same time (spread over the keys)
 
 
 NAME_RULE = """- CHARACTER NAMES: do NOT transliterate foreign character names. Give every character a familiar Burmese name,
@@ -116,13 +116,19 @@ def _keys(first):
     return keys or [first]
 
 
+_turn = __import__("itertools").count()
+
+
 def _call(prompt, api_key, max_tokens=8192, images=None):
     """images: optional [(label, jpeg bytes)] sent after the prompt, each
-    preceded by its label so the model can refer to it. When a key's daily
-    quota is used up, the next key in GEMINI_API_KEYS is used."""
+    preceded by its label so the model can refer to it. Calls take turns over
+    GEMINI_API_KEYS (each key has its own per-minute limit, so parallel calls
+    don't all queue behind one); a key whose daily quota is used up is skipped."""
     today = _quota_day()
     last = None
-    for key in _keys(api_key):
+    keys = _keys(api_key)
+    k0 = next(_turn) % len(keys)
+    for key in keys[k0:] + keys[:k0]:
         if _spent.get(key) == today:
             continue
         try:
@@ -136,9 +142,15 @@ def _call(prompt, api_key, max_tokens=8192, images=None):
     raise last or RateLimited(True)
 
 
+# when the main model is overloaded (HTTP 503 "high demand" — it came and went for
+# minutes on 2026-11-19 and made an 18-min video's translation take 4+ min), the
+# retry goes to the next of these instead of waiting for the same one
+FALLBACK_MODELS = [m.strip() for m in (os.environ.get("DUBLAB_GEMINI_FALLBACKS") or
+                   "gemini-flash-lite-latest,gemini-3.1-flash-lite,gemini-3.5-flash").split(",") if m.strip()]
+
+
 def _call_one(prompt, api_key, max_tokens=8192, images=None):
-    url = (f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}"
-           f":generateContent?key={api_key}")
+    models = [MODEL] + [m for m in FALLBACK_MODELS if m != MODEL]
     parts = [{"text": prompt}]
     for item in images or []:          # (label, bytes) JPEGs, or (label, bytes, mime) e.g. audio
         import base64
@@ -155,7 +167,10 @@ def _call_one(prompt, api_key, max_tokens=8192, images=None):
                 "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT")]}
     limited = 0
     attempt = 0
+    busy = 0                       # 5xx answers so far: each one moves on to the next model
     while True:
+        url = (f"https://generativelanguage.googleapis.com/v1beta/models/{models[busy % len(models)]}"
+               f":generateContent?key={api_key}")
         try:
             req = urllib.request.Request(url, data=json.dumps(body).encode(),
                                          headers={"Content-Type": "application/json"})
@@ -187,6 +202,11 @@ def _call_one(prompt, api_key, max_tokens=8192, images=None):
                 limit = MAX_RETRIES + 6 if e.code >= 500 or e.code == 400 else MAX_RETRIES
                 if attempt >= limit:
                     raise RuntimeError(f"Gemini HTTP {e.code}: {detail or e.reason}") from None
+                if e.code >= 500:
+                    busy += 1
+                    if busy % len(models):     # another model to try: go now, don't wait
+                        time.sleep(1)
+                        continue
                 time.sleep(min(30, 2 ** attempt * 2))
                 continue
             # rate limited: wait as long as Gemini asks (per-minute quota), a few times

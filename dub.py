@@ -752,12 +752,16 @@ def _caption_font(size):
 
 # Burmese syllable start: a consonant/independent vowel not stacked under a
 # virama and not killed by an asat — safe places to break a long word.
-_MY_BREAK = re.compile(r"(?<!\u1039)(?=[\u1000-\u102A\u103F\u104C-\u104F](?![\u103A\u1039]))")
+_MY_BREAK = re.compile(r"(?<!\u1039)(?=[\u1000-\u102A\u103F\u104C-\u104F]"
+                       r"(?![\u102B-\u1038\u103B-\u103E]*[\u103A\u1039]))")   # not "ည့်": a killed consonant
 
 
 def _split_wide(draw, word, font, max_w):
     """Break one over-wide word at Burmese syllable starts (or characters)."""
     parts = [p for p in _MY_BREAK.split(word) if p] or list(word)
+    for k in range(len(parts) - 2, -1, -1):     # a lone "အ" is a prefix: keep it with what follows
+        if parts[k] == "အ":
+            parts[k:k + 2] = [parts[k] + parts[k + 1]]
     if len(parts) == 1:
         parts = list(word)
     out, cur = [], ""
@@ -774,24 +778,32 @@ def _split_wide(draw, word, font, max_w):
 
 def _wrap(draw, text, font, max_w):
     """Greedy word wrap on spaces (Burmese phrases are space-separated);
-    words wider than a line are broken at syllable starts."""
-    words = []
+    words wider than a line are broken at syllable starts. Two lines are
+    evened out so line 2 is never a lone syllable."""
+    toks = []                                   # (piece, joins the previous piece with a space?)
     for word in text.split():
-        if _tlen(draw, word, font) > max_w:
-            words += _split_wide(draw, word, font, max_w)
-        else:
-            words.append(word)
-    lines, cur = [], ""
-    for word in words:
-        trial = f"{cur} {word}".strip()
-        if cur and _tlen(draw, trial, font) > max_w:
+        parts = _split_wide(draw, word, font, max_w) if _tlen(draw, word, font) > max_w else [word]
+        toks += [(p, k == 0) for k, p in enumerate(parts)]
+
+    def join(ts):
+        return "".join((" " if sp and i else "") + p for i, (p, sp) in enumerate(ts))
+
+    lines, cur = [], []
+    for t in toks:
+        if cur and _tlen(draw, join(cur + [t]), font) > max_w:
             lines.append(cur)
-            cur = word
+            cur = [t]
         else:
-            cur = trial
+            cur.append(t)
     if cur:
         lines.append(cur)
-    return lines or [""]
+    if len(lines) == 2:
+        flat = lines[0] + lines[1]
+        best = min(range(1, len(flat)), key=lambda k: max(_tlen(draw, join(flat[:k]), font),
+                                                          _tlen(draw, join(flat[k:]), font)))
+        if max(_tlen(draw, join(flat[:best]), font), _tlen(draw, join(flat[best:]), font)) <= max_w:
+            lines = [flat[:best], flat[best:]]
+    return [join(ln) for ln in lines] or [""]
 
 
 def render_captions(cues, video_w, video_h, out_dir, size_pct=5.5, box=True):
@@ -1007,15 +1019,15 @@ def frame_caption_y(frame, strip_h, blur=None):
     return int(vy + hv * 0.97 - strip_h)
 
 
-def _recap_tag(img, cx, cy):
+def _recap_tag(img, cx, cy, text=None):
     """A small pill at the top of the TikTok frame saying this is a film recap —
     so neither viewers nor TikTok's checks take the story for real news."""
     from PIL import Image, ImageDraw, ImageFont
-    text = "MOVIE RECAP  |  ရုပ်ရှင်ဇာတ်လမ်း"
+    text = text or "MOVIE RECAP  |  ရုပ်ရှင်ဇာတ်လမ်း"
     try:
         f = _caption_font(34)
     except Exception:  # noqa: BLE001 - no Burmese shaping here: English only
-        text, f = "MOVIE RECAP  |  FILM STORY", None
+        text, f = ("MOVIE RECAP  |  FILM STORY" if "RECAP" in text else "MOVIE  |  BURMESE SUB"), None
     layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
     if f is None:
@@ -1034,7 +1046,7 @@ def _recap_tag(img, cx, cy):
     img.alpha_composite(layer)
 
 
-def render_frames(title, windows, out_dir, layout, logo=None, extra=30.0):
+def render_frames(title, windows, out_dir, layout, logo=None, extra=30.0, tag=None):
     """One 1080x1920 frame per part (dark background, channel logo, gold title
     "title - N" like the covers), with a see-through window where the picture goes.
     windows: [(start, end)] of each part on the video's timeline.
@@ -1052,7 +1064,7 @@ def render_frames(title, windows, out_dir, layout, logo=None, extra=30.0):
         for x in range(W):
             px[x, y] = c
     top_y = 60          # the channel logo sits on the picture (top-right), not up here
-    _recap_tag(base, W // 2, 64)     # "MOVIE RECAP · ရုပ်ရှင်ဇာတ်လမ်း": plainly a film story, not news
+    _recap_tag(base, W // 2, 64, tag)     # "MOVIE RECAP · ရုပ်ရှင်ဇာတ်လမ်း": plainly a film story, not news
     top_y = 120
     files = []
     for i in range(1, n + 1):

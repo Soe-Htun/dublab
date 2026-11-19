@@ -81,7 +81,9 @@ $('#go').addEventListener('click', () => {
   fd.append('title', ($('#covertitle_in').value || '').trim());
   fd.append('cover', '1');            // every video gets a cover
   fd.append('split', split);
-  fd.append('recap', $('#recapchk').checked ? recapLen : '0');
+  const orig = $('#fullchk').checked && $('#origchk').checked;
+  fd.append('orig_audio', orig ? '1' : '0');
+  fd.append('recap', $('#recapchk').checked && !orig ? recapLen : '0');
   try { localStorage.setItem('dublab_split', split); } catch (e) {}
   fd.append('logo', $('#logochk') && $('#logochk').checked ? '1' : '0');
   fd.append('telegram', !$('#tgrow').hidden && $('#tgchk').checked ? '1' : '0');
@@ -109,6 +111,7 @@ $('#go').addEventListener('click', () => {
 const JOBKEY = 'dublab_job';
 function showProgress(jid) {
   try { localStorage.setItem(JOBKEY, jid); } catch (e) {}    // a refresh brings this job back
+  try { history.replaceState(null, '', '/?job=' + jid); } catch (e) {}   // the address shows this job, not an old one
   ['card-upload', 'card-opts', 'card-review', 'card-result', 'card-error'].forEach((id) => ($('#' + id).hidden = true));
   $('#card-progress').hidden = false;
   $('#card-progress').scrollIntoView({ behavior: 'smooth' });
@@ -120,6 +123,8 @@ function showProgress(jid) {
   const rc = document.querySelector('#stages li[data-s="recap"]');
   const isRecap = $('#recapchk').checked;
   if (rc) rc.hidden = !isRecap;
+  const vo = document.querySelector('#stages li[data-s="voice"]');
+  if (vo) vo.hidden = $('#fullchk').checked && $('#origchk').checked;   // 🔊 original sound: no voicing
   const mu = document.querySelector('#stages li[data-s="music"]');
   if (mu) mu.hidden = true;           // no background-music step any more
   const order = ['download', 'audio', 'transcribe', 'translate', 'review', 'music', 'voice', 'recap', 'mux', 'split'];
@@ -132,6 +137,8 @@ function showProgress(jid) {
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'status failed');
       $('#barfill').style.width = j.pct + '%';
+      const vli = document.querySelector('#stages li[data-s="voice"]');
+      if (vli && j.orig) vli.hidden = true;            // 🔊 original sound (also after a refresh)
       $('#stagelabel').textContent = j.label + (j.pct ? ` · ${j.pct}%` : '');
       document.querySelectorAll('#stages li').forEach((li) => {
         const s = li.dataset.s;
@@ -562,13 +569,26 @@ function setRecapLen(v) {
     : `ဇာတ်လမ်းအဓိကအခန်းတွေကို ရွေးပြီး အနည်းဆုံး ${v} မိနစ် (intro/outro မပါ · ~${v}–${+v >= 40 ? 60 : aim + 5} မိနစ်) recap ထုတ်မယ်${src}`;
   partsNote();
 }
+// 🎞️ no recap → may keep the film's own sound (🔊): then there is no voice to pick
+function syncOrig() {
+  const full = $('#fullchk').checked;
+  $('#fullopts').hidden = !full;
+  const on = full && $('#origchk').checked;
+  $('#voicegrid').hidden = on;
+  $('#voicehead').hidden = on;
+}
+$('#origchk').addEventListener('change', syncOrig);
+
 function syncRecap() {
   const on = $('#recapchk').checked;
   $('#recapopts').hidden = !on;
   recap = on ? recapLen : '0';
   setRecapLen(recapLen);
 }
-$('#recapchk').addEventListener('change', () => { syncRecap(); try { localStorage.setItem('dublab_recap_on', $('#recapchk').checked ? '1' : '0'); } catch (e) {} });
+// recap / no recap are radios: either one changing re-syncs everything
+['#recapchk', '#fullchk'].forEach((id) => $(id).addEventListener('change', () => {
+  syncRecap(); syncOrig(); try { syncYtMode(); partsNote(); } catch (e) { /* not ready */ }
+}));
 document.querySelectorAll('#recapgrid .opt').forEach((b) => b.addEventListener('click', () => {
   setRecapLen(b.dataset.recap); recap = recapLen;
   try { localStorage.setItem('dublab_recap_len', recapLen); } catch (e) {}
@@ -577,7 +597,7 @@ try {
   $('#recapchk').checked = true;     // recap is the default every time; untick for a full dub
   recapLen = localStorage.getItem('dublab_recap_len') || '20';
 } catch (e) { /* ignore */ }
-syncRecap();
+syncRecap(); syncOrig();
 
 // 🖼️ title: the text box only matters while "add a title" is ticked
 $('#titlechk').addEventListener('change', () => { $('#covertitle_in').hidden = !$('#titlechk').checked; });
@@ -621,5 +641,4 @@ $('#stopjob').addEventListener('click', async () => {
 // 📺 YouTube length choice: only when YouTube is ticked and it is a recap
 function syncYtMode() { $('#ytmode').hidden = !($('#ytchk').checked && $('#recapchk').checked); }
 $('#ytchk').addEventListener('change', syncYtMode);
-$('#recapchk').addEventListener('change', syncYtMode);
 syncYtMode();

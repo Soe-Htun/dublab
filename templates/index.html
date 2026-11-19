@@ -63,7 +63,7 @@
   <!-- STEP 2: options -->
   <section class="card" id="card-opts" hidden>
     <p class="autolang">🌐 ဘာသာစကား အလိုအလျောက် သိတယ် <span class="dim">(တရုတ် · English · …)</span> → 🇲🇲 မြန်မာအသံ</p>
-    <h2>၂ · အသံရွေးပါ</h2>
+    <h2 id="voicehead">၂ · အသံရွေးပါ</h2>
     <div class="optgrid three" id="voicegrid">
       <button class="opt selected" data-voice="auto">
         <span class="opt-flag">🤖</span>
@@ -91,8 +91,8 @@
         <span class="opt-sub">~2 ဆ မြန် · English အတွက် အဆင်ပြေ၊ တရုတ်စကား မှားတာ ပိုများ</span>
       </button>
     </div>
-    <label class="checkrow recaprow">
-      <input type="checkbox" id="recapchk" checked>
+    <label class="checkrow recaprow" id="recaprow">
+      <input type="radio" name="mode" id="recapchk" value="recap" checked>
       <span>🎬 <b>Recap version</b> လုပ်မယ် <span class="dim">— ရုပ်ရှင်အပြည့်ကို AI က မြန်မာလို ဇာတ်လမ်းအကျဉ်း ပြန်ပြောပြီး အတိုလုပ်မယ်</span></span>
     </label>
     <div id="recapopts" hidden>
@@ -103,6 +103,16 @@
         <button class="opt" data-recap="40"><span class="opt-label">40+<span class="dim"> မိနစ်</span></span></button>
       </div>
       <p class="splitnote dim" id="recapnote"></p>
+    </div>
+    <label class="checkrow recaprow">
+      <input type="radio" name="mode" id="fullchk" value="full">
+      <span>🎞️ <b>Recap မလုပ်ဘူး</b> <span class="dim">— ဗီဒီယို အပြည့်အတိုင်း (မြန်မာ AI အသံနဲ့ dub)</span></span>
+    </label>
+    <div id="fullopts" class="subopts" hidden>
+      <label class="checkrow">
+        <input type="checkbox" id="origchk">
+        <span>🔊 <b>မူရင်း အသံ ထားမယ်</b> <span class="dim">— AI အသံ မသုံးဘဲ မြန်မာ စာတန်းပဲ ထည့်မယ် (တရုတ် comedy၊ မြန်မာ ဇာတ်ကား…)</span></span>
+      </label>
     </div>
     <h2>၄ · ✂️ အပိုင်းခွဲမယ်</h2>
     <div class="optgrid chips" id="splitgrid">

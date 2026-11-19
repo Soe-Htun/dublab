@@ -21,7 +21,7 @@ from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tt
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
-                 build_recap_video, make_covers, mux, synthesize, probe_duration, probe_url, separate_music, split_points,
+                 build_recap_video, make_covers, mux, run, synthesize, probe_duration, probe_url, separate_music, split_points,
                  split_video, transcribe)
 from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, find_movie_bounds, pick_cover_frames, translate_lines,
                     write_cover_scene, write_intro, write_recap, write_title, movie_name,
@@ -591,13 +591,16 @@ def _transcribe_and_translate(jid, job):
         raise ValueError("အသံထဲမှာ စကားပြောသံ မတွေ့ဘူး")
     if direction == "auto2mm":
         jlog(job, f"detected language: {lang}")
-        if lang == "my" and not job.get("recap"):
+        if lang == "my" and not job.get("recap") and not job.get("orig_audio"):
             raise ValueError("ဒီဗီဒီယိုက မြန်မာလို ပြောထားပြီးသားပါ — မြန်မာ ရုပ်ရှင်ဆို "
                              "🎬 Recap ကို ရွေးပါ (AI အသံနဲ့ ဇာတ်ကြောင်းပြော recap လုပ်ပေးမယ်)")
-        if lang == "my":
+        if lang == "my" and job.get("orig_audio"):
+            jlog(job, "Burmese film — its own sound stays; captions are what is said")
+        elif lang == "my":
             jlog(job, "Burmese film — writing a Burmese recap (no translation; the original voices are dropped)")
         direction = {"zh": "zh2mm", "en": "en2mm"}.get(lang, "any2mm")
-    utter = merge_segments(segs)
+    # 🔊 captions only: short lines that follow the speech (a dub needs longer, speakable ones)
+    utter = merge_segments(segs, max_gap=0.3, max_len=5.0) if job.get("orig_audio") else merge_segments(segs)
     jlog(job, f"transcribed {len(segs)} segments → {len(utter)} utterances")
     if job["voice"] == "auto":
         try:
@@ -611,6 +614,8 @@ def _transcribe_and_translate(jid, job):
     if job.get("recap"):
         _write_recap(job, utter, lang, api_key)
         utter = job["utter"]
+    elif job.get("orig_audio") and lang == "my":
+        job["utter"] = utter                       # already Burmese: captions as spoken
     else:
         _translate(job, utter, direction, lang, api_key)
     if job.get("intro"):
@@ -830,7 +835,7 @@ def _voice_and_mux(job):
                       "(pip install demucs)")
     if job.get("condense"):              # 📺 YouTube full: leave out long music-only stretches
         src, utter = _condense(job, src, utter)
-    if not job.get("recap"):
+    if not job.get("recap") and not job.get("orig_audio"):
         job.update(stage="voice", pct=60)
         jlog(job, f"synthesizing {len(utter)} utterances ({voice_name})…")
     def tts_prog(i, n):
@@ -849,8 +854,22 @@ def _voice_and_mux(job):
     intro = (job.get("intro_text") or "") if job.get("intro") else ""
     if intro:
         jlog(job, f"adding intro: {intro}")
-    dub_wav, cues, lead = build_dub_track(utter, voice_name, d, job["total"], tts_prog,
-                                          outro or None, intro or None)
+    if job.get("orig_audio"):
+        # 🔊 the film's own sound: no voice at all, captions on its lines; the
+        # channel outro goes after each part (and after an unsplit video)
+        job.update(stage="voice", pct=60)
+        jlog(job, "keeping the original sound — Burmese captions only (no AI voice)")
+        dub_wav = d / "orig_audio.mka"
+        if not dub_wav.exists():
+            run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-vn", "-map", "0:a:0", "-c:a", "copy", str(dub_wav)])
+        cues = [(u["start"], u["end"], u["text"]) for u in utter if (u.get("text") or "").strip()]
+        lead = 0.0
+        if outro:
+            synthesize(outro, voice_name, d / "outro.mp3")
+        _sp(job, 1)
+    else:
+        dub_wav, cues, lead = build_dub_track(utter, voice_name, d, job["total"], tts_prog,
+                                              outro or None, intro or None)
     total = job["total"] + lead                 # the held first frame makes it longer
     write_srt(cues, d / "captions.srt")          # always offered as a download
 
@@ -956,7 +975,10 @@ def _voice_and_mux(job):
             captions=caps, blur=blur, hide=hide, keyframes=cuts or None, lead=lead, tail=tail,
             intro_img=intro_img, frame=frame,
             progress=lambda f: _sp(job, f))
+        orig_outro = job.get("orig_audio") and outro and (d / "outro.mp3").exists()
         if not cuts:
+            if orig_outro:                    # 🔊 mode: the dub track had no outro in it
+                _outro_on_parts(job, [out], d, outro, caps, blur, vw, vh, frame)
             return [out.name]
         job.update(stage="split", pct=97)
         jlog(job, "cutting the parts…")
@@ -965,15 +987,17 @@ def _voice_and_mux(job):
         out.unlink(missing_ok=True)                       # the parts replace it
         _sp(job, 0.3 if outro and (d / "outro.mp3").exists() else 1)
         if outro and (d / "outro.mp3").exists():
-            _outro_on_parts(job, parts[:-1], d, outro, caps, blur, vw, vh, frame)
+            # 🔊 mode: the last part needs it too (the dub track had no outro)
+            _outro_on_parts(job, parts if job.get("orig_audio") else parts[:-1], d, outro, caps, blur, vw, vh, frame)
         return [p.name for p in parts]
 
+    tag = "MOVIE  |  မြန်မာစာတန်း" if job.get("orig_audio") else None
     if main_frame:
         jlog(job, "making the TikTok (9:16) video")
         try:
             bounds = [0.0, *cuts, total]
             main_frame["list"] = render_frames(job.get("title_mm") or "", list(zip(bounds, bounds[1:])),
-                                               d / "frames", main_frame, logo_png)
+                                               d / "frames", main_frame, logo_png, tag=tag)
         except Exception as e:  # noqa: BLE001 - fall back to the normal 16:9 video
             jlog(job, f"TikTok frame failed ({str(e)[:150]}) — making a normal video")
             main_frame = None
@@ -992,7 +1016,7 @@ def _voice_and_mux(job):
             frame = frame_layout(vw, vh)
             bounds = [0.0, *cuts, total]
             frame["list"] = render_frames(job.get("title_mm") or "", list(zip(bounds, bounds[1:])),
-                                          d / "frames", frame, logo_png)
+                                          d / "frames", frame, logo_png, tag=tag)
             job["tt"] = _render(frame, "tiktok", _caps(frame["cap_w"], frame["cap_h"], "caps_tt"), cuts)
             job["part_times"] = list(zip([0.0, *cuts], [*cuts, total]))
         except Exception as e:  # noqa: BLE001 - the normal version is still there
@@ -1009,6 +1033,7 @@ def _voice_and_mux(job):
 
     (d / "recap.mp4").unlink(missing_ok=True)          # recap intermediate
     (d / "condensed.mp4").unlink(missing_ok=True)      # YouTube-full intermediate
+    (d / "orig_audio.mka").unlink(missing_ok=True)     # 🔊 mode's audio copy
     for f in d.glob("r*.mp3"):
         f.unlink(missing_ok=True)
     if posts:
@@ -1106,6 +1131,7 @@ def create_job():
         split = 0
     split = split if split in SPLIT_CHOICES else 0
     blur = request.form.get("blur", "0") == "1"
+    orig_audio = request.form.get("orig_audio") == "1"   # 🔊 keep the film's own sound, Burmese captions only
     model = request.form.get("model") or default_whisper_model()
     if model not in WHISPER_MODELS:
         model = default_whisper_model()
@@ -1116,6 +1142,8 @@ def create_job():
     except ValueError:
         recap = 0
     recap = recap if recap in RECAP_CHOICES else 0
+    if orig_audio:
+        recap = 0                        # nothing is narrated: the film plays as it is
     # no length limit: any video is accepted (long films are split into parts)
     max_sec = float("inf")
     too_long = "ဗီဒီယို ရှည်လွန်းတယ်"
@@ -1185,7 +1213,7 @@ def create_job():
                  "tg_src": tg_msg,
                  "id": jid, "telegram": send_tg, "owner": _admin_ok(),
                  "captions": captions, "blur": blur, "split": split, "youtube": youtube, "my_title": my_title, "no_title": no_title,
-                 "yt_full": yt_full,
+                 "yt_full": yt_full and not orig_audio, "orig_audio": orig_audio,
                  "created": time.time()}
     jlog(jobs[jid], "uploaded " + re.sub(r"[\r\n]", " ", label)[:160])
     with lock:
@@ -1231,7 +1259,7 @@ def job_status(jid):
                    name=job.get("name", ""), created=int(job.get("created", 0)),
                    gone=bool(job.get("files_gone")),
                    label=STAGE_LABEL.get(job["stage"], job["stage"]),
-                   error=job["error"], resumable=_resumable(job),
+                   error=job["error"], resumable=_resumable(job), orig=bool(job.get("orig_audio")),
                    yt_child=_child_info(job))
 
 
@@ -1762,7 +1790,7 @@ def _start_posts(job):
     """📝 upload texts (TikTok / YouTube / Facebook) written in the background
     while the video renders — no extra waiting."""
     key = os.environ.get("GEMINI_API_KEY")
-    if not key or not job.get("recap"):
+    if not key or not (job.get("recap") or job.get("orig_audio")):
         return None
     def run():
         try:

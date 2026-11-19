@@ -113,6 +113,7 @@ textarea:focus{outline:none;border-color:var(--acc)}
 .optgrid.chips .opt{padding:12px 4px;text-align:center;border-radius:12px}
 .splitnote{font-size:13px;margin:0 0 16px}
 .recaprow{align-items:flex-start}
+.subopts{margin:-4px 0 6px 28px}
 .recaprow input{margin-top:2px;flex:0 0 auto}
 #recapopts{margin:-6px 0 4px 28px}
 @media (max-width:480px){
