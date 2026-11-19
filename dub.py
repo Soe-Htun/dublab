@@ -1541,10 +1541,16 @@ def _grab(video, t, w, h, hide=None, blur=None, cx=0.5):
             from PIL import ImageFilter
             box = (0, int(H0 * (1 - b0 - bh)), W0, int(H0 * (1 - b0)))
             img.paste(img.crop(box).filter(ImageFilter.GaussianBlur(24)), box[:2])
+    # trim real black bars only: a bar row/column is dark AND flat (a dark part of
+    # the scene has texture — trimming it slid the face off the photo)
     g = np.asarray(img.convert("L"), dtype=np.float32)
-    rows, cols = np.where(g.mean(1) > 18)[0], np.where(g.mean(0) > 18)[0]
+    bar_r = (g.mean(1) <= 18) & (g.std(1) < 6)
+    bar_c = (g.mean(0) <= 18) & (g.std(0) < 6)
+    rows, cols = np.where(~bar_r)[0], np.where(~bar_c)[0]
     if len(rows) > g.shape[0] * 0.4 and len(cols) > g.shape[1] * 0.4:
+        W1 = img.size[0]
         img = img.crop((cols[0], rows[0], cols[-1] + 1, rows[-1] + 1))
+        cx = (cx * W1 - cols[0]) / max(1, cols[-1] + 1 - cols[0])   # the face, in the trimmed frame
     # scale to cover w x h, then cut the window so the person (cx = their x across
     # the frame, 0-1) sits in its middle. (ImageOps.fit's "centering" is not that:
     # 0.15 meant "15% of the spare width", which slid the face off the side.)
@@ -1565,16 +1571,16 @@ def _layout(n, W, H, portrait):
         return [(0, 0, W, H)]
     if n == 2:
         g = 6
-        if portrait:
-            h2 = (H - g) // 2
+        if portrait:              # TikTok: two big photos, top and bottom halves (cropped
+            h2 = (H - g) // 2     # around the face found by Apple Vision, so it isn't cut)
             return [(0, 0, W, h2), (0, h2 + g, W, H - h2 - g)]
         w2 = (W - g) // 2
         return [(0, 0, w2, H), (w2 + g, 0, W - w2 - g, H)]
-    if n == 4 and not portrait:
-        g = 6
-        w2, h2 = (W - g) // 2, (H - g) // 2
-        return [(0, 0, w2, h2), (w2 + g, 0, W - w2 - g, h2),
-                (0, h2 + g, w2, H - h2 - g), (w2 + g, h2 + g, W - w2 - g, H - h2 - g)]
+    if n == 4 and not portrait:   # poster style: the main character big on the left,
+        lw = int(W * 0.44)        # the movie's action wide on the top right, two more below it
+        th = int(H * 0.55)
+        rw = W - lw
+        return [(0, 0, lw, H), (lw, 0, rw, th), (lw, th, rw // 2, H - th), (lw + rw // 2, th, rw - rw // 2, H - th)]
     if portrait and n == 4:       # four film-shaped rows: whole scenes, no faces cut off
         g = 6
         hh = (H - 3 * g) // 4
@@ -1641,6 +1647,55 @@ def _gold_title(img, title, box_w, center_x, center_y, max_lines, size, suffix="
     return img
 
 
+def _soft_mask(w, h, left=0.0, right=0.0, top=0.0, bottom=0.0, oval=False):
+    """Alpha mask that fades out toward the given sides (fractions of the size),
+    or an oval vignette — so a photo melts into what is behind it."""
+    import numpy as np
+    from PIL import Image
+    if oval:
+        yy, xx = np.mgrid[0:h, 0:w]
+        d = np.sqrt(((xx - w / 2) / (w / 2)) ** 2 + ((yy - h / 2) / (h / 2)) ** 2)
+        a = np.clip((1.0 - d) / 0.35, 0, 1)
+    else:
+        ax, ay = np.ones(w, np.float32), np.ones(h, np.float32)
+        for frac, arr, rev in ((left, ax, False), (right, ax, True), (top, ay, False), (bottom, ay, True)):
+            k = int(len(arr) * frac)
+            if k > 1:
+                ramp = np.linspace(0, 1, k, dtype=np.float32) ** 1.4
+                if rev:
+                    arr[-k:] *= ramp[::-1]
+                else:
+                    arr[:k] *= ramp
+        a = np.outer(ay, ax)
+    return Image.fromarray((a * 255).astype(np.uint8), "L")
+
+
+def _poster(video, times, W, H, hide, blur, focus):
+    """A movie-poster style cover (no grid). The main character's frame fills the
+    cover WHOLE (16:9 into 16:9 — never cropped, so the face is never cut); the
+    movie's action and another character float as smaller whole frames on the
+    side away from the face, melting into it with soft edges."""
+    from PIL import Image, ImageEnhance
+    f = focus or {}
+    hero, act, sec = times[0], times[1], times[2]
+    pop = lambda im: ImageEnhance.Color(ImageEnhance.Contrast(im).enhance(1.15)).enhance(1.2)
+    canvas = pop(_grab(video, hero, W, H, hide, blur))
+    face_right = f.get(hero, 0.4) > 0.5
+    # the free side gets a little darker so the smaller photos stand out
+    dark = Image.new("RGB", (W, H), (8, 4, 2))
+    side = _soft_mask(W, H, left=0.55) if not face_right else _soft_mask(W, H, right=0.55)
+    canvas = Image.composite(canvas, dark, side.point(lambda v: int(255 - (255 - v) * 0.55)))
+    for t, wf, yf in ((act, 0.46, 0.04), (sec, 0.38, 0.40)):
+        w = int(W * wf)
+        h = int(w * H / W)
+        im = pop(_grab(video, t, w, h, hide, blur))
+        x = (W - w - int(W * 0.02)) if not face_right else int(W * 0.02)
+        if t == sec:
+            x = (W - w - int(W * 0.12)) if not face_right else int(W * 0.12)
+        canvas.paste(im, (x, int(H * yf)), _soft_mask(w, h, left=0.22, right=0.22, top=0.22, bottom=0.22))
+    return canvas
+
+
 def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur=None, suffix="", hide=None,
                    focus=None):
     """3–5 frames in panels with a big gold Burmese title across the bottom."""
@@ -1648,19 +1703,57 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
     W, H = (1080, 1920) if portrait else (1280, 720)
     n = len(times) if len(times) in (1, 2) else max(3, min(5, len(times)))
     times = (list(times) * 5)[:n]
-    canvas = Image.new("RGB", (W, H), (236, 178, 60) if n in (2, 4) else (12, 8, 6))   # 2 / 2x2: thin gold lines
+    import numpy as np
+    if not portrait and n >= 3:
+        img = _poster(video, times, W, H, hide, blur, focus)
+        if not title:
+            return _cover_logo_save(img, logo, W, portrait, out_jpg)
+        img = img.convert("RGBA")
+        band_h = int(H * 0.34)
+        grad = Image.new("L", (1, band_h))
+        for yy in range(band_h):
+            grad.putpixel((0, yy), int(215 * (yy / band_h) ** 1.2))
+        shade = Image.new("RGBA", (W, band_h), (12, 4, 0, 255))
+        shade.putalpha(grad.resize((W, band_h)))
+        img.alpha_composite(shade, (0, H - band_h))
+        img = img.convert("RGB")
+        _gold_title(img, title, int(W * 0.86), W // 2, int(H * 0.85), 2, int(H * 0.13), suffix)
+        return _cover_logo_save(img, logo, W, portrait, out_jpg)
+    # photos BLEND into each other (soft overlapping edges, like Burmese movie
+    # posters) instead of sitting in boxes with gold lines between them
+    canvas = Image.new("RGB", (W, H), (12, 8, 6))
+    ov = int(min(W, H) * 0.12)                 # how far each photo reaches into its neighbour
     for (x, y, w, h), t in zip(_layout(n, W, H, portrait), times):
-        fr = _grab(video, t, w, h, hide, blur, (focus or {}).get(t, 0.5))   # cropped around the person
+        # close the layout's gaps, then reach `ov` further on every inner side
+        x1, y1 = (W if x + w >= W - 12 else x + w), (H if y + h >= H - 12 else y + h)
+        l = max(0, x - ov) if x > 12 else 0
+        tp = max(0, y - ov) if y > 12 else 0
+        r = min(W, x1 + ov) if x1 < W else W
+        b = min(H, y1 + ov) if y1 < H else H
+        fr = _grab(video, t, r - l, b - tp, hide, blur, (focus or {}).get(t, 0.5))   # cropped around the person
         fr = ImageEnhance.Color(ImageEnhance.Contrast(fr).enhance(1.15)).enhance(1.2)
-        canvas.paste(fr, (x, y))
+        ax = np.ones(r - l, dtype=np.float32)
+        ay = np.ones(b - tp, dtype=np.float32)
+        fade = lambda k: np.linspace(0.0, 1.0, k, dtype=np.float32) ** 1.3
+        if l > 0:
+            k = min(2 * ov, r - l); ax[:k] *= fade(k)
+        if r < W:
+            k = min(2 * ov, r - l); ax[-k:] *= fade(k)[::-1]
+        if tp > 0:
+            k = min(2 * ov, b - tp); ay[:k] *= fade(k)
+        if b < H:
+            k = min(2 * ov, b - tp); ay[-k:] *= fade(k)[::-1]
+        mask = Image.fromarray((np.outer(ay, ax) * 255).astype(np.uint8), "L")
+        canvas.paste(fr, (l, tp), mask)
     img = canvas.convert("RGBA")
     if not title:                  # no title wanted: just the photos (and the logo)
         return _cover_logo_save(img.convert("RGB"), logo, W, portrait, out_jpg)
     # warm dark band behind the title: across the middle (between photos), or in
     # the lower part when a single photo fills the cover (the face is higher up)
-    cy = int(H * 0.74) if n == 1 else H // 2
+    # landscape: along the bottom (faces sit in the upper part of the photos)
+    cy = int(H * 0.74) if n == 1 else (H // 2 if portrait else int(H * 0.84))
     band_h = int(H * (0.26 if portrait else 0.4))
-    band_y = cy - band_h // 2
+    band_y = min(cy - band_h // 2, H - band_h)
     grad = Image.new("L", (1, band_h))
     for yy in range(band_h):
         f = yy / band_h
@@ -1685,7 +1778,10 @@ def _cover_logo_save(img, logo, W, portrait, out_jpg):
         lw = int(W * (0.2 if portrait else 0.13))
         lg = lg.resize((lw, max(1, int(lg.height * lw / lg.width))))
         m = int(W * 0.025)
-        img.alpha_composite(lg, (W - lw - m, m))
+        # 9:16: TikTok's profile grid shows only the middle 3:4 — keep the logo inside it
+        my = int(img.size[1] * 0.14) if portrait else m
+        mx = int(W * 0.06) if portrait else m
+        img.alpha_composite(lg, (W - lw - mx, my))
         img = img.convert("RGB")
     img.save(out_jpg, "JPEG", quality=90)
     return Path(out_jpg)
@@ -1723,6 +1819,44 @@ def _arrange(hero, others, layout=4):
     return (h + o)[:4]
 
 
+_FACES_SRC = Path(__file__).with_name("tools") / "faces.swift"
+_FACES_BIN = Path(__file__).with_name("tools") / ".faces-bin"
+
+
+def detect_faces(jpegs):
+    """Per image {"faces": [(x0, y0, x1, y1), …] (0-1, y from the top), "subtitle": bool}
+    with Apple Vision — far more exact than asking the model where a face is. Compiles the
+    small Swift helper on first use; [] for every image when not on a Mac."""
+    import tempfile
+    try:
+        if not _FACES_BIN.exists() or _FACES_BIN.stat().st_mtime < _FACES_SRC.stat().st_mtime:
+            run(["swiftc", "-O", str(_FACES_SRC), "-o", str(_FACES_BIN)])
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = []
+            for i, j in enumerate(jpegs):
+                p = Path(tmp) / f"{i}.jpg"
+                p.write_bytes(j)
+                paths.append(str(p))
+            out = run([str(_FACES_BIN), *paths]).stdout.splitlines()
+    except Exception as e:  # noqa: BLE001 - no Swift / not macOS: the model's guess is used
+        print(f"[faces] skipped: {e}")
+        return [{"faces": [], "subtitle": False} for _ in jpegs]
+    res = []
+    for i in range(len(jpegs)):
+        line = out[i] if i < len(out) else ""
+        texted = line.startswith("T|")
+        line = line[2:] if texted else line
+        boxes = []
+        for part in filter(None, line.split(";")):
+            try:
+                x0, y0, x1, y1 = (float(v) for v in part.split(","))
+                boxes.append((x0, y0, x1, y1))
+            except ValueError:
+                pass
+        res.append({"faces": boxes, "subtitle": texted})
+    return res
+
+
 def _cover_times_by_ai(video, start, end, chooser, samples=30):
     """Sample frames, let `chooser` (the model) pick the main character's
     close-ups and other key characters: returns (hero times, other times)."""
@@ -1737,10 +1871,23 @@ def _cover_times_by_ai(video, start, end, chooser, samples=30):
             shots.append(r.stdout)
             times.append(t)
     got = chooser(shots)
+    # exact face boxes + subtitle text, from Apple Vision — on bigger copies, since a
+    # subtitle in a 384-px thumbnail is too small to be read
+    big = []
+    for t in times:
+        r = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.2f}", "-i", str(video), "-frames:v", "1",
+                            "-vf", "scale=960:-2", "-q:v", "4", "-f", "image2pipe", "-vcodec", "mjpeg", "-"],
+                           capture_output=True)
+        big.append(r.stdout or b"")
+    faces = detect_faces(big)
     T = lambda xs: [times[i] for i in xs]
     return {"hero": T(got[0]), "others": T(got[1]), "layout": got[2] if len(got) > 2 else 4,
             "action": T(got[3]) if len(got) > 3 else [], "tiktok": got[4] if len(got) > 4 else 2,
-            "focus": {times[i]: x for i, x in (got[5] if len(got) > 5 else {}).items()}}
+            "focus": {times[i]: x for i, x in (got[5] if len(got) > 5 else {}).items()},
+            # the biggest face in each frame (the person the shot is about)
+            "faces": {times[i]: max(fs["faces"], key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
+                      for i, fs in enumerate(faces) if fs["faces"]},
+            "subtitled": {times[i] for i, fs in enumerate(faces) if fs["subtitle"]}}
 
 
 def render_art_cover(art, title, out_jpg, portrait=False, logo=None, suffix=""):
@@ -1800,19 +1947,36 @@ def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, bl
     if chooser:
         try:
             ai = _cover_times_by_ai(video, start, end, chooser)
-            hero, others, action, focus = ai["hero"], ai["others"], ai["action"], ai["focus"]
+            hero, others, action = ai["hero"], ai["others"], ai["action"]
+            boxes = {**ai["focus"], **ai.get("faces", {})}   # Vision's exact boxes win over the model's
+            # the model often picks close-ups despite being asked not to: put the shots
+            # whose face is a good size (15-45% of the frame's height, not at an edge) first
+            def good(t):
+                b = boxes.get(t)
+                if not b:
+                    return 3 if ai.get("faces") else 1   # Vision found no face here: last
+                fh, cx = b[3] - b[1], (b[0] + b[2]) / 2
+                return 0 if 0.15 <= fh <= 0.45 and 0.15 <= cx <= 0.85 and b[1] > 0.03 else 2
+            subbed = ai.get("subtitled", set())          # frames with a subtitle line on them go last
+            hero = sorted(hero, key=lambda t: (t in subbed, good(t)))
+            action = sorted(action, key=lambda t: t in subbed)
+            others = sorted(others, key=lambda t: t in subbed)
+            focus = {t: (b[0] + b[2]) / 2 for t, b in boxes.items()}   # crop around the face
             if portrait:          # TikTok: the main character's face on top, the movie's main action below
                 top = (hero or action or others)[:1]   # (one action photo alone often had no face in it)
                 bot = [t for t in action + others + hero if t not in top][:1]
                 pick = top + bot
                 layout = len(pick)
-            else:
-                layout = ai["layout"]
-                if hero or others:
-                    pick = _arrange(hero, others, layout)
-                    act = [t for t in action if t not in pick]
-                    if act and len(pick) >= 2:   # always show what the movie is about (e.g. football)
-                        pick[1] = act[0]
+            else:                 # YouTube poster: main character, the action, 2nd and 3rd characters
+                seen = []
+                for group in (hero[:1], action, others, hero[1:]):
+                    for t in group:
+                        if t not in seen:
+                            seen.append(t)
+                            break
+                rest = [t for t in others + hero + action if t not in seen]
+                pick = (seen + rest)[:4]
+                layout = len(pick)
             if log:
                 log(f"cover photos picked by AI: {len(hero)} of the main character, {len(action)} of the "
                     f"main action, {len(others)} others · {layout}-photo cover")

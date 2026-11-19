@@ -167,8 +167,15 @@ queue = []
 lock = threading.Condition()
 
 
+class Cancelled(Exception):
+    """The user pressed ⏹ stop."""
+
+
 def jlog(job, msg):
-    """Append a timestamped line to the job's live log file."""
+    """Append a timestamped line to the job's live log file. Also where a
+    stopped job notices it should end (every step logs often)."""
+    if job.get("cancel") and threading.current_thread().name == "worker":
+        raise Cancelled()
     line = f"[{time.strftime('%H:%M:%S')}] {msg}\n"
     try:
         with open(job["dir"] / "job.log", "a") as fh:
@@ -402,6 +409,13 @@ def process_job(jid):
                 jlog(job, "waiting for you to check the translation ✏️")
                 return
             _voice_and_mux(job)
+    except Cancelled:
+        job.pop("cancel", None)
+        jlog(job, "⏹ stopped by the user")
+        job.update(status="failed", error="ရပ်လိုက်ပါပြီ", stage="cancelled")
+        for f in job["dir"].iterdir():             # nothing to resume: free the disk
+            if f.name != "job.log":
+                shutil.rmtree(f, ignore_errors=True) if f.is_dir() else f.unlink(missing_ok=True)
     except Exception as e:  # noqa: BLE001 - surfaced to UI
         err = clean_err(e)
         jlog(job, f"FAILED: {type(e).__name__}: {err}")
@@ -910,7 +924,7 @@ def worker():
         sweep_old()
 
 
-threading.Thread(target=worker, daemon=True).start()
+threading.Thread(target=worker, daemon=True, name="worker").start()
 
 
 @app.get("/")
@@ -1090,6 +1104,27 @@ def _resumable(job):
     return (job.get("status") == "failed" and job["dir"].exists()
             and time.time() - job.get("failed_at", 0) < RESUME_KEEP
             and (job["dir"] / ("input" + job.get("ext", ".mp4"))).exists())
+
+
+@app.post("/api/jobs/<jid>/cancel")
+def cancel_job(jid):
+    """⏹ stop: a queued job is dropped at once; a running one ends at its next step."""
+    job = jobs.get(jid)
+    if not job:
+        return jsonify(ok=True)
+    with lock:
+        if jid in queue:
+            queue.remove(jid)
+            job.update(status="failed", error="ရပ်လိုက်ပါပြီ", stage="cancelled")
+            shutil.rmtree(job["dir"], ignore_errors=True)
+            jobs.pop(jid, None)
+            return jsonify(ok=True)
+    if job["status"] in ("processing", "queued"):
+        job["cancel"] = True
+    elif job["status"] in ("failed", "review"):
+        shutil.rmtree(job["dir"], ignore_errors=True)
+        jobs.pop(jid, None)
+    return jsonify(ok=True)
 
 
 @app.post("/api/jobs/<jid>/resume")

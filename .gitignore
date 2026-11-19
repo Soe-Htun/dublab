@@ -12,3 +12,4 @@ verify/
 site_dist/
 *.session
 *.session-journal
+tools/.faces-bin

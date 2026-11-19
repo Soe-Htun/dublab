@@ -508,31 +508,39 @@ First work out its THREE MOST IMPORTANT CHARACTERS: the MAIN character (the prot
 most and the story is about), the SECOND (e.g. the villain or partner) and the THIRD (e.g. the love interest).
 Then answer with JSON only, no other text:
 {{"layout": 2 or 4, "hero": [...], "second": [...], "third": [...], "scenes": [...], "action": [...],
-  "tiktok": 1 or 2, "focus": {{...}}}}
+  "tiktok": 1 or 2}}
 - "layout": 4 for most movies; 2 (two big photos) when the video is simple — one or two characters, one setting —
   or there are fewer than 4 good, different frames.
 - "hero": up to 5 frames of the MAIN character, "second": up to 4 of the second character, "third": up to 4 of the
-  third — each with that person's WHOLE FACE clearly visible and sharp, best first: a medium close-up (head and
-  shoulders) with the WHOLE HEAD inside the frame — never an extreme close-up that cuts off the forehead or chin,
-  never a face turned away or half hidden; a dramatic expression is a plus.
+  third — each with that person's WHOLE FACE clearly visible and sharp, best first: a MEDIUM shot (head, shoulders
+  and chest; the face about a quarter to a third of the frame's height) with the WHOLE HEAD inside the frame and
+  space above it — NEVER a close-up where the face fills the frame or the forehead/chin is cut off, never a face
+  turned away, blurred or half hidden, and the face should be in the middle part of the frame (not at the left or
+  right edge); a dramatic expression is a plus.
 - "scenes": up to 4 striking frames of the movie's key action or setting with people in them, best first.
 - "action": up to 4 frames that show what the movie is ABOUT with the main character in it, doing the movie's
   main thing (a football movie: the hero playing football on the pitch; boxing: in the ring; a heist: the robbery;
-  a war movie: fighting), best first. They may repeat "hero"/"scenes" frames.
+  a war movie: fighting), best first, ideally with the main character's FACE visible in it. Sharp frames only —
+  no motion blur. They may repeat "hero"/"scenes" frames.
 - "tiktok": 1 when one "action" frame alone shows the movie well (the main character clearly visible in the
   action), else 2.
-- "focus": for EVERY frame number you listed, where the main person (their face; or the action) is across the
-  frame on a 0-1000 scale from the LEFT edge, e.g. {{"12": 430, "7": 700}} — the photo is cropped narrow around it.
 Never pick dark, blurry, black, fading, empty or unclear frames (furniture, walls, backs of heads, crowds far away),
-landscape-only, logo, title, credit or text frames. Apart from "action", a frame may appear in only one list."""
+landscape-only, logo, title, credit or text frames, and never frames with SUBTITLE text on them (any language). Apart from "action", a frame may appear in only one list."""
 
 
 def pick_cover_frames(jpegs, api_key):
     """jpegs: [bytes]. Returns (hero indices, other indices, 2 or 4 photos); raises on failure."""
-    raw = _call(COVER_PROMPT.format(last=len(jpegs) - 1), api_key, max_tokens=1024,
-                images=[(f"Frame {i}:", b) for i, b in enumerate(jpegs)])
-    m = re.search(r"\{.*\}", raw, re.S)
-    data = json.loads(m.group(0)) if m else {}
+    data = {}
+    for attempt in range(2):          # the model's JSON is sometimes broken: ask once more
+        raw = _call(COVER_PROMPT.format(last=len(jpegs) - 1), api_key, max_tokens=2048,
+                    images=[(f"Frame {i}:", b) for i, b in enumerate(jpegs)])
+        m = re.search(r"\{.*\}", raw, re.S)
+        try:
+            data = json.loads(re.sub(r",\s*([}\]])", r"\1", m.group(0))) if m else {}
+            break
+        except ValueError:
+            if attempt:
+                raise
     ok = lambda xs: [int(x) for x in xs or [] if str(x).isdigit() and 0 <= int(x) < len(jpegs)]
     hero = list(dict.fromkeys(ok(data.get("hero"))))
     second = [i for i in dict.fromkeys(ok(data.get("second"))) if i not in hero]
@@ -546,11 +554,18 @@ def pick_cover_frames(jpegs, api_key):
     layout = 2 if str(data.get("layout")).strip() == "2" else 4
     action = list(dict.fromkeys(ok(data.get("action"))))
     tiktok = 1 if str(data.get("tiktok")).strip() == "1" else 2
-    focus = {}
+    focus = {}                    # frame -> (x0, y0, x1, y1) of the face, 0-1
     for k, v in (data.get("focus") or {}).items():
         try:
-            if str(k).isdigit() and 0 <= int(k) < len(jpegs):
-                focus[int(k)] = min(1.0, max(0.0, float(v) / 1000))
+            if not (str(k).isdigit() and 0 <= int(k) < len(jpegs)):
+                continue
+            if isinstance(v, (list, tuple)) and len(v) >= 4:
+                x0, y0, x1, y1 = (min(1.0, max(0.0, float(c) / 1000)) for c in v[:4])
+                if x1 > x0 and y1 > y0:
+                    focus[int(k)] = (x0, y0, x1, y1)
+            else:                 # an older answer shape: just the x centre
+                x = min(1.0, max(0.0, float(v) / 1000))
+                focus[int(k)] = (x, 0.3, x, 0.6)
         except (TypeError, ValueError):
             pass
     return hero, others, layout, action, tiktok, focus

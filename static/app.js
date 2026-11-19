@@ -583,3 +583,12 @@ $('#titlechk').addEventListener('change', () => { $('#covertitle_in').hidden = !
 })();
 
 $('#ytchk').addEventListener('change', () => { try { partsNote(); } catch (e) { /* not ready */ } });
+
+// ⏹ stop the running job and start over (it would otherwise come back after a refresh)
+$('#stopjob').addEventListener('click', async () => {
+  if (!confirm('ဒီ dub ကို ရပ်ပြီး အသစ်ပြန်လုပ်မလား? လုပ်ပြီးသမျှ ပျက်သွားမယ်')) return;
+  let jid = null;
+  try { jid = localStorage.getItem(JOBKEY); localStorage.removeItem(JOBKEY); } catch (e) {}
+  if (jid) { try { await fetch('/api/jobs/' + jid + '/cancel', { method: 'POST' }); } catch (e) {} }
+  location.reload();
+});
