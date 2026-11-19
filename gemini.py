@@ -496,9 +496,12 @@ def write_recap(lines, minutes, api_key, lang=None, channel=None, min_minutes=0,
         # each section must carry its share of the minimum (+8% headroom);
         # ask again for the short ones, scaled up by how short they came out
         need = min_minutes * 60 * TTS_CPS * 1.08 / k
+        # up to 5 min short of the minimum is fine (saves quota); more than that is
+        # rewritten, up to 3 times. Longer than asked is always fine.
         for rnd in range(3):
+            got = sum(_chars(p) for p in parts) / TTS_CPS / 60
             short = [i for i in range(k) if _chars(parts[i]) < need]
-            if not min_minutes or not short:
+            if not min_minutes or not short or got >= min_minutes - 5:
                 break
             if log:
                 got = sum(_chars(p) for p in parts) / TTS_CPS / 60
