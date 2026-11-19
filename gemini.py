@@ -693,7 +693,20 @@ def has_foreign(text):
     return bool(_FOREIGN.search(text or ""))
 
 
+# letters Gemini sometimes writes in place of their Burmese look-alikes
+# ("တက္កသိုလ်", "ကတော့ក​ွာ" — Khmer ក / Thai ก for Burmese က): swapped back
+# directly; stripping them instead left "ွာ" with no consonant (a ◌ on screen)
+_LOOKALIKE = str.maketrans({"\u1780": "\u1000", "\u0E01": "\u1000",     # ក ก → က
+                            "\u1782": "\u1002", "\u1784": "\u1004",     # គ → ဂ, ង → င
+                            "\u0E07": "\u1004", "\u0E2D": "\u1021"})    # ง → င, อ → အ
+# a foreign letter together with the Burmese marks hanging on it: removed as one,
+# so no vowel sign or medial is left without its consonant
+_FOREIGN_SYL = re.compile(_FOREIGN.pattern + "[\u102B-\u103E\u1056-\u1059\u105E-\u1060\u1062-\u1064\u1067-\u106D\u1071-\u1074\u1082-\u108D\u108F\u109A-\u109D]*")
+_ORPHAN = re.compile(r"(^|(?<=\s))[\u102B-\u103E]+")     # marks left at the start of a word
+
+
 def fix_script(lines, api_key):
+    lines = [(t or "").translate(_LOOKALIKE) for t in lines]
     bad = [i for i, t in enumerate(lines) if has_foreign(t)]
     if not bad:
         return lines
@@ -707,7 +720,8 @@ def fix_script(lines, api_key):
                 out[bad[int(m.group(1)) - 1]] = m.group(2).strip()
     except Exception:  # noqa: BLE001 - fall through to stripping
         pass
-    return [re.sub(r"\s{2,}", " ", _FOREIGN.sub("", t)).strip() if has_foreign(t) else t for t in out]
+    return [re.sub(r"\s{2,}", " ", _ORPHAN.sub("", _FOREIGN_SYL.sub("", t.translate(_LOOKALIKE)))).strip()
+            if has_foreign(t) else t for t in out]
 
 
 # ---- cover photos: let the model find the main character ----
