@@ -411,12 +411,15 @@ def _queue_youtube_full(parent):
     keep = ("ext", "direction", "voice", "model", "outro", "cover", "logo", "name", "telegram", "owner",
             "captions", "blur", "my_title", "no_title", "url", "segs", "seg_lang", "total", "title_mm")
     child = {k: parent[k] for k in keep if k in parent}
+    # a LONG recap (narrated in our own words, ~80% of the film's length) — not a plain
+    # dub of the whole film, which would look like a re-upload of someone else's video
+    long_min = max(parent.get("recap") or 0, round(parent.get("total", 0) * 0.8 / 60))
     child.update(status="queued", stage="queue", pct=0, error="", dir=d, id=jid, phase=1,
-                 review=False, keep_bg=False, intro=False, recap=0, split=0, youtube=True,
-                 yt_only=True, condense=True, have_src=True, yt_child=True, tg_src=None,
+                 review=False, keep_bg=False, intro=False, recap=long_min, recap_aim=1.0, split=0,
+                 youtube=True, yt_only=True, have_src=True, yt_child=True, tg_src=None,
                  created=time.time())
     jobs[jid] = child
-    jlog(child, f"📺 YouTube full version of job {parent['id']} (whole film, music-only parts left out)")
+    jlog(child, f"📺 YouTube long version of job {parent['id']}: a ~{long_min} min recap (~80% of the film)")
     jlog(parent, f"📺 YouTube full version queued as job {jid} — it runs after this one")
     parent["yt_child_id"] = jid
     with lock:
@@ -506,7 +509,7 @@ def _transcribe_and_translate(jid, job):
         except Exception as e:  # noqa: BLE001 - go on with the whole upload
             jlog(job, f"cutting the ads off failed: {str(e)[:150]}")
     job["have_src"] = True
-    if job.get("recap") and job["recap"] * RECAP_AIM * 60 >= total * 0.85:
+    if job.get("recap") and not job.get("yt_child") and job["recap"] * RECAP_AIM * 60 >= total * 0.85:
         jlog(job, f"video is only {total / 60:.0f} min — no shorter recap possible, doing a full dub")
         job["recap"] = 0
     jlog(job, f"video duration: {total:.1f}s")
@@ -666,7 +669,7 @@ def _write_recap(job, utter, lang, api_key):
     """Recap mode: Gemini writes a shorter Burmese narration in beats, each
     tied to the scene (transcript lines) it describes."""
     job.update(stage="translate", pct=45)
-    mins = job["recap"] * RECAP_AIM
+    mins = job["recap"] * job.get("recap_aim", RECAP_AIM)
     jlog(job, f"writing a Burmese recap of at least {job['recap']} min (aiming ~{mins:.0f}) with gemini…")
     try:
         beats = write_recap([(u["start"], u["text"]) for u in utter], mins, api_key,
