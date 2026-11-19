@@ -623,6 +623,8 @@ def _transcribe_and_translate(jid, job):
     if job.get("cover") and job.get("no_title"):
         job["title_mm"] = ""
         jlog(job, "no title on the cover / TikTok frame (unticked)")
+    elif job.get("yt_child") and job.get("title_mm"):
+        jlog(job, f"cover title (same as the TikTok version): {job['title_mm']}")
     elif job.get("cover"):
         try:
             # the title typed on the form wins; else a known film keeps its real
