@@ -144,8 +144,13 @@ def _call_one(prompt, api_key, max_tokens=8192, images=None):
         import base64
         parts += [{"text": label},
                   {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(data).decode()}}]
+    # films have fights, crime and romance: don't let the default safety filter
+    # refuse to summarise a whole section of a movie
     body = {"contents": [{"parts": parts}],
-            "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.7}}
+            "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.7},
+            "safetySettings": [{"category": c, "threshold": "BLOCK_NONE"} for c in (
+                "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH",
+                "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT")]}
     limited = 0
     attempt = 0
     while True:
@@ -154,6 +159,9 @@ def _call_one(prompt, api_key, max_tokens=8192, images=None):
                                          headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=180, context=_SSL) as r:
                 data = json.loads(r.read().decode())
+            if not data.get("candidates"):         # the request itself was refused
+                reason = (data.get("promptFeedback") or {}).get("blockReason") or "no answer"
+                raise Blocked(f"Gemini refused this part ({reason})")
             parts = data["candidates"][0].get("content", {}).get("parts", [])
             text = "".join(p.get("text", "") for p in parts)
             if text.strip():
@@ -185,6 +193,8 @@ def _call_one(prompt, api_key, max_tokens=8192, images=None):
             if daily or limited > RATE_RETRIES:
                 raise RateLimited(daily) from None
             time.sleep(min(90, max(wait, 15 * limited)))
+        except Blocked:
+            raise
         except (urllib.error.URLError, ConnectionError, TimeoutError, OSError) as e:
             # no internet for a moment (Wi-Fi drop, DNS): keep trying for ~3 minutes
             attempt += 1
@@ -199,6 +209,10 @@ def _call_one(prompt, api_key, max_tokens=8192, images=None):
 
 
 RATE_RETRIES = 5
+
+
+class Blocked(RuntimeError):
+    """Gemini's safety filter refused the request (asking again won't help)."""
 
 
 class RateLimited(RuntimeError):
@@ -383,7 +397,11 @@ def _recap_chunk(lines, lo, hi, minutes, lang, extra, api_key, what):
                                  chars=chars, minutes=round(minutes, 1),
                                  beats=max(3, round(chars / BEAT_CHARS)), beat_chars=BEAT_CHARS,
                                  extra=extra) + "\n\nTranscript:\n" + numbered
-    raw = _call(prompt, api_key, max_tokens=60000)
+    try:
+        raw = _call(prompt, api_key, max_tokens=60000)
+    except Blocked as e:              # one violent/explicit section: leave it out, keep the rest
+        print(f"[recap] lines {lo}-{hi} skipped: {e}")
+        return []
     beats, last = [], lo
     for line in raw.strip().split("\n"):
         m = re.match(r"\s*(\d+)\s*\|\s*(\d+)\s*\|\s*(.+)", line)
