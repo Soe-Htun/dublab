@@ -371,7 +371,8 @@ Beginning of the Burmese narration:
 
 Write, in natural Burmese (Myanmar script; film names may stay in their original form):
 - "tiktok": a TikTok / Facebook Reels caption: 1–2 short catchy lines that make people want to watch
-  (a hook or question, no spoilers of the ending), then the hashtags. Under 250 characters.
+  (a hook or question, no spoilers of the ending) that plainly says it is a film's story (start with
+  "🎬 ရုပ်ရှင်ဇာတ်လမ်း:" or similar — never word it like real news), then the hashtags. Under 250 characters.
 - "youtube_title": a YouTube title under 90 characters: the cover title, plus the film's real name in
   brackets ONLY if that name appears in the original video title above — never invent or guess an
   English name. No clickbait lies, no ALL CAPS.
@@ -444,6 +445,10 @@ Rules:
   so the dance scene is not shown. Jump straight to the next story scene.
 """ + NAME_RULE + """
 - {extra}
+- IT IS A FICTIONAL FILM, NOT NEWS: tell it as a film's story ("ဒီဇာတ်ကားထဲမှာ…", "ရုပ်ရှင်ထဲမှာ…").
+  When real people, real teams/clubs, companies, countries, diseases, wars or historical events appear, say
+  they are in the film, so nobody takes it as real-world news. Never say it really happened unless the film
+  itself says it is based on a true story (then say "အဖြစ်မှန်ကို အခြေခံထားတဲ့ ဇာတ်ကား").
 - Write Burmese in Myanmar script only — never Thai, Chinese or any other script inside Burmese words.
 - Output format: one beat per line as "FROM|TO|narration" (FROM/TO = line numbers). Nothing else."""
 

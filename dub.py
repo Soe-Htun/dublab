@@ -1007,6 +1007,33 @@ def frame_caption_y(frame, strip_h, blur=None):
     return int(vy + hv * 0.97 - strip_h)
 
 
+def _recap_tag(img, cx, cy):
+    """A small pill at the top of the TikTok frame saying this is a film recap —
+    so neither viewers nor TikTok's checks take the story for real news."""
+    from PIL import Image, ImageDraw, ImageFont
+    text = "MOVIE RECAP  |  ရုပ်ရှင်ဇာတ်လမ်း"
+    try:
+        f = _caption_font(34)
+    except Exception:  # noqa: BLE001 - no Burmese shaping here: English only
+        text, f = "MOVIE RECAP  |  FILM STORY", None
+    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    if f is None:
+        lat = next((p for p in _LATIN_FONTS if os.path.exists(p)), None)
+        font = ImageFont.truetype(lat, 32) if lat else ImageFont.load_default()
+        w, h = d.textlength(text, font=font), 32
+    else:
+        w, h = sum(d.textlength(seg, font=ft) for seg, ft in _runs(text, f)), f.asc
+    pad_x, pad_y = 28, 14
+    d.rounded_rectangle((cx - w / 2 - pad_x, cy - h / 2 - pad_y, cx + w / 2 + pad_x, cy + h / 2 + pad_y + 6),
+                        radius=(h + 2 * pad_y) // 2, fill=(255, 77, 109, 235))
+    if f is None:
+        d.text((cx, cy + 3), text, font=font, fill=(255, 255, 255, 255), anchor="mm")
+    else:
+        _tdraw(d, (cx - w / 2, cy - h / 2 - 2), text, f, fill=(255, 255, 255, 255))
+    img.alpha_composite(layer)
+
+
 def render_frames(title, windows, out_dir, layout, logo=None, extra=30.0):
     """One 1080x1920 frame per part (dark background, channel logo, gold title
     "title - N" like the covers), with a see-through window where the picture goes.
@@ -1025,6 +1052,8 @@ def render_frames(title, windows, out_dir, layout, logo=None, extra=30.0):
         for x in range(W):
             px[x, y] = c
     top_y = 60          # the channel logo sits on the picture (top-right), not up here
+    _recap_tag(base, W // 2, 64)     # "MOVIE RECAP · ရုပ်ရှင်ဇာတ်လမ်း": plainly a film story, not news
+    top_y = 120
     files = []
     for i in range(1, n + 1):
         img = base.copy().convert("RGB")
