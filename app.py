@@ -417,7 +417,7 @@ def _queue_youtube_full(parent):
     long_min = max(parent.get("recap") or 0, round(parent.get("total", 0) * 0.85 / 60))   # ~80-90% is fine
     child.update(status="queued", stage="queue", pct=0, error="", dir=d, id=jid, phase=1,
                  review=False, keep_bg=False, intro=False, recap=long_min, recap_aim=1.0, split=0,
-                 youtube=True, yt_only=True, have_src=True, yt_child=True, tg_src=None,
+                 youtube=True, yt_only=True, have_src=True, yt_child=True, yt_parent=parent["id"], tg_src=None,
                  created=time.time())
     jobs[jid] = child
     jlog(child, f"📺 YouTube long version of job {parent['id']}: a ~{long_min} min recap (~80% of the film)")
@@ -1201,7 +1201,8 @@ def job_status(jid):
 
 def _child_info(job):
     """The 📺 YouTube long version runs as its own job — the result page links to it."""
-    c = jobs.get(job.get("yt_child_id") or "")
+    c = jobs.get(job.get("yt_child_id") or "") or next(
+        (j for j in list(jobs.values()) if j.get("yt_parent") == job["id"]), None)
     return {"id": c["id"], "status": c["status"], "pct": c["pct"]} if c else None
 
 

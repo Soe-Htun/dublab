@@ -589,9 +589,15 @@ $('#titlechk').addEventListener('change', () => { $('#covertitle_in').hidden = !
   try { jid = localStorage.getItem(JOBKEY); } catch (e) {}
   if (!jid) return;
   try {
-    const r = await fetch('/api/jobs/' + jid);
+    let r = await fetch('/api/jobs/' + jid);
     if (!r.ok) { localStorage.removeItem(JOBKEY); return; }
-    const j = await r.json();
+    let j = await r.json();
+    // TikTok done but its 📺 YouTube long version still going (or failed): follow that one
+    const c = j.status === 'done' && j.yt_child;
+    if (c && c.status !== 'done') {
+      r = await fetch('/api/jobs/' + c.id);
+      if (r.ok) { jid = c.id; j = await r.json(); }
+    }
     if (j.status === 'processing' || j.status === 'queued') showProgress(jid);
     else if (j.status === 'review') showReview(jid);
     else if (j.status === 'done') localStorage.removeItem(JOBKEY);   // finished (sent to Telegram): fresh upload page
