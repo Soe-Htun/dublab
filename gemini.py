@@ -132,6 +132,11 @@ def _call(prompt, api_key, max_tokens=8192, images=None):
                 except Exception:  # noqa: BLE001
                     detail = ""
                 print(f"[gemini] HTTP {e.code}: {detail}")
+                if "location is not supported" in detail:   # the VPN / network is in a country
+                    raise RuntimeError(                    # Gemini doesn't serve: retrying won't help
+                        "Gemini က ဒီနိုင်ငံကနေ သုံးခွင့်မပေးဘူး (User location is not supported) — "
+                        "VPN သုံးနေရင် နိုင်ငံ ပြောင်းပါ (ဥပမာ Singapore / Japan / US) ဒါမှမဟုတ် VPN ပိတ်ပြီး "
+                        "▶️ ဆက်လုပ်မယ် ကို နှိပ်ပါ") from None
                 # 5xx = overloaded; a 400 has also come and gone for minutes (2026-11-19)
                 # with the very same request working later: keep trying ~4 minutes
                 limit = MAX_RETRIES + 6 if e.code >= 500 or e.code == 400 else MAX_RETRIES
