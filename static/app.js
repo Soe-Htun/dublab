@@ -87,6 +87,7 @@ $('#go').addEventListener('click', () => {
   try { localStorage.setItem('dublab_split', split); } catch (e) {}
   fd.append('logo', $('#logochk') && $('#logochk').checked ? '1' : '0');
   fd.append('telegram', !$('#tgrow').hidden && $('#tgchk').checked ? '1' : '0');
+  fd.append('posts', !$('#tgrow').hidden && $('#tgchk').checked && $('#postschk').checked ? '1' : '0');
   fd.append('captions', $('#capchk').checked ? '1' : '0');
   fd.append('blur', $('#blurchk').checked ? '1' : '0');
   // NOTE: iOS Safari's fetch() throws "The string did not match the expected
@@ -463,6 +464,7 @@ async function tgState() {
   if (st.configured && st.authorized && st.connected) {
     $('#tgpick').hidden = false;
     $('#tgrow').hidden = false;
+    $('#postsopts').hidden = !$('#tgchk').checked;
     $('#tgrow-to').textContent = '→ ' + (st.chat || '') + (st.bot && st.bot.username ? ' (@' + st.bot.username + ')' : '');
   }
 })();
@@ -642,3 +644,6 @@ $('#stopjob').addEventListener('click', async () => {
 function syncYtMode() { $('#ytmode').hidden = !($('#ytchk').checked && $('#recapchk').checked); }
 $('#ytchk').addEventListener('change', syncYtMode);
 syncYtMode();
+
+// 📝 upload texts only make sense when the videos go to Telegram
+$('#tgchk').addEventListener('change', () => { $('#postsopts').hidden = $('#tgrow').hidden || !$('#tgchk').checked; });

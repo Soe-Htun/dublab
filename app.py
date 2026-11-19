@@ -423,7 +423,7 @@ def _queue_youtube_full(parent):
     except OSError:
         shutil.copy2(parent["dir"] / name, d / name)
     keep = ("ext", "direction", "voice", "model", "outro", "cover", "logo", "name", "telegram", "owner",
-            "captions", "blur", "my_title", "no_title", "url", "segs", "seg_lang", "seg_engine", "lang", "total", "title_mm")
+            "captions", "blur", "my_title", "no_title", "url", "segs", "seg_lang", "seg_engine", "lang", "total", "title_mm", "want_posts")
     child = {k: parent[k] for k in keep if k in parent}
     # a LONG recap (narrated in our own words, ~80% of the film's length) — not a plain
     # dub of the whole film, which would look like a re-upload of someone else's video
@@ -1139,6 +1139,7 @@ def create_job():
         split = 0
     split = split if split in SPLIT_CHOICES else 0
     blur = request.form.get("blur", "0") == "1"
+    want_posts = request.form.get("posts") == "1"        # 📝 upload texts to Telegram (off unless ticked)
     orig_audio = request.form.get("orig_audio") == "1"   # 🔊 keep the film's own sound, Burmese captions only
     model = request.form.get("model") or default_whisper_model()
     if model not in WHISPER_MODELS:
@@ -1221,7 +1222,7 @@ def create_job():
                  "tg_src": tg_msg,
                  "id": jid, "telegram": send_tg, "owner": _admin_ok(),
                  "captions": captions, "blur": blur, "split": split, "youtube": youtube, "my_title": my_title, "no_title": no_title,
-                 "yt_full": yt_full and not orig_audio, "orig_audio": orig_audio,
+                 "yt_full": yt_full and not orig_audio, "orig_audio": orig_audio, "want_posts": want_posts and send_tg,
                  "created": time.time()}
     jlog(jobs[jid], "uploaded " + re.sub(r"[\r\n]", " ", label)[:160])
     with lock:
@@ -1798,7 +1799,7 @@ def _start_posts(job):
     """📝 upload texts (TikTok / YouTube / Facebook) written in the background
     while the video renders — no extra waiting."""
     key = os.environ.get("GEMINI_API_KEY")
-    if not key or not (job.get("recap") or job.get("orig_audio")):
+    if not key or not job.get("want_posts"):
         return None
     def run():
         try:
