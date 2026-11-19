@@ -1369,8 +1369,12 @@ def is_supported_url(url):
 
 
 def _ydl_opts(**extra):
-    return {"quiet": True, "no_warnings": True, "noprogress": True, "noplaylist": True,
-            "socket_timeout": 30, "retries": 3, **extra}
+    opts = {"quiet": True, "no_warnings": True, "noprogress": True, "noplaylist": True,
+            "socket_timeout": 30, "retries": 3}
+    import shutil
+    if shutil.which("node"):    # YouTube needs a JS runtime, or only low-quality formats are offered
+        opts["js_runtimes"] = {"node": {"path": shutil.which("node")}}
+    return {**opts, **extra}
 
 
 def probe_url(url):
@@ -1387,7 +1391,10 @@ def download_url(url, job_dir, max_mb):
     import yt_dlp
     out = Path(job_dir) / "input.mp4"
     opts = _ydl_opts(
-        format="bv*[height<=720]+ba/b[height<=720]/bv*+ba/b",
+        # up to 720p on the SHORT side: "height<=720" took a portrait (9:16) video
+        # down to 360x640, since its 720p version is 1280 tall
+        format="bv*+ba/b",
+        format_sort=["res:720"],
         merge_output_format="mp4",
         outtmpl=str(Path(job_dir) / "input.%(ext)s"),
         max_filesize=max_mb * 1024 * 1024)
