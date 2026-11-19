@@ -319,7 +319,7 @@ for _old in JOBS.iterdir():
 
 # what a finished job needs to be shown again (history, after a restart)
 _META_KEYS = ("id", "name", "title_mm", "status", "stage", "pct", "error", "ext", "parts",
-              "part_times", "covers", "covers_tt", "tt", "cover_pick", "created", "owner", "recap", "tg", "url", "files_gone")
+              "part_times", "covers", "covers_tt", "tt", "cover_pick", "created", "owner", "recap", "tg", "url", "files_gone", "yt_child_id")
 
 
 def _save_meta(job):
@@ -410,7 +410,7 @@ def _queue_youtube_full(parent):
     except OSError:
         shutil.copy2(parent["dir"] / name, d / name)
     keep = ("ext", "direction", "voice", "model", "outro", "cover", "logo", "name", "telegram", "owner",
-            "captions", "blur", "my_title", "no_title", "url", "segs", "seg_lang", "total", "title_mm")
+            "captions", "blur", "my_title", "no_title", "url", "segs", "seg_lang", "seg_engine", "lang", "total", "title_mm")
     child = {k: parent[k] for k in keep if k in parent}
     # a LONG recap (narrated in our own words, ~80% of the film's length) — not a plain
     # dub of the whole film, which would look like a re-upload of someone else's video
@@ -1195,7 +1195,14 @@ def job_status(jid):
                    name=job.get("name", ""), created=int(job.get("created", 0)),
                    gone=bool(job.get("files_gone")),
                    label=STAGE_LABEL.get(job["stage"], job["stage"]),
-                   error=job["error"], resumable=_resumable(job))
+                   error=job["error"], resumable=_resumable(job),
+                   yt_child=_child_info(job))
+
+
+def _child_info(job):
+    """The 📺 YouTube long version runs as its own job — the result page links to it."""
+    c = jobs.get(job.get("yt_child_id") or "")
+    return {"id": c["id"], "status": c["status"], "pct": c["pct"]} if c else None
 
 
 def _resumable(job):

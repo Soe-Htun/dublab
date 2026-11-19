@@ -462,8 +462,11 @@ def transcribe_burmese(chunks, api_key, log=None):
 
     def one(ch):
         t0, length, mp3 = ch
-        raw = _call(TRANSCRIBE_PROMPT.format(length=length), api_key, max_tokens=8192,
-                    images=[("Audio:", mp3, "audio/mp3")])
+        try:
+            raw = _call(TRANSCRIBE_PROMPT.format(length=length), api_key, max_tokens=8192,
+                        images=[("Audio:", mp3, "audio/mp3")])
+        except (RuntimeError, Blocked):
+            return []          # music / credits only (nothing said), or refused: skip this piece
         out = []
         for line in raw.splitlines():
             m = re.match(r"\s*(\d+):(\d{1,2})(?::(\d{1,2}))?\s*[|\-–]\s*(.+)", line)

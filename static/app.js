@@ -148,6 +148,7 @@ function showProgress(jid) {
       if (j.status === 'done') {
         stopAll();
         showResult(jid, j.parts); $('#coverbox').hidden = true;   // covers go to Telegram; not shown here
+        showYtChild(j.yt_child);
       }
       if (j.status === 'failed') { stopAll(); showError(j.error || 'အမှားရှိတယ်', j.resumable ? jid : null); }
     } catch (e) { stopAll(); showError(e.message); }
@@ -246,6 +247,21 @@ async function showReview(jid) {
 }
 
 const mmss = (s) => Math.floor(s / 60) + ':' + String(Math.round(s % 60)).padStart(2, '0');
+// 📺 the YouTube long version is its own job: a button on the TikTok result opens it
+function showYtChild(c) {
+  const b = $('#ytchild');
+  b.hidden = !c;
+  if (!c) return;
+  const st = c.status === 'done' ? '✅ ပြီးပြီ' : c.status === 'failed' ? '❌ မအောင်မြင် — နှိပ်ပြီး ▶️ ဆက်လုပ်ပါ'
+    : c.status === 'queued' ? '⏳ TikTok ပြီးရင် စမယ်' : `⚙️ လုပ်နေဆဲ · ${c.pct}%`;
+  b.textContent = `📺 YouTube အရှည် version (${st})`;
+  b.onclick = () => (c.status === 'done' ? openDone(c.id) : showProgress(c.id));
+}
+async function openDone(jid) {
+  const j = await (await fetch('/api/jobs/' + jid)).json();
+  showResult(jid, j.parts); $('#coverbox').hidden = true; showYtChild(null);
+}
+
 function showResult(jid, parts) {
   $('#card-progress').hidden = true;
   $('#card-result').hidden = false;
