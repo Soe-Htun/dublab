@@ -140,10 +140,12 @@ def _call_one(prompt, api_key, max_tokens=8192, images=None):
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}"
            f":generateContent?key={api_key}")
     parts = [{"text": prompt}]
-    for label, data in images or []:
+    for item in images or []:          # (label, bytes) JPEGs, or (label, bytes, mime) e.g. audio
         import base64
+        label, data = item[0], item[1]
+        mime = item[2] if len(item) > 2 else "image/jpeg"
         parts += [{"text": label},
-                  {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(data).decode()}}]
+                  {"inline_data": {"mime_type": mime, "data": base64.b64encode(data).decode()}}]
     # films have fights, crime and romance: don't let the default safety filter
     # refuse to summarise a whole section of a movie
     body = {"contents": [{"parts": parts}],
@@ -442,6 +444,54 @@ Output one character per line as "name = who they are (role, gender, age)". Noth
 
 def _is_burmese(lang):
     return (lang or "").strip().lower() in ("my", "burmese", "myanmar")
+
+
+TRANSCRIBE_PROMPT = """This audio is a {length:.0f}-second piece of a BURMESE (Myanmar) movie. Write down what the
+people SAY, in Burmese (Myanmar script), as spoken lines with the time each starts, from 0 at the start of this
+piece. Skip music, songs and silence. One line per spoken sentence, like:
+00:03|ဘယ်သွားမလို့လဲ
+00:07|ဈေးကို သွားမလို့ပါ
+Output only such lines."""
+
+
+def transcribe_burmese(chunks, api_key, log=None):
+    """Whisper can't write Burmese (it gave lines like "වවවව…"), so Gemini listens
+    instead. chunks: [(start_seconds, length_seconds, mp3 bytes)].
+    Returns [{start, end, text}] on the film's timeline."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(ch):
+        t0, length, mp3 = ch
+        raw = _call(TRANSCRIBE_PROMPT.format(length=length), api_key, max_tokens=8192,
+                    images=[("Audio:", mp3, "audio/mp3")])
+        out = []
+        for line in raw.splitlines():
+            m = re.match(r"\s*(\d+):(\d{1,2})(?::(\d{1,2}))?\s*[|\-–]\s*(.+)", line)
+            if not m:
+                continue
+            a, b, c = int(m.group(1)), int(m.group(2)), m.group(3)
+            sec = a * 3600 + b * 60 + int(c) if c is not None else a * 60 + b
+            text = m.group(4).strip()
+            if text and sec <= length + 5:
+                out.append((t0 + sec, text))
+        return out
+
+    done = [0]
+    def track(ch):
+        r = one(ch)
+        done[0] += 1
+        if log:
+            log(done[0], len(chunks))
+        return r
+    with ThreadPoolExecutor(min(4, len(chunks)) or 1) as ex:
+        found = [x for part in ex.map(track, chunks) for x in part]
+    found.sort()
+    segs = []
+    for i, (t, text) in enumerate(found):
+        nxt = found[i + 1][0] if i + 1 < len(found) else t + 4
+        end = min(nxt, t + max(1.5, len(text) / 12))       # ~12 Burmese chars a second
+        segs.append({"start": float(t), "end": float(max(end, t + 0.8)), "text": text})
+    return segs
 
 
 def write_cast(lines, api_key, lang=None, max_chars=60000):

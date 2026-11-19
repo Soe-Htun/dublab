@@ -24,7 +24,8 @@ from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tt
                  build_recap_video, make_covers, mux, synthesize, probe_duration, probe_url, separate_music, split_points,
                  split_video, transcribe)
 from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, find_movie_bounds, pick_cover_frames, translate_lines,
-                    write_cover_scene, write_intro, write_recap, write_title, movie_name)
+                    write_cover_scene, write_intro, write_recap, write_title, movie_name,
+                    transcribe_burmese)
 
 # Gemini TTS key rotation.
 # GEMINI_TTS_API_KEYS is comma-separated; falls back to the single GEMINI_API_KEY.
@@ -458,6 +459,22 @@ def process_job(jid):
         _save_failed(job)
 
 
+def burmese_chunks(wav, piece=300):
+    """The audio as 5-minute low-bitrate MP3s for Gemini: [(start, length, bytes)]."""
+    import tempfile
+    total = probe_duration(wav)
+    out, t = [], 0.0
+    with tempfile.TemporaryDirectory() as tmp:
+        while t < total - 1:
+            length = min(piece, total - t)
+            f = Path(tmp) / "c.mp3"
+            subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{t:.2f}", "-t", f"{length:.2f}", "-i", str(wav),
+                            "-ac", "1", "-ar", "16000", "-b:a", "32k", str(f)], check=True)
+            out.append((t, length, f.read_bytes()))
+            t += piece
+    return out
+
+
 def _transcribe_and_translate(jid, job):
     d = job["dir"]
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -539,6 +556,18 @@ def _transcribe_and_translate(jid, job):
         jlog(job, f"speech model: {job.get('model') or default_whisper_model()}")
         segs, lang = transcribe(wav, SRC_LANG[direction], stt_prog, job.get("model"), title=job.get("name") or "")
         job["segs"], job["seg_lang"] = segs, lang
+    if lang == "my" and job.get("seg_engine") != "gemini":
+        # whisper writes Burmese speech as junk ("වවවව…"): let Gemini listen instead
+        jlog(job, "Burmese speech — transcribing with Gemini (whisper can't write Burmese)…")
+        def g_prog(i, n):
+            job.update(pct=8 + int(36 * i / max(n, 1)))
+            jlog(job, f"transcribing (gemini)… {i}/{n}")
+        try:
+            segs = transcribe_burmese(burmese_chunks(wav), api_key, g_prog)
+        except RateLimited as e:
+            raise ValueError("Gemini quota ဒီနေ့အတွက် ကုန်သွားပြီ — မနက်ဖြန် ပြန်စမ်းပါ" if e.daily else
+                             "Gemini က ခဏ ပိတ်ထားတယ် — ၁–၂ မိနစ်နေရင် ▶️ ဆက်လုပ်မယ် ကို နှိပ်ပါ") from None
+        job["segs"], job["seg_engine"] = segs, "gemini"
     if not segs:
         raise ValueError("အသံထဲမှာ စကားပြောသံ မတွေ့ဘူး")
     if direction == "auto2mm":
