@@ -413,7 +413,7 @@ def _queue_youtube_full(parent):
     child = {k: parent[k] for k in keep if k in parent}
     # a LONG recap (narrated in our own words, ~80% of the film's length) — not a plain
     # dub of the whole film, which would look like a re-upload of someone else's video
-    long_min = max(parent.get("recap") or 0, round(parent.get("total", 0) * 0.8 / 60))
+    long_min = max(parent.get("recap") or 0, round(parent.get("total", 0) * 0.85 / 60))   # ~80-90% is fine
     child.update(status="queued", stage="queue", pct=0, error="", dir=d, id=jid, phase=1,
                  review=False, keep_bg=False, intro=False, recap=long_min, recap_aim=1.0, split=0,
                  youtube=True, yt_only=True, have_src=True, yt_child=True, tg_src=None,
