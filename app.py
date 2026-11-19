@@ -614,7 +614,7 @@ def _movie_bounds(job, api_key):
     if total < 600:                       # a short clip has no ad block worth looking for
         return 0.0, total
     try:
-        hs, ts = min(480.0, total * 0.15), min(420.0, total * 0.1)
+        hs, ts = min(480.0, total * 0.15), min(600.0, total * 0.12)   # end credits can run long
         nh, nt = 24, 16
         head = sample_frames(src, 0.0, hs, nh, width=480)
         tail = sample_frames(src, total - ts, total, nt, width=480)
@@ -623,9 +623,9 @@ def _movie_bounds(job, api_key):
         start = 0.0 if si == 0 else step_h * (si + 0.5) - step_h / 2
         end = total if ei >= nt - 1 else total - ts + step_t * (ei + 0.5) + step_t / 2
         if start:
-            jlog(job, f"the film starts at {start / 60:.1f} min — skipping the ads before it")
+            jlog(job, f"the story starts at {start / 60:.1f} min — skipping the ads / opening credits before it")
         if end < total:
-            jlog(job, f"the film ends at {end / 60:.1f} min — skipping the ads after it")
+            jlog(job, f"the story ends at {end / 60:.1f} min — skipping the end credits / ads after it")
         return start, end
     except Exception as e:  # noqa: BLE001 - use the whole video
         jlog(job, f"film start/end check skipped: {str(e)[:120]}")

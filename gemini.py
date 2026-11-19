@@ -571,13 +571,15 @@ def pick_cover_frames(jpegs, api_key):
     return hero, others, layout, action, tiktok, focus
 
 
-MOVIE_BOUNDS_PROMPT = """Frames S0..S{ls} come (in order) from the START of a re-uploaded movie file, and frames
-E0..E{le} (in order) from its END. Uploaders often put ADS and PROMOS before and after the film: casino / betting /
-lottery (2D 3D) ads, app or shop ads, channel intros, "subscribe" screens, other films' trailers, title cards of the
-uploader. The film itself shows its own actors and scenes (its opening logos and credits count as the film).
-Answer with JSON only: {{"start": <number of the FIRST S frame that is the film>, "end": <number of the LAST E frame
-that is still the film (before end ads)>}}. If all S frames are the film, start is 0; if all E frames are the film,
-end is {le}."""
+MOVIE_BOUNDS_PROMPT = """Frames S0..S{ls} come (in order) from the START of a movie file, and frames E0..E{le}
+(in order) from its END. Find where the STORY itself starts and ends — everything that is not the story is cut off:
+- before it: ads and promos (casino / betting / lottery (2D 3D), apps, shops, channel intros, "subscribe" screens,
+  other films' trailers, uploader title cards), studio / TV-channel logos, and the opening title sequence or opening
+  credits (cast and crew names over images, the film's title card);
+- after it: end credits (scrolling names, cast lists, "the end", credits over images), ads, promos, trailers.
+A scene with actors acting counts as the story even when a few names are shown over it near the start.
+Answer with JSON only: {{"start": <number of the FIRST S frame of the story>, "end": <number of the LAST E frame
+that is still the story>}}. If all S frames are the story, start is 0; if all E frames are the story, end is {le}."""
 
 
 def find_movie_bounds(start_jpegs, end_jpegs, api_key):
