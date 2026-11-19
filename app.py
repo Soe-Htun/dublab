@@ -25,7 +25,7 @@ from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tt
                  split_video, transcribe)
 from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, find_movie_bounds, pick_cover_frames, translate_lines,
                     write_cover_scene, write_intro, write_recap, write_title, movie_name,
-                    transcribe_burmese)
+                    transcribe_burmese, write_posts)
 
 # Gemini TTS key rotation.
 # GEMINI_TTS_API_KEYS is comma-separated; falls back to the single GEMINI_API_KEY.
@@ -816,6 +816,7 @@ def _voice_and_mux(job):
     utter = job["utter"]
     voice_name = VOICES[job["direction"]][job["voice"]]
     src = d / ("input" + job["ext"])
+    posts = _start_posts(job) if not job.get("posts") else None
     bg_wav = None
     if job.get("recap"):                 # narration over the chosen scenes, no original audio
         src, utter, job["total"] = _recap_cut(job, voice_name)
@@ -1010,6 +1011,8 @@ def _voice_and_mux(job):
     (d / "condensed.mp4").unlink(missing_ok=True)      # YouTube-full intermediate
     for f in d.glob("r*.mp3"):
         f.unlink(missing_ok=True)
+    if posts:
+        posts.join(60)               # long done by now (written while the video rendered)
     if job.get("telegram"):          # mark before "done" so the page never offers a 2nd send
         job["tg"] = {"state": "sending", "error": "", "pct": 0}
     job.update(status="done", stage="done", pct=100)
@@ -1755,6 +1758,49 @@ def _should_preupload(job):
                 and all(sz <= telegram.BIG_MAX for sz in sizes) and telegram.big_available())
 
 
+def _start_posts(job):
+    """📝 upload texts (TikTok / YouTube / Facebook) written in the background
+    while the video renders — no extra waiting."""
+    key = os.environ.get("GEMINI_API_KEY")
+    if not key or not job.get("recap"):
+        return None
+    def run():
+        try:
+            story = " ".join(u["text"] for u in job.get("utter") or [])
+            job["posts"] = write_posts(job.get("title_mm") or "", job.get("name") or "", story, key,
+                                       _settings.get("channel_name") or "Marco Recap")
+            (job["dir"] / "posts.txt").write_text(_posts_text(job), encoding="utf-8")
+            jlog(job, "📝 upload texts written (TikTok / YouTube / Facebook)")
+        except Exception as e:  # noqa: BLE001 - the video matters, not the texts
+            jlog(job, f"upload texts skipped: {str(e)[:150]}")
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    return t
+
+
+_AI_WORDS = re.compile(r"(?<![A-Za-z])AI(?![A-Za-z])|人工智能|AI短剧|ai movie|ai drama", re.I)
+
+
+def _posts_text(job):
+    """The upload texts as one Telegram message, only for the versions this job made."""
+    p = job.get("posts") or {}
+    if not p:
+        return ""
+    has_tt = not job.get("yt_only")                      # the YouTube long version has no TikTok video
+    has_yt = bool(job.get("yt_only") or job.get("tt") or (job.get("youtube") and not job.get("yt_full")))
+    out = [f"📝 {job.get('title_mm') or job.get('name') or ''}"]
+    if has_tt and p.get("tiktok"):
+        out += ["", "📱 TikTok / Facebook Reels:", p["tiktok"]]
+    if has_yt and p.get("youtube_title"):
+        out += ["", "📺 YouTube title:", p["youtube_title"], "", "📺 YouTube description:", p.get("youtube_desc", "")]
+    if p.get("facebook"):
+        out += ["", "📘 Facebook post:", p["facebook"]]
+    if p.get("ai_film") or _AI_WORDS.search(job.get("name") or ""):
+        out += ["", "🤖 AI ရုပ်ရှင် ဖြစ်နိုင်တယ် — TikTok မှာ “AI-generated” label၊ YouTube မှာ “Altered or "
+                    "synthetic content → Yes”၊ Facebook မှာ “AI info” ကို ဖွင့်ပါ"]
+    return "\n".join(out).strip()
+
+
 def _telegram_prepare(job):
     outs = _outputs(job)
     pre = job["tg_pre"] = {"state": "uploading", "pct": 0, "files": {}}
@@ -1839,6 +1885,12 @@ def _telegram_send(job):
             tg["pct"] = int((i + 1) * 100 / len(outs))
             tg["sent"] = i + 1
         tg["how"] = "link" if "link" in hows else "file"
+        text = _posts_text(job)
+        if text:
+            try:
+                telegram.send_message(chat, text)
+            except Exception as e:  # noqa: BLE001
+                jlog(job, f"upload texts send failed: {e}")
         tg["state"] = "done"
         jlog(job, f"sent {len(outs)} file(s) to Telegram ({tg['how']})")
         if tg["how"] == "file":       # the videos are on Telegram now: free the Mac's disk

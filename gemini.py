@@ -363,6 +363,54 @@ def write_title(lines, api_key, max_chars=6000):
 
 
 
+POSTS_PROMPT = """You write the upload texts for a Burmese movie-recap channel called "{channel}".
+The video is a Burmese-narrated recap of a film. Cover title (Burmese): {title}
+Original video title (may name the film): {name}
+Beginning of the Burmese narration:
+{story}
+
+Write, in natural Burmese (Myanmar script; film names may stay in their original form):
+- "tiktok": a TikTok / Facebook Reels caption: 1–2 short catchy lines that make people want to watch
+  (a hook or question, no spoilers of the ending), then the hashtags. Under 250 characters.
+- "youtube_title": a YouTube title under 90 characters: the cover title, plus the film's real name in
+  brackets ONLY if that name appears in the original video title above — never invent or guess an
+  English name. No clickbait lies, no ALL CAPS.
+- "youtube_desc": a YouTube description: 3–4 lines summing up the story's setup (no ending spoilers),
+  a line saying it is a Burmese recap / review with our own narration, then the hashtags.
+- "facebook": a Facebook Page post: 2–3 lines, friendly, a question to invite comments, then the hashtags.
+HASHTAGS: only 3–4 short ENGLISH ones about the genre / story (e.g. #drama #fantasy #revenge #korean).
+The channel's own Burmese hashtags are added after yours — do not write any Burmese hashtag, and never
+#subtitle-type tags (the video is narrated, not subtitled).
+- "ai_film": true if the title, name or story suggests the film itself is AI-generated (AI movie /
+  AI drama / AI short film), else false.
+No channel names other than "{channel}". No like/subscribe begging lines.
+Reply with ONLY a JSON object with exactly these keys."""
+
+
+def write_posts(title, name, story, api_key, channel="Marco Recap"):
+    """Upload texts for TikTok / YouTube / Facebook in one call:
+    {tiktok, youtube_title, youtube_desc, facebook, ai_film}."""
+    raw = _call(POSTS_PROMPT.format(channel=channel, title=title or "-", name=name or "-",
+                                    story=(story or "")[:3500]), api_key, max_tokens=2048)
+    m = re.search(r"\{.*\}", raw, re.S)
+    data = json.loads(re.sub(r",\s*([}\]])", r"\1", m.group(0))) if m else {}
+    out = {k: (data.get(k) if k == "ai_film" else str(data.get(k) or "").strip())
+           for k in ("tiktok", "youtube_title", "youtube_desc", "facebook", "ai_film")}
+    keys = ("tiktok", "youtube_title", "youtube_desc", "facebook")
+    lines = [(k, ln) for k in keys for ln in out[k].split("\n")]
+    fixed = fix_script([ln for _, ln in lines], api_key)          # stray Khmer/Thai letters etc.
+    for k in keys:
+        out[k] = "\n".join(f for (kk, _), f in zip(lines, fixed) if kk == k).strip()
+    tag = "#" + re.sub(r"\W", "", channel)
+    own = {"tiktok": f"{tag} #movierecap #ရုပ်ရှင် #မြန်မာ #fyp",
+           "youtube_desc": f"{tag} #movierecap #ရုပ်ရှင် #မြန်မာ",
+           "facebook": f"{tag} #movierecap #ရုပ်ရှင်"}
+    for k, tags in own.items():
+        if out[k]:
+            out[k] += " " + tags
+    return out
+
+
 # ---- recap version: a shorter Burmese narration over chosen scenes ----
 TTS_CPS = 15.0 * float(os.environ.get("DUBLAB_SPEAK_SPEED") or 1.15)   # Burmese TTS ~15 chars/s at normal pace, sped up in dub.synthesize
 
