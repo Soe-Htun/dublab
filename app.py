@@ -142,7 +142,9 @@ SRC_LANG = {"en2mm": "en", "mm2en": "my", "zh2mm": "zh", "auto2mm": None}  # whi
 LANG_NAMES = {"my": "Burmese", "zh": "Chinese (Mandarin)", "yue": "Cantonese", "en": "English",
               "ja": "Japanese", "ko": "Korean", "th": "Thai", "hi": "Hindi",
               "vi": "Vietnamese", "id": "Indonesian", "ms": "Malay",
-              "ru": "Russian", "es": "Spanish", "fr": "French", "de": "German"}
+              "ru": "Russian", "es": "Spanish", "fr": "French", "de": "German",
+              "km": "Khmer (Cambodian)", "lo": "Lao", "tl": "Filipino (Tagalog)", "bn": "Bengali",
+              "ta": "Tamil", "te": "Telugu", "pt": "Portuguese", "tr": "Turkish", "ar": "Arabic"}
 MAX_LINE = 500          # chars per edited line
 STAGE_LABEL = {
     "queue": "တန်းစီနေတယ်",
