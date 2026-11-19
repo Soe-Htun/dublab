@@ -127,10 +127,16 @@ def _call(prompt, api_key, max_tokens=8192, images=None):
         except urllib.error.HTTPError as e:
             if e.code != 429:
                 attempt += 1
-                # 500/502/503/504 = Gemini overloaded for a while: keep trying ~4 minutes
-                limit = MAX_RETRIES + 6 if e.code >= 500 else MAX_RETRIES
+                try:
+                    detail = re.sub(r"\s+", " ", e.read().decode(errors="replace"))[:300]
+                except Exception:  # noqa: BLE001
+                    detail = ""
+                print(f"[gemini] HTTP {e.code}: {detail}")
+                # 5xx = overloaded; a 400 has also come and gone for minutes (2026-11-19)
+                # with the very same request working later: keep trying ~4 minutes
+                limit = MAX_RETRIES + 6 if e.code >= 500 or e.code == 400 else MAX_RETRIES
                 if attempt >= limit:
-                    raise
+                    raise RuntimeError(f"Gemini HTTP {e.code}: {detail or e.reason}") from None
                 time.sleep(min(30, 2 ** attempt * 2))
                 continue
             # rate limited: wait as long as Gemini asks (per-minute quota), a few times
