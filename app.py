@@ -21,7 +21,7 @@ from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tt
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
-                 build_recap_video, make_covers, mux, run, synthesize, probe_duration, probe_url, separate_music, split_points,
+                 build_recap_video, make_covers, mux, run, synthesize, speech_regions, fit_cues_to_speech, probe_duration, probe_url, separate_music, split_points,
                  split_video, transcribe)
 from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, find_movie_bounds, pick_cover_frames, translate_lines,
                     write_cover_scene, write_intro, write_recap, write_title, movie_name,
@@ -572,7 +572,8 @@ def _transcribe_and_translate(jid, job):
         segs, lang = [], "my"
     else:
         jlog(job, f"speech model: {job.get('model') or default_whisper_model()}")
-        segs, lang = transcribe(wav, SRC_LANG[direction], stt_prog, job.get("model"), title=job.get("name") or "")
+        segs, lang = transcribe(wav, SRC_LANG[direction], stt_prog, job.get("model"), title=job.get("name") or "",
+                                words=bool(job.get("orig_audio")))   # 🔊 captions: exact word times
         job["segs"], job["seg_lang"] = segs, lang
     if lang == "my" and job.get("seg_engine") != "gemini":
         # whisper writes Burmese speech as junk ("වවවව…"): let Gemini listen instead
@@ -863,6 +864,13 @@ def _voice_and_mux(job):
         if not dub_wav.exists():
             run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-vn", "-map", "0:a:0", "-c:a", "copy", str(dub_wav)])
         cues = [(u["start"], u["end"], u["text"]) for u in utter if (u.get("text") or "").strip()]
+        try:                                       # captions only while someone is talking
+            wav = d / "audio.wav"
+            if not wav.exists():
+                extract_audio(src, wav)
+            cues = fit_cues_to_speech(cues, speech_regions(wav))
+        except Exception as e:  # noqa: BLE001 - whisper's own times then
+            jlog(job, f"caption timing check skipped: {str(e)[:120]}")
         lead = 0.0
         if outro:
             synthesize(outro, voice_name, d / "outro.mp3")

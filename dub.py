@@ -107,7 +107,7 @@ def default_whisper_model():
     return os.environ.get("DUBLAB_WHISPER_MODEL") or "small"
 
 
-def transcribe(wav, lang_hint=None, progress=None, model_name=None, title=""):
+def transcribe(wav, lang_hint=None, progress=None, model_name=None, title="", words=False):
     """Return ([{start, end, text}], language).
 
     lang_hint: 'en', 'my', 'zh'… or None to let whisper detect the
@@ -116,14 +116,14 @@ def transcribe(wav, lang_hint=None, progress=None, model_name=None, title=""):
     global _cpu_only
     name = model_name or default_whisper_model()
     try:
-        return _transcribe(wav, lang_hint, progress, name, title)
+        return _transcribe(wav, lang_hint, progress, name, title, words)
     except Exception as e:  # noqa: BLE001 - GPU backends are experimental
         if _cpu_only:
             raise
         print(f"[whisper] GPU failed ({type(e).__name__}: {e}); retrying on CPU")
         _cpu_only = True
         _models.clear()
-        return _transcribe(wav, lang_hint, progress, name, title)
+        return _transcribe(wav, lang_hint, progress, name, title, words)
 
 
 def _whisper_device():
@@ -289,7 +289,7 @@ def _vote_language(wav, name, spots=(0.15, 0.3, 0.45, 0.6, 0.75, 0.9), clip=30, 
     return best
 
 
-def _transcribe(wav, lang_hint, progress, name, title=""):
+def _transcribe(wav, lang_hint, progress, name, title="", words=False):
     global _mlx_broken
     if not lang_hint:
         try:
@@ -314,13 +314,26 @@ def _transcribe(wav, lang_hint, progress, name, title=""):
     # is cleaned up by _collapse_repeats.
     segments, info = model.transcribe(
         str(wav), language=lang_hint, vad_filter=True, beam_size=beam,
-        temperature=0.0, condition_on_previous_text=False,
+        temperature=0.0, condition_on_previous_text=False, word_timestamps=words,
         vad_parameters=dict(min_silence_duration_ms=400))
     segs = []
     for s in segments:  # lazy generator: decoding happens while we iterate
-        text = _collapse_repeats(s.text or "")
-        if text:
-            segs.append({"start": float(s.start), "end": float(s.end), "text": text})
+        if words and s.words:
+            # captions: one line per stretch of talking — whisper joins lines across
+            # a long silence ("Look at those papayas." … 8 s … "What are you doing?")
+            run = []
+            for w in list(s.words) + [None]:
+                if run and (w is None or w.start - run[-1].end > 0.7):
+                    text = _collapse_repeats("".join(x.word for x in run))
+                    if text:
+                        segs.append({"start": float(run[0].start), "end": float(run[-1].end), "text": text})
+                    run = []
+                if w is not None:
+                    run.append(w)
+        else:
+            text = _collapse_repeats(s.text or "")
+            if text:
+                segs.append({"start": float(s.start), "end": float(s.end), "text": text})
         if progress and info.duration:
             progress(min(float(s.end) / info.duration, 1.0))
     return segs, (lang_hint or info.language)
@@ -669,6 +682,58 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=N
 def _srt_time(t):
     ms = int(round(max(t, 0) * 1000))
     return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
+
+
+def speech_regions(wav, min_silence=0.25):
+    """[(start, end)] seconds where someone is actually talking (Silero VAD,
+    the same one whisper uses) — to keep captions off the silent stretches."""
+    import wave
+    import numpy as np
+    from faster_whisper.vad import VadOptions, get_speech_timestamps
+    with wave.open(str(wav), "rb") as w:
+        sr = w.getframerate()
+        audio = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768.0
+    ts = get_speech_timestamps(audio, VadOptions(min_silence_duration_ms=int(min_silence * 1000),
+                                                 speech_pad_ms=120))
+    return [(t["start"] / sr, t["end"] / sr) for t in ts]
+
+
+def fit_cues_to_speech(cues, regions, min_dur=0.8, max_dur=7.0):
+    """Whisper's lines often start early and run on through the silence after
+    them (a 2-word line shown for 10 s). Each caption is trimmed to the talking
+    inside its own time span; a line with no talking in it keeps its span, and
+    no caption stays up longer than max_dur."""
+    out = []
+    for a, b, text in cues:
+        inside = [(max(a, s), min(b, e)) for s, e in regions if e > a and s < b]
+        # talking stretches inside this line, joined where the pause is short
+        runs = []
+        for s, e in inside:
+            if runs and s - runs[-1][1] < 1.2:
+                runs[-1] = (runs[-1][0], e)
+            else:
+                runs.append((s, e))
+        words = text.split()
+        if len(runs) > 1 and len(words) >= len(runs):
+            # one line over a long silence: its words shared out over the talking
+            # stretches by length, so nothing shows while nobody speaks
+            total = sum(e - s for s, e in runs)
+            k = 0
+            for i, (s, e) in enumerate(runs):
+                take = len(words) - k if i == len(runs) - 1 else max(1, round(len(words) * (e - s) / total))
+                take = min(take, len(words) - k - (len(runs) - 1 - i))
+                out.append((s, min(max(e, s + min_dur), s + max_dur), " ".join(words[k:k + take])))
+                k += take
+            continue
+        if runs:
+            a, b = runs[0][0], runs[-1][1]
+        b = min(max(b, a + min_dur), a + max_dur)
+        out.append((a, b, text))
+    for k in range(len(out) - 1):              # never overlap the next line
+        a, b, t = out[k]
+        if b > out[k + 1][0]:
+            out[k] = (a, max(a + 0.3, out[k + 1][0] - 0.05), t)
+    return out
 
 
 def write_srt(cues, path):
@@ -1142,8 +1207,10 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
         # 9:16 output (TikTok frame, or a portrait upload): phones taller than 9:16 make
         # TikTok trim the sides, and its buttons sit on the right — keep well inside
         tall = bool(frame) or sh_ > sw_
-        m = max(8, int(vw * 0.02))                       # margin from the top / bottom
-        mx = max(8, int(vw * (0.08 if tall else 0.02)))  # from the sides (more on 9:16)
+        # the round logo has no empty border of its own, and phone players crop a
+        # little off 16:9 video's sides — keep it a bit inside the edges
+        m = max(8, int(vw * 0.035))                      # margin from the top / bottom
+        mx = max(8, int(vw * (0.08 if tall else 0.04)))  # from the sides (more on 9:16)
         x = f"{mx}" if "left" in logo.get("position", "") else f"W-w-{mx}"
         # inside the moving picture, not on bars around it (a portrait upload
         # with the film in the middle of coloured bars put the logo on the bar)
