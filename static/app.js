@@ -604,7 +604,7 @@ $('#tgpickbtn').addEventListener('click', loadTgVideos);
 // 🎬 recap version (checkbox → length) and how many parts that makes
 let srcDur = 0;          // seconds of the chosen video, when known
 function partsNote() {
-  const sp = +split, rc = $('#recapchk').checked ? +recapLen * 1.25 : 0;
+  const sp = +split, rc = $('#recapchk').checked ? (recapLen === 'auto' ? srcDur * 0.6 / 60 : +recapLen * 1.25) : 0;
   const len = rc ? rc * 60 : srcDur;              // finished video length (s)
   const yt = $('#ytchk') && $('#ytchk').checked;
   let txt = +sp ? `${sp} မိနစ်ထက် ရှည်ရင် ${sp} မိနစ်စီ ခွဲမယ် — နာမည်-1, နာမည်-2 … နာမည်-End` : 'ဗီဒီယို တစ်ခုတည်း ထွက်မယ်';
@@ -615,13 +615,20 @@ function partsNote() {
   if (+sp && yt) txt = '📱 TikTok: ' + txt + ' · 📺 YouTube: တစ်ကားလုံး ၁ ခု';
   $('#splitnote').textContent = txt + (+sp ? ' · like & follow က အပိုင်းတိုင်းရဲ့ အဆုံးမှာ' : '');
 }
-let recapLen = '20';
+let recapLen = 'auto';
 function setRecapLen(v) {
   if (v === '50') v = '40';            // old saved choice (50+ became 40+)
   let b = document.querySelector(`#recapgrid .opt[data-recap="${v}"]`);
-  if (!b) { v = '20'; b = document.querySelector('#recapgrid .opt[data-recap="20"]'); }   // old saved choice
+  if (!b) { v = 'auto'; b = document.querySelector('#recapgrid .opt[data-recap="auto"]'); }   // old saved choice
   recapLen = v;
   document.querySelectorAll('#recapgrid .opt').forEach((x) => x.classList.toggle('selected', x === b));
+  if (v === 'auto') {                  // 🤖 at least 55% of the film's story, aiming ~60%
+    const m = srcDur ? Math.round(srcDur * 0.55 / 60) : 0;
+    $('#recapnote').textContent = '🤖 ဇာတ်ကား အရှည်ရဲ့ အနည်းဆုံး 55% (~60%) recap ထုတ်မယ်' +
+      (m ? ` — မူရင်း ${Math.round(srcDur / 60)} မိနစ်ဆို ~${m}–${Math.round(srcDur * 0.6 / 60)} မိနစ်` : '');
+    partsNote();
+    return;
+  }
   const aim = Math.round(v * 1.25);
   const src = srcDur ? ` (မူရင်း ${Math.round(srcDur / 60)} မိနစ်)` : '';
   $('#recapnote').textContent = srcDur && aim * 60 >= srcDur * 0.85
@@ -661,7 +668,7 @@ document.querySelectorAll('#recapgrid .opt').forEach((b) => b.addEventListener('
 }));
 try {
   $('#recapchk').checked = true;     // recap is the default every time; untick for a full dub
-  recapLen = localStorage.getItem('dublab_recap_len') || '20';
+  recapLen = localStorage.getItem('dublab_recap_len') || 'auto';
 } catch (e) { /* ignore */ }
 syncRecap(); syncOrig();
 

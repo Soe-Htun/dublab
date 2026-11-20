@@ -2547,6 +2547,50 @@ def footage(start, dur, spans, min_piece=1.5):
     return out
 
 
+def beat_footage(start, end, need, spans, max_slow=1.35):
+    """Scenes for one recap beat, kept INSIDE that beat's own part of the film
+    [start, end) so the picture matches what is being said: the talking parts of that
+    stretch first; when they are shorter than the narration, its quiet parts too; when
+    even the whole stretch is shorter, it is played a little slower (up to max_slow),
+    and only then does it reach a little past `end`. Returns [(start, len[, out_len])]."""
+    end = max(end, start + 0.5)
+    talk = [(max(a, start), min(b, end)) for a, b in spans if b > start and a < end] or [(start, end)]
+    talk_len = sum(b - a for a, b in talk)
+    if talk_len >= need:                              # enough talking in its own scene
+        out, left = [], need
+        for a, b in talk:
+            take = min(b - a, left)
+            if take >= 0.4 or take == left:
+                out.append((a, take))
+                left -= take
+            if left <= 0.05:
+                break
+        if left > 0.05:                               # (tiny talk bits were skipped) keep the length exact
+            out.append((start, left))
+        return out or [(start, need)]
+    whole = end - start
+    if whole >= need:                                 # the quiet moments of that scene fill the rest
+        return [(start, need)]
+    if whole * max_slow >= need:                      # the whole scene, a little slower
+        return [(start, whole, need)]
+    return [(start, whole, whole * max_slow), (end, need - whole * max_slow)]   # then carry on past it
+
+
+def trim_silence(path):
+    """Cut the silence a TTS clip starts and ends with (some voices add a second or
+    more): no long quiet moments between recap beats, and the voice starts on cue."""
+    path = Path(path)
+    tmp = path.with_name(path.stem + ".trim" + path.suffix)
+    sil = "silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.05"
+    try:
+        run(["ffmpeg", "-y", "-v", "error", "-i", str(path), "-af",
+             f"{sil},areverse,{sil},areverse", str(tmp)])
+        if tmp.exists() and tmp.stat().st_size > 1000:
+            tmp.replace(path)
+    except Exception:  # noqa: BLE001 - the untrimmed clip is fine too
+        tmp.unlink(missing_ok=True)
+
+
 def build_recap_video(src, clips, out_mp4, tmp, progress=None):
     """clips: [(source_start, duration)] in order. Each is cut (re-encoded,
     no audio, same size/fps so they join cleanly) and the pieces joined.
@@ -2563,11 +2607,14 @@ def build_recap_video(src, clips, out_mp4, tmp, progress=None):
     done = [0]
 
     def cut(item):
-        i, (start, dur) = item
+        i, clip = item
+        start, dur = clip[0], clip[1]
+        slow = (clip[2] / dur) if len(clip) > 2 and dur > 0 else 1.0     # played slower to fill its beat
         start = max(0.0, min(start, total_src - dur - 0.05))
         out = tmp / f"clip{i:05d}.mp4"
+        pts = f"setpts={slow:.4f}*PTS," if slow > 1.001 else ""
         run(["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", str(src), "-t", f"{dur:.3f}",
-             "-an", "-vf", f"scale=trunc(iw/2)*2:trunc(ih/2)*2,fps={fps},format=yuv420p",
+             "-an", "-vf", f"{pts}scale=trunc(iw/2)*2:trunc(ih/2)*2,fps={fps},format=yuv420p",
              *enc, "-video_track_timescale", "90000", str(out)])
         done[0] += 1
         if progress:

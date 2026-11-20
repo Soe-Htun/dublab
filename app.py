@@ -22,7 +22,7 @@ from dub import (WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segme
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
-                 build_recap_video, make_covers, mux, run, frames_every, cut_ranges, mosaic_video, edit_video, fiction_notice, synthesize, speech_regions, fit_cues_to_speech, probe_duration, probe_url, separate_music, split_points,
+                 build_recap_video, make_covers, mux, run, beat_footage, trim_silence, frames_every, cut_ranges, mosaic_video, edit_video, fiction_notice, synthesize, speech_regions, fit_cues_to_speech, probe_duration, probe_url, separate_music, split_points,
                  split_video, transcribe)
 from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, find_movie_bounds, pick_cover_frames, translate_lines,
                     write_cover_scene, write_intro, write_recap, write_title, movie_name,
@@ -877,7 +877,14 @@ def _transcribe_and_translate(jid, job):
         except Exception as e:  # noqa: BLE001 - go on with the whole upload
             jlog(job, f"cutting the ads off failed: {str(e)[:150]}")
     job["have_src"] = True
-    if job.get("recap") and not job.get("yt_child") and job["recap"] * RECAP_AIM * 60 >= total * 0.85:
+    if job.get("recap") and job.get("recap_auto") and not job.get("yt_child"):
+        # 🤖 at least 55% of the film's story (ads and credits already cut off), aiming ~60%
+        import math
+        job["recap"] = max(1, math.ceil(total * 0.55 / 60))
+        job["recap_aim"] = 0.60 / 0.55
+        job["recap_strict"] = True                  # really at least 55% (rewritten when short)
+        jlog(job, f"🤖 auto length: a recap of at least {job['recap']} min (55%+ of the {total / 60:.0f}-min film, aiming ~60%)")
+    elif job.get("recap") and not job.get("yt_child") and job["recap"] * RECAP_AIM * 60 >= total * 0.85:
         # the chosen length is about as long as the video itself: still a recap (narrated
         # all the way through — a plain dub left every scene without dialogue silent),
         # as close to the chosen length as the video allows (at most ~88% of it)
@@ -1108,6 +1115,7 @@ def _recap_cut(job, voice_name):
         p = d / f"r{i}.mp3"
         if not (p.exists() and p.stat().st_size > 0):      # ▶️ resume keeps voiced lines
             synthesize(utter[i]["text"], voice_name, p)
+            trim_silence(p)                                  # no dead air before / after the beat
         done[0] += 1
         job.update(pct=58 + int(20 * done[0] / len(utter)))
         _sp(job, done[0] / len(utter))
@@ -1116,7 +1124,12 @@ def _recap_cut(job, voice_name):
         voiced = list(ex.map(tts, range(len(utter))))
     GAP = 0.35
     spans = job.get("speech") or []
-    clips = [c for u, (_, dur) in zip(utter, voiced) for c in footage(u["start"], dur + GAP, spans)]
+    # each beat's scenes come from ITS OWN part of the film (until the next beat's part
+    # begins), so what is shown matches what is being said
+    clips = []
+    for k, (u, (_, dur)) in enumerate(zip(utter, voiced)):
+        nxt = utter[k + 1]["start"] if k + 1 < len(utter) and utter[k + 1]["start"] > u["start"] else u["end"]
+        clips += beat_footage(u["start"], max(u["end"], nxt), dur + GAP, spans)
     job.update(stage="recap", pct=78)
     jlog(job, f"cutting {len(clips)} scenes into the recap…")
     def prog(i, n):
@@ -1553,8 +1566,9 @@ def create_job():
         model = default_whisper_model()
     if direction not in VOICES or voice not in ("auto", "female", "male"):
         return jsonify(error="ရွေးချယ်မှု မှားနေတယ်"), 400
+    recap_auto = request.form.get("recap") == "auto"      # 🤖 55%+ of the film's own length
     try:
-        recap = int(request.form.get("recap") or 0)
+        recap = 20 if recap_auto else int(request.form.get("recap") or 0)   # (set from the length later)
     except ValueError:
         recap = 0
     recap = recap if recap in RECAP_CHOICES else 0
@@ -1630,6 +1644,7 @@ def create_job():
                  "id": jid, "telegram": send_tg, "owner": _admin_ok(),
                  "captions": captions, "blur": blur, "split": split, "youtube": youtube, "my_title": my_title, "no_title": no_title,
                  "yt_full": yt_full and not orig_audio, "orig_audio": orig_audio, "want_posts": want_posts and send_tg, "censor": censor, "episode": episode,
+                 "recap_auto": recap_auto and not orig_audio,
                  "created": time.time()}
     jlog(jobs[jid], "uploaded " + re.sub(r"[\r\n]", " ", label)[:160])
     with lock:
