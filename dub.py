@@ -1034,6 +1034,16 @@ def _demucs_devices():
     return ["cpu"]
 
 
+def separate_vocals(src_video, job_dir):
+    """The original audio with its MUSIC removed — voices only (Demucs), so a
+    copyrighted song under the dialogue is not heard any more. None without Demucs."""
+    out = separate_music(src_video, job_dir)
+    if out is None:
+        return None
+    voc = Path(out).with_name("vocals.wav")
+    return voc if voc.exists() else None
+
+
 def separate_music(src_video, job_dir):
     """Return a wav of the original audio with all voices removed
     (music + sound effects only), or None if Demucs isn't installed."""

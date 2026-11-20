@@ -84,6 +84,7 @@ $('#go').addEventListener('click', () => {
   fd.append('split', split);
   const orig = $('#fullchk').checked && $('#origchk').checked;
   fd.append('orig_audio', orig ? '1' : '0');
+  fd.append('no_music', orig && $('#nomusicchk').checked ? '1' : '0');
   fd.append('recap', $('#recapchk').checked && !orig ? recapLen : '0');
   try { localStorage.setItem('dublab_split', split); } catch (e) {}
   fd.append('logo', $('#logochk') && $('#logochk').checked ? '1' : '0');
@@ -641,6 +642,7 @@ function syncOrig() {
   const full = $('#fullchk').checked;
   $('#fullopts').hidden = !full;
   const on = full && $('#origchk').checked;
+  $('#nomusicrow').hidden = !on;           // 🎵 only with the original sound
   $('#voicegrid').hidden = on;
   $('#voicehead').hidden = on;
 }

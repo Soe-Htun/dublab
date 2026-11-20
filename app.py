@@ -22,7 +22,7 @@ from dub import (WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segme
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
-                 build_recap_video, make_covers, mux, run, beat_footage, trim_silence, frames_every, cut_ranges, mosaic_video, edit_video, fiction_notice, synthesize, speech_regions, fit_cues_to_speech, probe_duration, probe_url, separate_music, split_points,
+                 build_recap_video, make_covers, mux, run, separate_vocals, beat_footage, trim_silence, frames_every, cut_ranges, mosaic_video, edit_video, fiction_notice, synthesize, speech_regions, fit_cues_to_speech, probe_duration, probe_url, separate_music, split_points,
                  split_video, transcribe)
 from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, find_movie_bounds, pick_cover_frames, translate_lines,
                     write_cover_scene, write_intro, write_recap, write_title, movie_name,
@@ -265,6 +265,18 @@ def _find_blur(job, src, sfx):
         top, bot = max(0.0, top - 0.085), min(1.0, bot + 0.02)
         if bot - top < 0.16:                             # at least two lines' worth
             top = max(0.0, bot - 0.16)
+        # a film between bars (a portrait upload): the band is measured on the whole
+        # frame, but must stay inside the picture and not cover most of it
+        try:
+            pa = picture_area(src, total * 0.1, total * 0.9)
+        except Exception:  # noqa: BLE001
+            pa = (0.0, 1.0)
+        if pa != (0.0, 1.0):
+            p0, p1 = pa
+            ph = p1 - p0
+            top, bot = max(top, p0), min(bot, p1)
+            if bot - top > ph * 0.32:                    # at most ~1/3 of the picture, from its bottom
+                top = bot - ph * 0.32
         jlog(job, f"original captions found at {top * 100:.0f}–{bot * 100:.0f}% of the height — blurring there")
         return {"bottom": 1 - bot, "height": bot - top}
     except Exception as e:  # noqa: BLE001 - never lose the dub over this
@@ -1252,7 +1264,23 @@ def _voice_and_mux(job):
         job.update(stage="voice", pct=60)
         jlog(job, "keeping the original sound — Burmese captions only (no AI voice)")
         dub_wav = d / "orig_audio.mka"
-        if not dub_wav.exists():
+        if job.get("no_music"):
+            # 🎵 the film's background music taken out (voices kept): copyrighted songs
+            # under the dialogue are what TikTok / YouTube flag
+            jlog(job, "removing the background music (voices kept)…")
+            try:
+                voc = separate_vocals(src, d)
+                if voc:
+                    run(["ffmpeg", "-y", "-v", "error", "-i", str(voc), "-c:a", "aac", "-b:a", "160k", str(d / "orig_voice.m4a")])
+                    dub_wav = d / "orig_voice.m4a"
+                    shutil.rmtree(d / "sep", ignore_errors=True)
+                    (d / "orig_stereo.wav").unlink(missing_ok=True)
+                    jlog(job, "background music removed")
+                else:
+                    jlog(job, "music removal not available (demucs missing) — original sound kept")
+            except Exception as e:  # noqa: BLE001 - the original sound is still fine
+                jlog(job, f"music removal failed ({str(e)[:150]}) — original sound kept")
+        if dub_wav.name == "orig_audio.mka" and not dub_wav.exists():
             run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-vn", "-map", "0:a:0", "-c:a", "copy", str(dub_wav)])
         cues = [(u["start"], u["end"], u["text"]) for u in utter if (u.get("text") or "").strip()]
         try:                                       # captions only while someone is talking
@@ -1461,6 +1489,7 @@ def _voice_and_mux(job):
     (d / "recap.mp4").unlink(missing_ok=True)          # recap intermediate
     (d / "condensed.mp4").unlink(missing_ok=True)      # YouTube-full intermediate
     (d / "orig_audio.mka").unlink(missing_ok=True)     # 🔊 mode's audio copy
+    (d / "orig_voice.m4a").unlink(missing_ok=True)     # 🔊 mode's voices-only audio
     for f in d.glob("r*.mp3"):
         f.unlink(missing_ok=True)
     if posts:
@@ -1597,7 +1626,8 @@ def create_job():
     blur = request.form.get("blur", "0") == "1"
     censor = request.form.get("censor", "0") == "1"      # 🫣 hide blood / nudity (only when ticked)
     want_posts = request.form.get("posts") == "1"        # 📝 upload texts to Telegram (off unless ticked)
-    orig_audio = request.form.get("orig_audio") == "1"   # 🔊 keep the film's own sound, Burmese captions only
+    orig_audio = request.form.get("orig_audio") == "1"
+    no_music = orig_audio and request.form.get("no_music") == "1"   # 🎵 take the background music out   # 🔊 keep the film's own sound, Burmese captions only
     model = request.form.get("model") or default_whisper_model()
     if model not in WHISPER_MODELS:
         model = default_whisper_model()
@@ -1681,7 +1711,7 @@ def create_job():
                  "id": jid, "telegram": send_tg, "owner": _admin_ok(),
                  "captions": captions, "blur": blur, "split": split, "youtube": youtube, "my_title": my_title, "no_title": no_title,
                  "yt_full": yt_full and not orig_audio, "orig_audio": orig_audio, "want_posts": want_posts and send_tg, "censor": censor, "episode": episode,
-                 "recap_auto": recap_auto and not orig_audio,
+                 "recap_auto": recap_auto and not orig_audio, "no_music": no_music,
                  "created": time.time()}
     jlog(jobs[jid], "uploaded " + re.sub(r"[\r\n]", " ", label)[:160])
     with lock:

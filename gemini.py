@@ -730,12 +730,16 @@ _ORPHAN = re.compile(r"(^|(?<=\s))[\u102B-\u103E]+")     # marks left at the sta
 # whole words Gemini sometimes writes in Korean inside Burmese ("ဗီ디오" for ဗီဒီယို):
 # stripping the foreign letters left "ဗီ"
 _GARBLED = (("비디오", "ဗီဒီယို"), ("디오", "ဒီယို"))
+# a vowel sign written BEFORE its consonant ("ပါေယာင်": e-vowel typed visually, as old
+# Zawgyi-style input does): Unicode keeps the consonant first — "ပါယောင်"
+_E_BEFORE = re.compile("([\u102B-\u103E])\u1031([\u1000-\u102A])")
 
 
 def fix_script(lines, api_key):
     lines = [(t or "").translate(_LOOKALIKE) for t in lines]
     for bad, good in _GARBLED:
         lines = [t.replace(bad, good) for t in lines]
+    lines = [_E_BEFORE.sub(lambda m: m.group(1) + m.group(2) + "\u1031", t) for t in lines]
     # …and what was left of it after its foreign letters were dropped ("ဗီအသည်", "ဗီအကို")
     lines = [re.sub(r"ဗီအ(?!ိ)", "ဗီဒီယို", t) for t in lines]
     bad = [i for i, t in enumerate(lines) if has_foreign(t)]
