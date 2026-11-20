@@ -1154,7 +1154,7 @@ def _busy():
     return False
 
 
-def _stay_awake():
+def _awake_while_busy():
     """☕ macOS: while there is work (a job, a Telegram upload) the Mac must not
     fall asleep — sleep stopped uploads half-way. `caffeinate -i` keeps it awake
     (the screen may still turn off) and is stopped as soon as the work is done;
@@ -1176,7 +1176,7 @@ def _stay_awake():
         time.sleep(15)
 
 
-threading.Thread(target=_stay_awake, daemon=True, name="awake").start()
+threading.Thread(target=_awake_while_busy, daemon=True, name="awake").start()
 
 
 @app.get("/")
