@@ -822,6 +822,23 @@ def analyze_warning(message, duration, api_key, shots=None):
             "appeal": str(data.get("appeal") or "").strip()}
 
 
+COVER_CHECK_PROMPT = """These are thumbnails (covers) for videos on TikTok / YouTube / Facebook, numbered 0 to {last}.
+For each, list what could get it limited or flagged as a thumbnail: "blood" (blood, gore, wounds), "nudity"
+(bare breasts / genitals / buttocks, sexual pose), "gambling" (betting / casino logos or ads), "weapon_violence"
+(a gun pointed at someone, a violent attack in progress), "shocking" (disturbing or gruesome image).
+Normal film scenes, faces, fighting poses without blood and titles are fine.
+Answer with JSON only: {{"0": [issues], "1": [issues], …}} — an empty list when a cover is fine."""
+
+
+def check_covers(jpegs, api_key):
+    """Thumbnails → [[issue, …] per cover] (blood / nudity / gambling / weapon_violence / shocking)."""
+    items = [(f"Cover {i}:", b) for i, b in enumerate(jpegs)]
+    raw = _call(COVER_CHECK_PROMPT.format(last=len(jpegs) - 1), api_key, max_tokens=1024, images=items)
+    m = re.search(r"\{.*\}", raw, re.S)
+    data = json.loads(re.sub(r",\s*([}\]])", r"\1", m.group(0))) if m else {}
+    return [[str(x) for x in (data.get(str(i)) or [])] for i in range(len(jpegs))]
+
+
 COVER_PROMPT = """The numbered frames below (0 to {last}) come from one movie.
 Never pick a frame with blood, gore or nudity for anything below.
 First work out its THREE MOST IMPORTANT CHARACTERS: the MAIN character (the protagonist, the person who appears

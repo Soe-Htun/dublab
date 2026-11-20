@@ -161,6 +161,7 @@ function showProgress(jid) {
         stopAll();
         showResult(jid, j.parts); $('#coverbox').hidden = true;   // covers go to Telegram; not shown here
         showFixNote(j);
+        showRisk(j);
         showYtChild(j.yt_child);
       }
       if (j.status === 'failed') { stopAll(); showError(j.error || 'အမှားရှိတယ်', j.resumable ? jid : null); }
@@ -306,11 +307,24 @@ function showFixNote(j) {
   if (noVideo) { $('#resultvideo').removeAttribute('src'); }
 }
 
+// ⚠️ before uploading: what could bring a claim / warning / strike
+function showRisk(j) {
+  const box = $('#riskbox');
+  const r = (j && j.kind !== 'fix' && j.risk) || [];
+  box.hidden = !r.length;
+  if (!r.length) return;
+  const worst = r[0].level;
+  $('#riskhead').textContent = { high: '🔴 Upload မလုပ်ခင် သတိ — အန္တရာယ် ရှိတယ်',
+    mid: '🟡 Upload မလုပ်ခင် စစ်ကြည့်ပါ', low: '🟢 အန္တရာယ် နည်းတယ်' }[worst];
+  const ul = $('#risklist'); ul.innerHTML = '';
+  r.forEach((x) => { const li = document.createElement('li'); li.className = x.level; li.textContent = x.text; ul.appendChild(li); });
+}
+
 function showResult(jid, parts) {
   $('#card-progress').hidden = true;
   $('#card-result').hidden = false;
   ['#resultvideo', '#speedrow'].forEach((s) => { const e = $(s); if (e) e.hidden = false; });
-  $('#fixnote').hidden = true; $('#fixappeal').hidden = true;
+  $('#fixnote').hidden = true; $('#fixappeal').hidden = true; $('#riskbox').hidden = true;
   lastJid = jid;
   $('#resultvideo').src = '/r/' + jid;
   setSpeed(1);

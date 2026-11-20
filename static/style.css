@@ -217,3 +217,10 @@ button.gear{padding:0;cursor:pointer;font:inherit}
 .copybtn.done{color:#6ee7b7;border-color:#6ee7b7;background:rgba(110,231,183,.1)}
 .copybtn.done .ic-copy{display:none}
 .copybtn.done .ic-ok{display:block}
+
+.riskbox{margin:0 0 14px;padding:14px 16px;border-radius:14px;background:rgba(255,255,255,.04);border:1px solid var(--card-br)}
+.riskhead{font-weight:700;margin-bottom:8px}
+.riskbox ul{list-style:none;display:flex;flex-direction:column;gap:6px}
+.riskbox li{line-height:1.55;font-size:14.5px;padding-left:22px;position:relative}
+.riskbox li::before{position:absolute;left:0;top:0}
+.riskbox li.high::before{content:"🔴"} .riskbox li.mid::before{content:"🟡"} .riskbox li.low::before{content:"🟢"}

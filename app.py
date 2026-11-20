@@ -26,7 +26,7 @@ from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tt
                  split_video, transcribe)
 from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, find_movie_bounds, pick_cover_frames, translate_lines,
                     write_cover_scene, write_intro, write_recap, write_title, movie_name,
-                    transcribe_burmese, write_posts, find_sensitive, analyze_warning)
+                    transcribe_burmese, write_posts, find_sensitive, analyze_warning, check_covers)
 
 # Gemini TTS key rotation.
 # GEMINI_TTS_API_KEYS is comma-separated; falls back to the single GEMINI_API_KEY.
@@ -378,7 +378,7 @@ for _old in JOBS.iterdir():
 
 # what a finished job needs to be shown again (history, after a restart)
 _META_KEYS = ("id", "name", "title_mm", "status", "stage", "pct", "error", "ext", "parts",
-              "part_times", "covers", "covers_tt", "tt", "cover_pick", "created", "owner", "recap", "tg", "url", "files_gone", "yt_child_id", "kind", "out_name", "fix_note", "fix_changed", "fix_appeal")
+              "part_times", "covers", "covers_tt", "tt", "cover_pick", "created", "owner", "recap", "tg", "url", "files_gone", "yt_child_id", "kind", "out_name", "fix_note", "fix_changed", "fix_appeal", "risk")
 
 
 def _save_meta(job):
@@ -532,6 +532,71 @@ def process_job(jid):
         # keep everything for an hour so ▶️ resume can go on from here
         # (the sweep deletes it after RESUME_KEEP)
         _save_failed(job)
+
+
+def _check_covers(job):
+    """🖼️ Thumbnails can get a video limited too: Gemini looks at the covers for blood,
+    nudity, betting logos… → job["cover_issues"] = {"cover1.jpg": ["blood"], …}."""
+    key = os.environ.get("GEMINI_API_KEY")
+    names = (job.get("covers") or []) + (job.get("covers_tt") or [])
+    if not key or not names:
+        return
+    try:
+        from PIL import Image as _Img
+        import io as _io
+        jpegs = []
+        for n in names:
+            im = _Img.open(job["dir"] / n).convert("RGB")
+            im.thumbnail((640, 640))
+            b = _io.BytesIO(); im.save(b, "JPEG", quality=85); jpegs.append(b.getvalue())
+        res = check_covers(jpegs, key)
+        job["cover_issues"] = {n: r for n, r in zip(names, res) if r}
+        jlog(job, "cover check: " + ("; ".join(f"{n}: {', '.join(r)}" for n, r in job["cover_issues"].items())
+                                      or "all covers look fine"))
+    except Exception as e:  # noqa: BLE001 - only a note
+        jlog(job, f"cover check skipped: {str(e)[:120]}")
+
+
+_BIG_STUDIOS = re.compile(r"netflix|disney|marvel|warner|universal|paramount|sony|hbo|amazon|prime video|"
+                          r"\bkbs\b|\bsbs\b|\bmbc\b|tvn|\bjtbc\b|t-series|yash raj|zee|star ?plus|"
+                          r"iqiyi|youku|tencent|wetv|mango ?tv|viu|gma|abs-cbn", re.I)
+
+
+def _risk_report(job):
+    """⚠️ Before uploading: what could bring a claim, a warning or a strike, as
+    [{"level": "high"|"mid"|"low", "text": Burmese}] (worst first)."""
+    out = []
+    add = lambda level, text: out.append({"level": level, "text": text})
+    si = job.get("src_info") or {}
+    ch = si.get("channel") or si.get("uploader") or ""
+    big = bool(_BIG_STUDIOS.search(ch + " " + (job.get("name") or "")))
+    if (si.get("license") or "").lower().startswith("creative commons"):
+        add("low", f"Source က Creative Commons license ({ch}) — credit ပေးရင် ပြန်သုံးခွင့် ရှိတယ်")
+    elif big or (si.get("channel_is_verified") and (si.get("channel_follower_count") or 0) > 200_000):
+        add("high", f"Official / နာမည်ကြီး channel ({ch}) ကနေ ယူထားတယ် — copyright claim ခံရနိုင်ခြေ များတယ်")
+    elif ch:
+        add("mid", f"Source: {ch} — ရုပ်ရှင် ပိုင်ရှင်က claim လုပ်နိုင်တယ် (YouTube မှာ Private နဲ့ အရင် စစ်ပါ)")
+    if job.get("orig_audio"):
+        add("high", "🔊 မူရင်း အသံ mode — မူရင်း အသံ/ပုံရိပ် အတိုင်းမို့ unoriginal / copyright အန္တရာယ် အများဆုံး")
+    elif not job.get("recap"):
+        add("mid", "Recap မဟုတ်ဘဲ ဗီဒီယို အပြည့် dub — reused content လို့ မြင်နိုင်တယ်")
+    else:
+        add("low", "Recap (ကိုယ်ပိုင် ဇာတ်ကြောင်းပြော) — original ဖြစ်မှု အကောင်းဆုံး ပုံစံ")
+    if job.get("yt_child"):
+        add("mid", "YouTube အရှည် version (ဇာတ်ကားရဲ့ 80%+) — claim ခံရနိုင်ခြေ ပိုများတယ်")
+    for n, issues in (job.get("cover_issues") or {}).items():
+        add("high", f"Cover ({n}) မှာ {', '.join(issues)} ပါနေတယ် — thumbnail ကြောင့် limit ခံရနိုင်တယ်၊ တခြား cover သုံးပါ")
+    if job.get("censor"):
+        n = job.get("censored") or 0
+        add("low" if n else "low", f"🫣 သွေး/လိင် စစ်ပြီး — {n} နေရာ mosaic လုပ်ထားတယ်" if n else "🫣 သွေး/လိင် စစ်ပြီး — မတွေ့ပါ")
+    elif job.get("recap") or not job.get("orig_audio"):
+        add("mid", "🫣 သွေး/လိင် မစစ်ထားဘူး — action/horror ဇာတ်ကားဆိုရင် ✓ ပေးပြီး ပြန်လုပ်သင့်တယ်")
+    if job.get("logos_hidden"):
+        add("low", f"မူရင်း / လောင်းကစား logo {job['logos_hidden']} ခု ဖုံးထားပြီး")
+    if _AI_WORDS.search(job.get("name") or "") or (job.get("posts") or {}).get("ai_film"):
+        add("mid", "🤖 AI ရုပ်ရှင် ဖြစ်နိုင်တယ် — upload လုပ်တဲ့အခါ AI label ဖွင့်ပါ")
+    order = {"high": 0, "mid": 1, "low": 2}
+    return sorted(out, key=lambda r: order[r["level"]])
 
 
 def _parse_ranges(text):
@@ -730,6 +795,15 @@ def _transcribe_and_translate(jid, job):
             jlog(job, f"download error: {str(e)[:300]}")
             raise ValueError("ဗီဒီယို ဒေါင်းမရဘူး — link စစ်ပါ၊ "
                              "ခဏနေ ပြန်စမ်းပါ") from None
+        try:
+            job["src_info"] = json.loads((d / "src_info.json").read_text())
+            si = job["src_info"]
+            jlog(job, f"source: {si.get('channel') or si.get('uploader') or '?'}"
+                      + (" ✓ verified" if si.get("channel_is_verified") else "")
+                      + (f" · {si['channel_follower_count']:,} followers" if si.get("channel_follower_count") else "")
+                      + f" · licence: {si.get('license') or 'standard (all rights reserved)'}")
+        except Exception:  # noqa: BLE001
+            pass
     if job.get("tg_src") and not have_src:
         job.update(stage="download", pct=2)
         jlog(job, "downloading video from Telegram…")
@@ -1128,6 +1202,8 @@ def _voice_and_mux(job):
         blur = _find_blur(job, src, sfx)
     hide = _find_logos(job, src)
     censor = _find_sensitive(job, src) if job.get("censor") else []
+    job["censored"] = len(censor)
+    job["logos_hidden"] = len(hide)
     # TikTok (9:16) is the default for a landscape film; ticking "YouTube" also
     # (or, for a portrait source, only) keeps the normal 16:9 video
     landscape = vw > vh
@@ -1194,6 +1270,7 @@ def _voice_and_mux(job):
                                  chooser=chooser, log=lambda m: jlog(job, m))
                 job["covers_tt"] = ["tt/" + c.name for c in tt]
             jlog(job, f"made {len(job['covers']) + len(job.get('covers_tt') or [])} cover image(s)")
+            _check_covers(job)
         except Exception as e:  # noqa: BLE001 - never lose the dub over a cover
             jlog(job, f"cover skipped: {e}")
     intro_img = d / job["covers"][0] if lead and job.get("covers") else None
@@ -1269,6 +1346,7 @@ def _voice_and_mux(job):
         f.unlink(missing_ok=True)
     if posts:
         posts.join(60)               # long done by now (written while the video rendered)
+    job["risk"] = _risk_report(job)
     if job.get("telegram"):          # mark before "done" so the page never offers a 2nd send
         job["tg"] = {"state": "sending", "error": "", "pct": 0}
     job.update(status="done", stage="done", pct=100)
@@ -1529,7 +1607,7 @@ def job_status(jid):
                    label=STAGE_LABEL.get(job["stage"], job["stage"]),
                    error=job["error"], resumable=_resumable(job), orig=bool(job.get("orig_audio")), kind=job.get("kind") or "",
                    fix_note=job.get("fix_note") or "", fix_changed=bool(job.get("fix_changed", True)),
-                   fix_appeal=job.get("fix_appeal") or "",
+                   fix_appeal=job.get("fix_appeal") or "", risk=job.get("risk") or [],
                    yt_child=_child_info(job))
 
 

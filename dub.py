@@ -1617,9 +1617,17 @@ def download_url(url, job_dir, max_mb):
         outtmpl=str(Path(job_dir) / "input.%(ext)s"),
         max_filesize=max_mb * 1024 * 1024)
     with yt_dlp.YoutubeDL(opts) as ydl:
-        ydl.download([url])
+        info = ydl.extract_info(url, download=True) or {}
     if not out.exists():
         raise RuntimeError("video download failed")
+    # who posted it and under what licence — for the copyright risk note
+    try:
+        import json as _json
+        keep = {k: info.get(k) for k in ("extractor_key", "channel", "uploader", "channel_is_verified",
+                                         "channel_follower_count", "license", "title", "categories")}
+        (Path(job_dir) / "src_info.json").write_text(_json.dumps(keep, ensure_ascii=False))
+    except Exception:  # noqa: BLE001 - only a note
+        pass
     return out
 
 
