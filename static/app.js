@@ -294,8 +294,9 @@ function showFixNote(j) {
         const r = document.createRange(); r.selectNodeContents($('#fixappealtext'));
         const s = getSelection(); s.removeAllRanges(); s.addRange(r); document.execCommand('copy');
       }
-      $('#fixcopy').textContent = '✅ Copy ကူးပြီးပါပြီ';
-      setTimeout(() => { $('#fixcopy').textContent = '📋 Copy'; }, 2000);
+      const b = $('#fixcopy');                      // ✓ for 2 seconds, then the copy icon again
+      b.classList.add('done'); b.title = 'Copied!';
+      clearTimeout(b._t); b._t = setTimeout(() => { b.classList.remove('done'); b.title = 'Copy'; }, 2000);
     };
   }
   box.classList.toggle('warn', !j.fix_changed);

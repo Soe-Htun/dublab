@@ -207,6 +207,13 @@ button.gear{padding:0;cursor:pointer;font:inherit}
   background:rgba(101,148,242,.08);border:1px solid rgba(101,148,242,.35);font-size:15px}
 .fixnote.warn{background:rgba(251,191,36,.08);border-color:rgba(251,191,36,.45)}
 
-.fixappeal{margin:0 0 14px;padding:14px 16px;border-radius:14px;background:rgba(255,255,255,.04);border:1px solid var(--card-br)}
+.fixappeal{position:relative;margin:0 0 14px;padding:14px 56px 14px 16px;border-radius:14px;background:rgba(255,255,255,.04);border:1px solid var(--card-br)}
 .fixappeal-head{margin-bottom:8px}
-#fixappealtext{line-height:1.6;margin-bottom:12px;user-select:all}
+#fixappealtext{line-height:1.6;user-select:all}
+.copybtn{position:absolute;top:10px;right:10px;width:38px;height:38px;display:grid;place-items:center;border-radius:10px;
+  background:rgba(255,255,255,.06);border:1px solid var(--card-br);color:var(--dim);cursor:pointer;transition:color .2s,border-color .2s,background .2s}
+.copybtn:hover{color:var(--txt);border-color:var(--acc)}
+.copybtn .ic-ok{display:none}
+.copybtn.done{color:#6ee7b7;border-color:#6ee7b7;background:rgba(110,231,183,.1)}
+.copybtn.done .ic-copy{display:none}
+.copybtn.done .ic-ok{display:block}

@@ -718,6 +718,8 @@ def fix_script(lines, api_key):
     lines = [(t or "").translate(_LOOKALIKE) for t in lines]
     for bad, good in _GARBLED:
         lines = [t.replace(bad, good) for t in lines]
+    # …and what was left of it after its foreign letters were dropped ("ဗီအသည်", "ဗီအကို")
+    lines = [re.sub(r"ဗီအ(?!ိ)", "ဗီဒီယို", t) for t in lines]
     bad = [i for i, t in enumerate(lines) if has_foreign(t)]
     if not bad:
         return lines
