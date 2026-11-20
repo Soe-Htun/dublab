@@ -47,7 +47,12 @@ NAME_RULE = """- CHARACTER NAMES: do NOT transliterate foreign character names. 
   main character is already in the sentence (e.g. "ဂွေးတိုလည်း သူ့အဖေကို ပြောလိုက်ပါတယ်"). But a family member
   who is an important character too (e.g. two brothers who are both in the story a lot) DOES get a name: say the
   relation with the name the first time ("ဂွေးတိုရဲ့ အကို ကျော်ကြီး"), then just the name.
-- Places may be transliterated into Burmese script."""
+- Places may be transliterated into Burmese script.
+- KEEP IT ADVERTISER-FRIENDLY (the video earns from ads): never write strong swear words, sexual slurs, or vulgar
+  insults in Burmese, even when the original says them (e.g. "f***", "b****", insults about someone's mother).
+  Soften them into mild everyday words or describe the anger instead ("သူ ဒေါသတကြီး ဆဲလိုက်တယ်",
+  "ဒီလူ တော်တော် ဆိုးတာပဲ"). Mild casual words like ကွာ, ဟေ့ကောင်, ငနဲ, လူဆိုး are fine. Never curse in the
+  very first lines of the video."""
 
 
 PROMPT_EN2MM = """You are a professional dubbing script translator for short videos.
