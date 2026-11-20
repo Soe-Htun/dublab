@@ -1379,7 +1379,15 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
     frame_idx = intro_idx + (1 if intro_img else 0)
     if intro_img:
         iw, ih = video_size(src_video)
-    draw = bool(logo or captions or blur or intro_img or hide or frame or censor)
+    # ✨ a low-quality source (short side under 720 px): a light denoise first, and at the
+    # end an upscale to 1080p (lanczos) with a mild sharpen — a bit crisper, and YouTube
+    # treats a 1080p upload as HD (better encoding) instead of SD
+    try:
+        _sw, _sh = video_size(src_video)
+    except Exception:  # noqa: BLE001
+        _sw = _sh = 1080
+    enhance = min(_sw, _sh) < 700
+    draw = bool(logo or captions or blur or intro_img or hide or frame or censor or enhance)
 
     def _cmd(copy_video, encoder="libx264"):
         if copy_video:   # nothing to draw: keep the original picture, no re-encode
@@ -1387,7 +1395,7 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
             vid = ["-map", "0:v:0", "-c:v", "copy"]
         else:
             if draw:
-                parts = [f"[0:v]{vf.replace(',format=yuv420p', '')}[s0]"]
+                parts = [f"[0:v]{'hqdn3d=1.5:1.5:6:6,' if enhance else ''}{vf.replace(',format=yuv420p', '')}[s0]"]
                 cur = "s0"
                 if censor:        # blood / nudity: just that part pixelated while it shows
                     cw_, ch_ = video_size(src_video)
@@ -1448,6 +1456,11 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
                     parts.append(f"[{cap_idx}:v]format=rgba[cp]")
                     parts.append(f"[{cur}][cp]overlay=0:{cy}:eof_action=pass[s3]")
                     cur = "s3"
+                if enhance:
+                    up = ("" if frame else            # the 9:16 frame is 1080 wide already
+                          "scale=-2:1080:flags=lanczos," if _sw >= _sh else "scale=1080:-2:flags=lanczos,")
+                    parts.append(f"[{cur}]{up}unsharp=5:5:0.6:5:5:0[en]")
+                    cur = "en"
                 parts.append(f"[{cur}]format=yuv420p[v]")
                 vfc = ";".join(parts)
             else:
