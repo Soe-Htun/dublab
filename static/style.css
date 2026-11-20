@@ -202,3 +202,11 @@ footer a{color:inherit}
 .gear[hidden]{display:none}
 button.gear{padding:0;cursor:pointer;font:inherit}
 #card-fix .cta{margin-top:12px}
+
+.fixnote{white-space:pre-wrap;line-height:1.7;margin:0 0 14px;padding:14px 16px;border-radius:14px;
+  background:rgba(101,148,242,.08);border:1px solid rgba(101,148,242,.35);font-size:15px}
+.fixnote.warn{background:rgba(251,191,36,.08);border-color:rgba(251,191,36,.45)}
+
+.fixappeal{margin:0 0 14px;padding:14px 16px;border-radius:14px;background:rgba(255,255,255,.04);border:1px solid var(--card-br)}
+.fixappeal-head{margin-bottom:8px}
+#fixappealtext{line-height:1.6;margin-bottom:12px;user-select:all}

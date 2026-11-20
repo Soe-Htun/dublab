@@ -160,6 +160,7 @@ function showProgress(jid) {
       if (j.status === 'done') {
         stopAll();
         showResult(jid, j.parts); $('#coverbox').hidden = true;   // covers go to Telegram; not shown here
+        showFixNote(j);
         showYtChild(j.yt_child);
       }
       if (j.status === 'failed') { stopAll(); showError(j.error || 'အမှားရှိတယ်', j.resumable ? jid : null); }
@@ -274,9 +275,41 @@ async function openDone(jid) {
   showResult(jid, j.parts); $('#coverbox').hidden = true; showYtChild(null);
 }
 
+// 🔧 a fix job: its explanation / appeal on the result card; when the video could not be
+// fixed by editing there is no new video — only the explanation is shown
+function showFixNote(j) {
+  const box = $('#fixnote');
+  const fix = j && j.kind === 'fix';
+  box.hidden = !(fix && j.fix_note);
+  if (box.hidden) { $('#resulthead').textContent = '🎉 ရပြီ!'; $('#fixappeal').hidden = true; return; }
+  // the note without the appeal (that has its own box with a copy button)
+  box.textContent = (j.fix_note || '').split('\n📝 Appeal')[0].trim();
+  const ap = $('#fixappeal');
+  ap.hidden = !j.fix_appeal;
+  if (j.fix_appeal) {
+    $('#fixappealtext').textContent = j.fix_appeal;
+    $('#fixcopy').onclick = async () => {
+      try { await navigator.clipboard.writeText(j.fix_appeal); }
+      catch (e) {                                   // older browsers: select and copy
+        const r = document.createRange(); r.selectNodeContents($('#fixappealtext'));
+        const s = getSelection(); s.removeAllRanges(); s.addRange(r); document.execCommand('copy');
+      }
+      $('#fixcopy').textContent = '✅ Copy ကူးပြီးပါပြီ';
+      setTimeout(() => { $('#fixcopy').textContent = '📋 Copy'; }, 2000);
+    };
+  }
+  box.classList.toggle('warn', !j.fix_changed);
+  const noVideo = !j.fix_changed;
+  $('#resulthead').textContent = noVideo ? '⚠️ ဗီဒီယို ပြင်လို့ မရပါ' : '🔧 ပြင်ပြီးပါပြီ';
+  ['#resultvideo', '#speedrow', '#download', '#parts'].forEach((s) => { const e = $(s); if (e && noVideo) e.hidden = true; });
+  if (noVideo) { $('#resultvideo').removeAttribute('src'); }
+}
+
 function showResult(jid, parts) {
   $('#card-progress').hidden = true;
   $('#card-result').hidden = false;
+  ['#resultvideo', '#speedrow'].forEach((s) => { const e = $(s); if (e) e.hidden = false; });
+  $('#fixnote').hidden = true; $('#fixappeal').hidden = true;
   lastJid = jid;
   $('#resultvideo').src = '/r/' + jid;
   setSpeed(1);

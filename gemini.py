@@ -709,8 +709,15 @@ _FOREIGN_SYL = re.compile(_FOREIGN.pattern + "[\u102B-\u103E\u1056-\u1059\u105E-
 _ORPHAN = re.compile(r"(^|(?<=\s))[\u102B-\u103E]+")     # marks left at the start of a word
 
 
+# whole words Gemini sometimes writes in Korean inside Burmese ("ဗီ디오" for ဗီဒီယို):
+# stripping the foreign letters left "ဗီ"
+_GARBLED = (("비디오", "ဗီဒီယို"), ("디오", "ဒီယို"))
+
+
 def fix_script(lines, api_key):
     lines = [(t or "").translate(_LOOKALIKE) for t in lines]
+    for bad, good in _GARBLED:
+        lines = [t.replace(bad, good) for t in lines]
     bad = [i for i, t in enumerate(lines) if has_foreign(t)]
     if not bad:
         return lines
@@ -769,14 +776,22 @@ Work out what to change in the video so it can be posted again. Answer with JSON
 {{"kind": "sensitive" | "copyright" | "gambling" | "misinformation" | "unoriginal" | "other",
   "cut": [[start_seconds, end_seconds], ...],
   "censor": true | false,
+  "fixable": true | false,
   "explain_mm": "...",
+  "advice_mm": "...",
   "appeal": "..."}}
 - "cut": time ranges to remove, ONLY when the message names times (e.g. YouTube's "0:45 - 1:20" copyright
   matches); convert mm:ss to seconds; otherwise [].
 - "censor": true when the problem is violence / blood / gore / nudity / sexual or other sensitive or mature
   content (it will be hidden with a mosaic).
-- "explain_mm": 2-3 short sentences in Burmese for the channel owner: what the problem is, what will be changed,
-  and what cannot be fixed by editing (e.g. unoriginal content or a copyright owner claiming the whole film).
+- "fixable": true only when cutting the named times and / or hiding blood / nudity can really solve it; false
+  for misinformation, unoriginal / reused content, a copyright owner claiming the whole film, spam, account or
+  other problems that editing the picture does not change.
+- "explain_mm": 2-3 short sentences in Burmese for the channel owner: what the problem is and what will be changed
+  (or why editing the video cannot solve it).
+- "advice_mm": 2-4 short Burmese lines with the next steps (e.g. appeal with the text below and wait for the result
+  before re-posting; do not re-post the same video; for a whole-film copyright claim, avoid films from that owner;
+  for unoriginal content, add more of your own commentary).
 - "appeal": a short, polite English appeal the owner can paste (it is a fictional film recap / review narrated in
   their own words). Do NOT describe the changes made (they are added after it, from what was really done) and
   do not claim fair use or any other legal conclusion. Never claim things that are not true."""
@@ -799,8 +814,10 @@ def analyze_warning(message, duration, api_key, shots=None):
         except (TypeError, ValueError, IndexError):
             pass
     explain = fix_script([str(data.get("explain_mm") or "").strip()], api_key)[0]   # stray foreign letters
+    advice = fix_script([str(data.get("advice_mm") or "").strip()], api_key)[0]
     return {"kind": str(data.get("kind") or "other"), "cut": cut, "censor": bool(data.get("censor")),
-            "explain_mm": explain, "appeal": str(data.get("appeal") or "").strip()}
+            "fixable": bool(data.get("fixable", True)), "explain_mm": explain, "advice_mm": advice,
+            "appeal": str(data.get("appeal") or "").strip()}
 
 
 COVER_PROMPT = """The numbered frames below (0 to {last}) come from one movie.

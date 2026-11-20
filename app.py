@@ -378,7 +378,7 @@ for _old in JOBS.iterdir():
 
 # what a finished job needs to be shown again (history, after a restart)
 _META_KEYS = ("id", "name", "title_mm", "status", "stage", "pct", "error", "ext", "parts",
-              "part_times", "covers", "covers_tt", "tt", "cover_pick", "created", "owner", "recap", "tg", "url", "files_gone", "yt_child_id", "kind", "out_name", "fix_note")
+              "part_times", "covers", "covers_tt", "tt", "cover_pick", "created", "owner", "recap", "tg", "url", "files_gone", "yt_child_id", "kind", "out_name", "fix_note", "fix_changed", "fix_appeal")
 
 
 def _save_meta(job):
@@ -559,7 +559,7 @@ def _fix_job(job):
     job["total"] = total
     job.update(stage="fixcheck", pct=5)
     jlog(job, f"🔧 fixing {job.get('out_name')} ({total / 60:.1f} min)")
-    plan = {"kind": "other", "cut": [], "censor": False, "explain_mm": "", "appeal": ""}
+    plan = {"kind": "other", "cut": [], "censor": False, "fixable": True, "explain_mm": "", "advice_mm": "", "appeal": ""}
     shots = [p.read_bytes() for p in sorted(d.glob("shot*.jpg"))]
     if (job.get("fix_msg") or shots) and key:
         try:
@@ -583,15 +583,21 @@ def _fix_job(job):
         mosaic_video(cur, out, spans, lambda f: _sp(job, 0.5 + 0.5 * f))
     elif cur != src:
         cur.replace(out)
-    else:
-        shutil.copy2(src, out)
-        if not cuts and not censor_on:
-            jlog(job, "nothing to change in the picture — see the explanation and appeal text")
+    changed = bool(cuts or spans)
+    job["fix_changed"] = changed
+    if not changed:
+        # nothing in the picture was changed: the same video is NOT sent back (re-posting
+        # it unchanged would only be flagged again) — just the explanation and the appeal
+        jlog(job, "⚠️ editing the video can't fix this — sending the explanation and appeal text only")
     for f in ("cut.mp4", "input.mp4"):
         (d / f).unlink(missing_ok=True)
-    note = ["🔧 " + (job.get("out_name") or "")]
+    note = [("🔧 " if changed else "⚠️ ဗီဒီယို ပြင်ရုံနဲ့ မဖြေရှင်းနိုင်ပါ — ") + (job.get("out_name") or "").replace(" (fixed)", "")]
     if plan["explain_mm"]:
         note += ["", plan["explain_mm"]]
+    if not changed:
+        note += ["", "❌ ဗီဒီယိုထဲမှာ ပြင်စရာ မတွေ့လို့ ဗီဒီယို အသစ် မထုတ်ပါ — အတူတူ ပြန်တင်ရင် ထပ်ပိတ်ခံရမှာပါ"]
+    if plan.get("advice_mm"):
+        note += ["", "👉 လုပ်ရမယ့် အဆင့်တွေ:", plan["advice_mm"]]
     if cuts:
         note += ["", "✂️ ဖြတ်ထုတ်လိုက်တာ: " + ", ".join(f"{a // 60:.0f}:{a % 60:02.0f}–{b // 60:.0f}:{b % 60:02.0f}" for a, b in sorted(cuts))]
     if spans:
@@ -602,12 +608,24 @@ def _fix_job(job):
             done.append("removed " + ", ".join(f"{a // 60:.0f}:{a % 60:02.0f}-{b // 60:.0f}:{b % 60:02.0f}" for a, b in sorted(cuts)))
         if spans:
             done.append(f"pixelated {len(spans)} sensitive moment(s)")
-        note += ["", "📝 Appeal (copy / paste):",
-                 plan["appeal"] + (" In this version I " + " and ".join(done) + "." if done else "")]
-    note += ["", "ဗီဒီယို အဟောင်းကို ဖျက်ပြီးမှ အသစ်ကို တင်ပါ (duplicate မဖြစ်အောင်)"]
+        job["fix_appeal"] = plan["appeal"] + (" In this version I " + " and ".join(done) + "." if done else "")
+        note += ["", "📝 Appeal (copy / paste):", job["fix_appeal"]]
+    if changed:
+        note += ["", "ဗီဒီယို အဟောင်းကို ဖျက်ပြီးမှ အသစ်ကို တင်ပါ (duplicate မဖြစ်အောင်)"]
     job["fix_note"] = "\n".join(note)
     (d / "fix.txt").write_text(job["fix_note"], encoding="utf-8")
     jlog(job, job["fix_note"])
+    if not changed:                    # no video: the note alone goes to Telegram
+        if job.get("telegram") and _settings.get("telegram_chat_id"):
+            try:
+                telegram.send_message(_settings["telegram_chat_id"], job["fix_note"])
+                job["tg"] = {"state": "done", "error": "", "pct": 100, "sent": 0, "how": "file"}
+            except Exception as e:  # noqa: BLE001
+                jlog(job, f"Telegram send failed: {e}")
+        job.update(status="done", stage="done", pct=100, files_gone=True)
+        _save_meta(job)
+        jlog(job, "done (explanation only) ✅")
+        return
     if job.get("telegram"):
         job["tg"] = {"state": "sending", "error": "", "pct": 0}
     job.update(status="done", stage="done", pct=100)
@@ -1516,6 +1534,8 @@ def job_status(jid):
                    gone=bool(job.get("files_gone")),
                    label=STAGE_LABEL.get(job["stage"], job["stage"]),
                    error=job["error"], resumable=_resumable(job), orig=bool(job.get("orig_audio")), kind=job.get("kind") or "",
+                   fix_note=job.get("fix_note") or "", fix_changed=bool(job.get("fix_changed", True)),
+                   fix_appeal=job.get("fix_appeal") or "",
                    yt_child=_child_info(job))
 
 
