@@ -613,6 +613,37 @@ def _risk_report(job):
     return sorted(out, key=lambda r: order[r["level"]])
 
 
+def _caption_times(job):
+    """When the film's own (burned-in) captions are on screen, on the video being
+    made: while someone talks in the film (its captions follow the speech) plus a little
+    before and after. For a recap the film's talk is mapped through its clips. None when
+    unknown (the band then stays on all the time)."""
+    talk = sorted((s["start"], s["end"]) for s in (job.get("segs") or []) if s.get("end", 0) > s.get("start", 0))
+    if not talk:
+        return None
+    pre, post = 0.4, 0.8
+    if job.get("recap") and job.get("recap_clips"):
+        out, t = [], 0.0
+        for c in job["recap_clips"]:
+            s, l = c[0], c[1]
+            o = c[2] if len(c) > 2 else l
+            k = o / l if l else 1.0
+            for a, b in talk:
+                if b + post > s and a - pre < s + l:
+                    out.append((t + max(0.0, a - pre - s) * k, t + min(l, b + post - s) * k))
+            t += o
+    else:
+        out = [(max(0.0, a - pre), b + post) for a, b in talk]
+    out.sort()
+    merged = []
+    for a, b in out:                  # close gaps under 1.5 s: no flicker between lines
+        if merged and a - merged[-1][1] < 1.5:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        elif b - a > 0.2:
+            merged.append((a, b))
+    return merged or None
+
+
 def _parse_ranges(text):
     """"1:20-1:45, 3:10–3:30" (or seconds) → [(80, 105), (190, 210)]."""
     out = []
@@ -1142,6 +1173,7 @@ def _recap_cut(job, voice_name):
         new.append({"start": t, "end": t + dur, "text": u["text"], "audio": str(p)})
         t += dur + GAP
     jlog(job, f"recap video: {total / 60:.1f} min")
+    job["recap_clips"] = clips          # (film start, length[, played length]) in recap order
     return out, new, total
 
 
@@ -1263,6 +1295,11 @@ def _voice_and_mux(job):
     sfx = "_v" if vh > vw else ""        # portrait video → its own positions
     if job.get("blur"):
         blur = _find_blur(job, src, sfx)
+        if blur:
+            when = _caption_times(job)
+            if when:
+                blur = {**blur, "when": when}
+                jlog(job, f"blur only while the film's own captions show ({len(when)} stretches)")
     hide = _find_logos(job, src)
     censor = _find_sensitive(job, src) if job.get("censor") else []
     job["censored"] = len(censor)

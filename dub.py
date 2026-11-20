@@ -1414,7 +1414,12 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
                                  "boxblur=luma_radius='min(h/4,4)':luma_power=2:"
                                  "chroma_radius='min(ch/4,2)':chroma_power=2[bs];"
                                  "[bs][bref]scale2ref=flags=bicubic[bz][bdrop];[bdrop]nullsink")
-                    parts.append(f"[bm][bz]overlay=0:H*{1 - b0 - bh:.4f}[s1]")
+                    # only while the film's own captions are on screen (= while someone talks
+                    # in it): no needless blur band over scenes without them
+                    when = blur.get("when")
+                    en = (":enable='" + "+".join(f"between(t,{a + lead:.2f},{b + lead:.2f})" for a, b in when) + "'"
+                          if when else "")
+                    parts.append(f"[bm][bz]overlay=0:H*{1 - b0 - bh:.4f}{en}[s1]")
                     cur = "s1"
                 if hide:          # the video's own logos: erased (delogo fills each box in from
                     sw, sh = video_size(src_video)            # its edges) — a blur left them readable
