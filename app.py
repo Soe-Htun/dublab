@@ -430,13 +430,17 @@ def _queue_youtube_full(parent):
     child = {k: parent[k] for k in keep if k in parent}
     # a LONG recap (narrated in our own words, ~80% of the film's length) — not a plain
     # dub of the whole film, which would look like a re-upload of someone else's video
-    long_min = max(parent.get("recap") or 0, round(parent.get("total", 0) * 0.85 / 60))   # ~80-90% is fine
+    # at least 80% of the film's own story (job["total"] is already without the ads,
+    # opening credits and end credits cut off in phase 1), aiming at ~85%
+    import math
+    long_min = max(parent.get("recap") or 0, math.ceil(parent.get("total", 0) * 0.80 / 60))
     child.update(status="queued", stage="queue", pct=0, error="", dir=d, id=jid, phase=1,
-                 review=False, keep_bg=False, intro=False, recap=long_min, recap_aim=1.0, split=0,
+                 review=False, keep_bg=False, intro=False, recap=long_min, recap_aim=0.85 / 0.80, recap_strict=True, split=0,
                  youtube=True, yt_only=True, have_src=True, yt_child=True, yt_parent=parent["id"], tg_src=None,
                  created=time.time())
     jobs[jid] = child
-    jlog(child, f"📺 YouTube long version of job {parent['id']}: a ~{long_min} min recap (~80% of the film)")
+    jlog(child, f"📺 YouTube long version of job {parent['id']}: a recap of at least {long_min} min "
+                f"(80%+ of the {parent.get('total', 0) / 60:.0f}-min film, aiming ~85%)")
     jlog(parent, f"📺 YouTube full version queued as job {jid} — it runs after this one")
     parent["yt_child_id"] = jid
     _save_failed(child)          # survives a restart (comes back as ▶️ resumable)
@@ -735,6 +739,7 @@ def _write_recap(job, utter, lang, api_key):
         beats = write_recap([(u["start"], u["text"]) for u in utter], mins, api_key,
                             LANG_NAMES.get(lang, lang), _settings["channel_name"] or None,
                             min_minutes=job["recap"], log=lambda m: jlog(job, m),
+                            slack=0 if job.get("recap_strict") else 5,
                             prog=lambda f: _sp(job, f))
     except RateLimited as e:
         raise ValueError("Gemini quota ဒီနေ့အတွက် ကုန်သွားပြီ — မနက်ဖြန် ပြန်စမ်းပါ" if e.daily else
