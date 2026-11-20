@@ -1119,7 +1119,7 @@ def _recap_tag(img, cx, cy, text=None):
     img.alpha_composite(layer)
 
 
-def render_frames(title, windows, out_dir, layout, logo=None, extra=30.0, tag=None):
+def render_frames(title, windows, out_dir, layout, logo=None, extra=30.0, tag=None, episode=None):
     """One 1080x1920 frame per part (dark background, channel logo, gold title
     "title - N" like the covers), with a see-through window where the picture goes.
     windows: [(start, end)] of each part on the video's timeline.
@@ -1144,7 +1144,7 @@ def render_frames(title, windows, out_dir, layout, logo=None, extra=30.0, tag=No
         img = base.copy().convert("RGB")
         title_cy = (top_y + vy - 30) // 2
         if title:                            # "Jaat - 1", "Jaat - 2"… like the covers
-            _gold_title(img, title, int(W * 0.9), W // 2, title_cy, 2, 104, part_suffix(i, n))
+            _gold_title(img, title, int(W * 0.9), W // 2, title_cy, 2, 104, part_suffix(i, n, episode))
         img = img.convert("RGBA")
         hole = Image.new("RGBA", (W, hv), (0, 0, 0, 0))
         img.paste(hole, (0, vy))             # the picture shows through here
@@ -2265,14 +2265,18 @@ def render_art_cover(art, title, out_jpg, portrait=False, logo=None, suffix=""):
     return Path(out_jpg)
 
 
-def part_suffix(i, n):
-    """What follows the title on part i of n: " - 1", " - 2"… and " - End" on the last."""
+def part_suffix(i, n, episode=None):
+    """What follows the title on part i of n: " - 1", " - 2"… and " - End" on the last.
+    For an episode of a series (episode=3): " - 3" when not split, else " - 3/1", " - 3/2"…
+    and " - 3/End" on the episode's last part (file names keep "-": "/" can't be in them)."""
+    if episode:
+        return f" - {episode}" if n <= 1 else (f" - {episode}/End" if i == n else f" - {episode}/{i}")
     if n <= 1:
         return ""
     return " - End" if i == n else f" - {i}"
 
 
-def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, blur=None, parts=1,
+def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, blur=None, parts=1, episode=None,
                 chooser=None, log=None, art=None, hide=None, picks=None):
     """The film's cover: 4 photos in a 2x2 grid with the title in the middle.
     With `chooser` (Gemini) the first photo is the main character and the rest
@@ -2282,7 +2286,7 @@ def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, bl
     if art:                       # an AI-drawn picture: same picture for every part
         names = ["cover1.jpg"] if parts <= 1 else [f"cover{i}.jpg" for i in range(1, parts + 1)]
         return [render_art_cover(art, title, out_dir / n, portrait, logo,
-                                 part_suffix(i, parts)) for i, n in enumerate(names, 1)]
+                                 part_suffix(i, parts, episode)) for i, n in enumerate(names, 1)]
     pick, focus = None, {}
     if chooser:
         try:
@@ -2334,9 +2338,9 @@ def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, bl
         pick = pick_cover_times(video, start, end, 2 if portrait else 4, samples=36, tmp=out_dir)
     if parts <= 1:
         return [render_collage(video, pick, title, out_dir / "cover1.jpg", portrait, logo, blur, hide=hide,
-                               focus=focus)]
+                               focus=focus, suffix=part_suffix(1, 1, episode))]
     return [render_collage(video, pick, title, out_dir / f"cover{i}.jpg", portrait, logo, blur,
-                           suffix=part_suffix(i, parts), hide=hide, focus=focus) for i in range(1, parts + 1)]
+                           suffix=part_suffix(i, parts, episode), hide=hide, focus=focus) for i in range(1, parts + 1)]
 
 
 # ---- recap version: cut the scenes that go with each narration beat ----

@@ -482,7 +482,7 @@ def _queue_youtube_full(parent):
     except OSError:
         shutil.copy2(parent["dir"] / name, d / name)
     keep = ("ext", "direction", "voice", "model", "outro", "cover", "logo", "name", "telegram", "owner",
-            "captions", "blur", "my_title", "no_title", "url", "segs", "seg_lang", "seg_engine", "lang", "total", "title_mm", "want_posts", "censor")
+            "captions", "blur", "my_title", "no_title", "url", "segs", "seg_lang", "seg_engine", "lang", "total", "title_mm", "want_posts", "censor", "episode")
     child = {k: parent[k] for k in keep if k in parent}
     # a LONG recap (narrated in our own words, ~80% of the film's length) — not a plain
     # dub of the whole film, which would look like a re-upload of someone else's video
@@ -1294,13 +1294,13 @@ def _voice_and_mux(job):
             picks = {}                    # one photo choice for both the YouTube and the TikTok covers
             covers = make_covers(src, job["title_mm"], d, job["total"] * 0.04, job["total"] * 0.9,
                                  portrait=bool(sfx or tt_only), blur=blur, hide=hide, logo=logo_png,
-                                 parts=1 if want_tt else nparts,      # the YouTube video stays whole
+                                 parts=1 if want_tt else nparts, episode=job.get("episode"),   # the YouTube video stays whole
                                  chooser=chooser, log=lambda m: jlog(job, m), art=art, picks=picks)
             job["covers"] = [c.name for c in covers]
             if want_tt:                  # 9:16 covers for the TikTok version
                 (d / "tt").mkdir(exist_ok=True)
                 tt = make_covers(src, job["title_mm"], d / "tt", job["total"] * 0.04, job["total"] * 0.9,
-                                 portrait=True, blur=blur, hide=hide, logo=logo_png, parts=nparts,
+                                 portrait=True, blur=blur, hide=hide, logo=logo_png, parts=nparts, episode=job.get("episode"),
                                  chooser=chooser, log=lambda m: jlog(job, m), picks=picks)
                 job["covers_tt"] = ["tt/" + c.name for c in tt]
             jlog(job, f"made {len(job['covers']) + len(job.get('covers_tt') or [])} cover image(s)")
@@ -1339,7 +1339,7 @@ def _voice_and_mux(job):
         try:
             bounds = [0.0, *cuts, total]
             main_frame["list"] = render_frames(job.get("title_mm") or "", list(zip(bounds, bounds[1:])),
-                                               d / "frames", main_frame, logo_png, tag=tag)
+                                               d / "frames", main_frame, logo_png, tag=tag, episode=job.get("episode"))
         except Exception as e:  # noqa: BLE001 - fall back to the normal 16:9 video
             jlog(job, f"TikTok frame failed ({str(e)[:150]}) — making a normal video")
             main_frame = None
@@ -1358,7 +1358,7 @@ def _voice_and_mux(job):
             frame = frame_layout(vw, vh)
             bounds = [0.0, *cuts, total]
             frame["list"] = render_frames(job.get("title_mm") or "", list(zip(bounds, bounds[1:])),
-                                          d / "frames", frame, logo_png, tag=tag)
+                                          d / "frames", frame, logo_png, tag=tag, episode=job.get("episode"))
             job["tt"] = _render(frame, "tiktok", _caps(frame["cap_w"], frame["cap_h"], "caps_tt"), cuts)
             job["part_times"] = list(zip([0.0, *cuts], [*cuts, total]))
         except Exception as e:  # noqa: BLE001 - the normal version is still there
@@ -1498,6 +1498,7 @@ def create_job():
     youtube = request.form.get("youtube", "0") == "1"  # TikTok 9:16 always; this adds the 16:9 YouTube one
     yt_full = youtube and request.form.get("ytmode") == "full"   # YouTube = long dub (~80%), TikTok = recap
     my_title = re.sub(r"\s+", " ", request.form.get("title") or "").strip()[:60]   # typed by the user
+    episode = re.sub(r"\D", "", request.form.get("episode") or "")[:3] or None     # 📚 a series' episode number
     no_title = request.form.get("show_title", "1") != "1"   # unticked: covers / frame without a title
     cover = True                                          # every video gets a cover
     logo = request.form.get("logo", "1") == "1"
@@ -1593,7 +1594,7 @@ def create_job():
                  "tg_src": tg_msg,
                  "id": jid, "telegram": send_tg, "owner": _admin_ok(),
                  "captions": captions, "blur": blur, "split": split, "youtube": youtube, "my_title": my_title, "no_title": no_title,
-                 "yt_full": yt_full and not orig_audio, "orig_audio": orig_audio, "want_posts": want_posts and send_tg, "censor": censor,
+                 "yt_full": yt_full and not orig_audio, "orig_audio": orig_audio, "want_posts": want_posts and send_tg, "censor": censor, "episode": episode,
                  "created": time.time()}
     jlog(jobs[jid], "uploaded " + re.sub(r"[\r\n]", " ", label)[:160])
     with lock:
@@ -2183,6 +2184,8 @@ def _start_posts(job):
             story = " ".join(u["text"] for u in job.get("utter") or [])
             job["posts"] = write_posts(job.get("title_mm") or "", job.get("name") or "", story, key,
                                        _settings.get("channel_name") or "Marco Recap")
+            if job.get("episode") and job["posts"].get("youtube_title"):     # 📚 "Title - 3"
+                job["posts"]["youtube_title"] = job["posts"]["youtube_title"].rstrip() + f" - {job['episode']}"
             (job["dir"] / "posts.txt").write_text(_posts_text(job), encoding="utf-8")
             jlog(job, "📝 upload texts written (TikTok / YouTube / Facebook)")
         except Exception as e:  # noqa: BLE001 - the video matters, not the texts
@@ -2358,7 +2361,9 @@ def _download_name(job, ext, part=None):
     name = re.sub(r"\s+", " ", name).strip(" .-_")
     if len(name) > 50:                                       # cut at a word boundary
         name = name[:50].rsplit(" ", 1)[0].strip(" .-_,") or name[:50]
-    return f"{name or 'dublab'} - mm" + (f"-{part}" if part else "") + ext
+    ep = job.get("episode")                                  # a series episode: "… - mm-3" / "… - mm-3-2"
+    num = f"-{ep}-{part}" if ep and part else f"-{ep}" if ep else f"-{part}" if part else ""
+    return f"{name or 'dublab'} - mm" + num + ext
 
 
 @app.get("/r/<jid>/cover/<int:n>")

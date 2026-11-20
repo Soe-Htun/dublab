@@ -26,8 +26,12 @@ CHUNK = 25
 PARALLEL = 6     # chunks translated at the same time (spread over the keys)
 
 
-NAME_RULE = """- CHARACTER NAMES: do NOT transliterate foreign character names. Give every character a familiar Burmese name,
-  and never refer to a main character only as "ဒီကောင်လေး", "ဒီကောင်မလေး", "သူ", etc. when a name fits. Preferred names:
+NAME_RULE = """- CHARACTER NAMES: call each character by their REAL name from the film — the name the dialogue uses (or the
+  title / description gives) — written in Burmese script the way Myanmar audiences would say it (e.g. Li Wei =
+  လီဝေ, Zhang Min = ကျန်းမင်, Raju = ရာဂျူး, Min-ho = မင်ဟို). Keep it short and easy (a family name + given name may
+  be shortened to the given name). Never refer to a main character only as "ဒီကောင်လေး", "ဒီကောင်မလေး", "သူ", etc.
+  ONLY for a character whose name is never said (or cannot be made out) give a familiar Burmese name. Preferred
+  names for those:
   young man / boy: ဂွေးတို, ကျော်ကြီး, စိုးကြီး, အောင်လေး
   young woman / girl: ဂွက်ထော်, မြမြ, ဖြူဖြူထွေး, လှလှ — and when there are more girls (e.g. one man
     and many girls): နှင်းနှင်း, ခိုင်လေး, ပိုပို, နှင်းမြ, ချယ်ရီ, သီသီ, ဇင်ဇင်, ချစ်ချစ်, ဝါဝါ, ယုယု, စုစု, အိအိ, နွေနွေ
@@ -38,7 +42,15 @@ NAME_RULE = """- CHARACTER NAMES: do NOT transliterate foreign character names. 
   CHINESE films only (Chinese-language films, Chinese dramas and Chinese AI movies): two Chinese-sounding names
   may be used as well — လင်ဖုန်း (a young man) and ရှောင်မိန် (a young woman). Never use these two for any other
   film (Korean, Indian, Thai, English…): there use only the Burmese names above.
-  Use these first, in this order, for the most important characters; for more characters pick other SHORT, common
+  FAMOUS CHARACTERS keep the names Myanmar audiences already know — never rename them: e.g. Journey to the West
+  (西游记): Sun Wukong / the Monkey King = စွန်းဝူခုန်း (or ဝူခုန်း), Tang Sanzang / the monk = ဆရာတော် (always — not
+  his name), Zhu Bajie / Pigsy = ပါကျယ်, Sha Wujing / Sandy = ရှားဝူကျင်း, Guanyin = ကွမ်ယင်မယ်တော်, the Buddha =
+  ဘုရားရှင်, the Jade Emperor = နတ်ဘုရင်, the white dragon horse = နဂါးဖြူမြင်း; the DEMONS / monsters are called by
+  what they are, as the film names them, in Burmese: e.g. the Bull Demon King = နွားဘီလူးမင်း, Princess Iron Fan =
+  သံယပ်တောင်မင်းသမီး, Red Boy = ကလေးနီ, the White Bone Demon = အရိုးဖြူ မိစ္ဆာမ, Spider demons = ပင့်ကူ မိစ္ဆာမတွေ,
+  a nameless one = "မိစ္ဆာ" / "ဘီလူး" (e.g. "ကျားဘီလူး", "မြွေမိစ္ဆာ"); also other well-known legends, historical figures, superheroes and famous anime /
+  film characters (Judge Bao = ပေါင်ချင်းထျန်, Superman, Naruto…) — use their familiar name.
+  Use these preferred names first, in this order, for the most important UNNAMED characters; for more characters pick other SHORT, common
   Burmese names (one or two syllables, often doubled like နှင်းနှင်း) that are easy to tell apart.
   Each character keeps the SAME name every time; never give two characters the same name.
   FAMILY of a main character (the hero OR the heroine, e.g. "ဂွက်ထော်ရဲ့ အမေ"): a parent or relative with a small
@@ -512,8 +524,9 @@ def _chars(beats):
 
 CAST_PROMPT = """Below is the transcript of a movie ({lang}, from speech recognition — may contain mistakes).
 Ignore advertisements cut into the video (betting sites, apps, channel promos) — their people are not characters.
-List its characters (at most 12, most important first) and give each one a Burmese name for a
-Myanmar recap narration.
+List its characters (at most 12, most important first) with the name to use for each in a Myanmar recap
+narration: their real name from the film written in Burmese (listen for names in the dialogue — people call each
+other by name), or a preferred Burmese name only for a character never named.
 
 """ + NAME_RULE + """
 

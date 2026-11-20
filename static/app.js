@@ -79,6 +79,7 @@ $('#go').addEventListener('click', () => {
   { const m = document.querySelector('input[name="ytmode"]:checked'); fd.append('ytmode', m && $('#recapchk').checked ? m.value : 'recap'); }
   fd.append('show_title', $('#titlechk').checked ? '1' : '0');
   fd.append('title', ($('#covertitle_in').value || '').trim());
+  fd.append('episode', ($('#episode_in').value || '').replace(/\D/g, ''));
   fd.append('cover', '1');            // every video gets a cover
   fd.append('split', split);
   const orig = $('#fullchk').checked && $('#origchk').checked;
@@ -648,7 +649,7 @@ function syncRecap() {
   syncRecap(); syncOrig(); try { syncYtMode(); partsNote(); } catch (e) { /* not ready */ }
   // 🖼️ title: on for a recap, off for the plain video (can still be changed by hand)
   $('#titlechk').checked = $('#recapchk').checked;
-  $('#covertitle_in').hidden = !$('#titlechk').checked;
+  $('#covertitle_in').hidden = !$('#titlechk').checked; $('#eprow').hidden = !$('#titlechk').checked;
   // 📺 YouTube 16:9: on for the plain video, off for a recap (can still be changed by hand)
   $('#ytchk').checked = $('#fullchk').checked;
   try { syncYtMode(); partsNote(); } catch (e) { /* not ready */ }
@@ -664,7 +665,7 @@ try {
 syncRecap(); syncOrig();
 
 // 🖼️ title: the text box only matters while "add a title" is ticked
-$('#titlechk').addEventListener('change', () => { $('#covertitle_in').hidden = !$('#titlechk').checked; });
+$('#titlechk').addEventListener('change', () => { $('#covertitle_in').hidden = $('#eprow').hidden = !$('#titlechk').checked; });
 
 // after a refresh: bring back the job this browser was following while it is still
 // running, waiting for review, or failed (▶️ resume); a finished one is forgotten
