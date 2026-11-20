@@ -1004,9 +1004,12 @@ LOGO_PROMPT = """These frames come from one video. Find the LOGOS that sit at th
 (some show only from time to time):
 TV-channel bugs, studio or uploader logos, watermarks (also faint / semi-transparent ones), channel names,
 website addresses and promotional text lines (e.g. "download free at www…", sponsor/betting ads) anywhere in the frame.
+ALWAYS include OTHER PLATFORMS' watermarks — they get a re-upload demonetised: the TikTok / Douyin (抖音) logo with
+its "@username" (it jumps between two corners: list BOTH places), YouTube, Facebook, Instagram, Kuaishou (快手),
+Bilibili, Xigua, CapCut / 剪映 logos and "@name" handles.
 Do NOT include subtitles or captions, and nothing that is part of the scene (signs, posters, clothes, screens).
 For each logo give its box on a 0-1000 scale (x from the LEFT edge, y from the TOP edge), covering the whole logo
-with its outline. At most 4 logos.
+with its outline (a platform logo together with its @username). At most 6 logos.
 Answer with JSON only: {"logos": [{"x0": <n>, "y0": <n>, "x1": <n>, "y1": <n>}, ...]} — or {"logos": []} when there is none."""
 
 
@@ -1029,7 +1032,7 @@ def find_logos(jpegs, api_key):
         banner = w <= 0.8 and h <= 0.08          # a thin promo text line across the top/bottom
         if 0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1 and (small or banner):
             boxes.append((x0, y0, x1, y1))
-    return boxes[:4]
+    return boxes[:6]
 
 
 # ---- AI-drawn cover art (like popular recap thumbnails) ----

@@ -340,7 +340,8 @@ def _find_logos(job, src):
     try:
         total = job["total"]
         # 1000 px wide: small corner logos and website text are missed at 640
-        boxes = find_logos(sample_frames(src, total * 0.05, total * 0.95, 8, width=1000), key)
+        # 14 frames: a TikTok watermark that jumps between corners is caught in both places
+        boxes = find_logos(sample_frames(src, total * 0.05, total * 0.95, 14, width=1000), key)
     except Exception as e:  # noqa: BLE001 - never lose the dub over this
         jlog(job, f"logo search failed ({str(e)[:120]}) — not blurring logos")
         return []
