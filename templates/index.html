@@ -76,7 +76,13 @@
       <p class="drop-sub">Warning ထိထားတဲ့ အပိုင်း ဖိုင် · MP4 / MOV</p>
       <input type="file" id="fixfile" accept="video/*" hidden>
     </div>
-    <label class="fixfile"><input type="file" id="fixshots" accept="image/*" multiple> <span id="fixshotsname">📸 Warning ရဲ့ screenshot တင်ပါ (၁ ပုံ ဒါမှမဟုတ် အများကြီး)</span></label>
+    <div class="drop shotdrop" id="shotdrop">
+      <div class="drop-icon">📸</div>
+      <p class="drop-title" id="fixshotsname">Warning ရဲ့ screenshot <span class="dim">— နှိပ်၍ ရွေးပါ၊ ဆွဲချပါ၊ ဒါမှမဟုတ် ⌘V နဲ့ paste</span></p>
+      <p class="drop-sub">၅ ပုံအထိ · PNG / JPG</p>
+      <input type="file" id="fixshots" accept="image/*" multiple hidden>
+    </div>
+    <div class="shotgrid" id="shotgrid" hidden></div>
     <textarea id="fixmsg" rows="3" placeholder="(မထည့်လည်း ရ) Warning စာကို paste လုပ်ပါ — screenshot နဲ့ တွဲထည့်လည်း ရ"></textarea>
     <input type="text" id="fixcuts" placeholder="✂️ ဖြတ်ချင်တဲ့ အချိန် (မထည့်လည်း ရ) — ဥပမာ 1:20-1:45, 3:10-3:30">
     <div class="optgrid chips" id="fixcensor">

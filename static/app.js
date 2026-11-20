@@ -737,10 +737,37 @@ $('#tgchk').addEventListener('change', () => { $('#postsopts').hidden = $('#tgro
   });
   finput.addEventListener('change', () => setFixFile(finput.files[0]));
   // 📸 screenshots of the warning (the model reads the text in them)
-  $('#fixshots').addEventListener('change', () => {
-    const n = $('#fixshots').files.length;
-    $('#fixshotsname').textContent = n ? `📸 screenshot ${n} ပုံ ရွေးထားတယ် — ပြောင်းချင်ရင် နှိပ်ပါ`
-      : '📸 Warning ရဲ့ screenshot တင်ပါ (၁ ပုံ ဒါမှမဟုတ် အများကြီး)';
+  // a drop box like the video one, with thumbnails (each removable); ⌘V pastes a screenshot
+  let shots = [];
+  const sdrop = $('#shotdrop'), sinput = $('#fixshots'), grid = $('#shotgrid');
+  const drawShots = () => {
+    if (!grid) return;
+    grid.innerHTML = ''; grid.hidden = !shots.length;
+    shots.forEach((f, i) => {
+      const t = document.createElement('div'); t.className = 'shot';
+      const img = document.createElement('img'); img.src = URL.createObjectURL(f); img.alt = '';
+      const x = document.createElement('button'); x.type = 'button'; x.className = 'shotx'; x.setAttribute('aria-label', 'remove');
+      x.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+      x.addEventListener('click', (e) => { e.stopPropagation(); shots.splice(i, 1); drawShots(); });
+      t.append(img, x); grid.append(t);
+    });
+  };
+  const addShots = (files) => {
+    [...files].filter((f) => f.type.startsWith('image/')).forEach((f) => { if (shots.length < 5) shots.push(f); });
+    drawShots();
+  };
+  // (an older page without the drop box still works: the plain file input is used)
+  if (sdrop) {
+    sdrop.addEventListener('click', () => sinput.click());
+    ['dragover', 'dragenter'].forEach((e) => sdrop.addEventListener(e, (ev) => { ev.preventDefault(); sdrop.classList.add('over'); }));
+    ['dragleave', 'drop'].forEach((e) => sdrop.addEventListener(e, (ev) => { ev.preventDefault(); sdrop.classList.remove('over'); }));
+    sdrop.addEventListener('drop', (ev) => addShots(ev.dataTransfer.files));
+  }
+  if (sinput) sinput.addEventListener('change', () => { addShots(sinput.files); if (sdrop) sinput.value = ''; });
+  document.addEventListener('paste', (ev) => {
+    if ($('#card-fix').hidden) return;
+    const imgs = [...(ev.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
+    if (imgs.length) { ev.preventDefault(); addShots(imgs); }
   });
   document.querySelectorAll('#fixcensor .opt').forEach((b) => b.addEventListener('click', () => {
     document.querySelectorAll('#fixcensor .opt').forEach((x) => x.classList.remove('selected'));
@@ -752,7 +779,7 @@ $('#tgchk').addEventListener('change', () => { $('#postsopts').hidden = $('#tgro
     const fd = new FormData();
     fd.append('video', f);
     fd.append('message', $('#fixmsg').value);
-    [...$('#fixshots').files].slice(0, 5).forEach((s) => fd.append('shots', s));
+    shots.slice(0, 5).forEach((s, i) => fd.append('shots', s, s.name || `shot${i + 1}.png`));
     fd.append('cuts', $('#fixcuts').value);
     fd.append('censor', fixCensor);
     fd.append('telegram', '1');

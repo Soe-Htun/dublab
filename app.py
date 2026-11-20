@@ -172,6 +172,7 @@ STAGE_LABEL = {
 STAGE_RANGE = {"download": (1, 4), "transcribe": (8, 44), "voice": (60, 90)}  # overall pct span
 
 app = Flask(__name__)
+app.config["TEMPLATES_AUTO_RELOAD"] = True   # an edited page shows on refresh, without a restart
 app.config["MAX_CONTENT_LENGTH"] = max_mb() * 1024 * 1024
 
 jobs = {}
