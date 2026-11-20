@@ -664,19 +664,37 @@ $('#tgchk').addEventListener('change', () => { $('#postsopts').hidden = $('#tgro
   if (!open) return;
   if (admKey()) open.hidden = false;
   let fixCensor = 'auto';
-  open.addEventListener('click', () => { $('#card-upload').hidden = true; $('#card-fix').hidden = false; });
-  $('#fixback').addEventListener('click', () => { $('#card-fix').hidden = true; $('#card-upload').hidden = false; });
-  $('#fixfile').addEventListener('change', () => {
-    const f = $('#fixfile').files[0];
-    $('#fixfilename').textContent = f ? '🎬 ' + f.name : '📁 ဗီဒီယို ဖိုင် ရွေးပါ';
+  const back = $('#fixback'), fdrop = $('#fixdrop'), finput = $('#fixfile');
+  let fixFile = null;
+  // Same as the settings page: the back arrow sits in the header while the fix card is open.
+  const showFix = (on) => {
+    $('#card-fix').hidden = !on; $('#card-upload').hidden = on; back.hidden = !on;
+    window.scrollTo(0, 0);
+  };
+  open.addEventListener('click', () => showFix(true));
+  back.addEventListener('click', () => showFix(false));
+  // Same drop box as step 1: click to pick or drag a file in.
+  const setFixFile = (f) => {
+    fixFile = f || null;
+    $('#fixfilename').innerHTML = fixFile
+      ? '✅ ' + fixFile.name.replace(/[&<>"']/g, (c) => '&#' + c.charCodeAt(0) + ';') + ' <span class="dim">— ပြောင်းချင်ရင် နှိပ်ပါ</span>'
+      : 'နှိပ်၍ ရွေးပါ <span class="dim">သို့မဟုတ် ဖိုင်ဆွဲချပါ</span>';
+  };
+  fdrop.addEventListener('click', () => finput.click());
+  ['dragover', 'dragenter'].forEach((e) => fdrop.addEventListener(e, (ev) => { ev.preventDefault(); fdrop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach((e) => fdrop.addEventListener(e, (ev) => { ev.preventDefault(); fdrop.classList.remove('over'); }));
+  fdrop.addEventListener('drop', (ev) => {
+    const f = ev.dataTransfer.files[0];
+    if (f && f.type.startsWith('video/')) setFixFile(f);
   });
+  finput.addEventListener('change', () => setFixFile(finput.files[0]));
   document.querySelectorAll('#fixcensor .opt').forEach((b) => b.addEventListener('click', () => {
     document.querySelectorAll('#fixcensor .opt').forEach((x) => x.classList.remove('selected'));
     b.classList.add('selected'); fixCensor = b.dataset.v;
   }));
   $('#fixgo').addEventListener('click', () => {
-    const f = $('#fixfile').files[0];
-    if (!f) { $('#fixfilename').textContent = '⚠️ ဗီဒီယို ဖိုင် အရင် ရွေးပါ'; return; }
+    const f = fixFile;
+    if (!f) { $('#fixfilename').innerHTML = '⚠️ ဗီဒီယို ဖိုင် အရင် ရွေးပါ'; return; }
     const fd = new FormData();
     fd.append('video', f);
     fd.append('message', $('#fixmsg').value);
@@ -692,7 +710,7 @@ $('#tgchk').addEventListener('change', () => { $('#postsopts').hidden = $('#tgro
       btn.disabled = false; btn.textContent = '🔧 ပြင်မယ်';
       let j = {}; try { j = JSON.parse(xhr.responseText); } catch (e) {}
       if (xhr.status !== 200 || !j.job_id) { showError(j.error || 'upload failed'); return; }
-      $('#card-fix').hidden = true;
+      $('#card-fix').hidden = true; back.hidden = true;
       showProgress(j.job_id);
     };
     xhr.onerror = () => { btn.disabled = false; btn.textContent = '🔧 ပြင်မယ်'; showError('upload failed'); };
