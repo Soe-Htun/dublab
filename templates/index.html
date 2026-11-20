@@ -58,6 +58,23 @@
     </div>
     <video id="preview" controls playsinline hidden></video>
     <p id="filemeta" class="filemeta" hidden></p>
+    <button class="ghost fixopen" id="fixopen" type="button" hidden>🔧 Warning ထိထားတဲ့ ဗီဒီယို ပြင်မယ် <span class="dim">(အပိုင်း တစ်ခုတည်း ပြန်ထုတ်မယ်)</span></button>
+  </section>
+
+  <!-- 🔧 fix one flagged part -->
+  <section class="card" id="card-fix" hidden>
+    <h2>🔧 Warning ထိထားတဲ့ ဗီဒီယို ပြင်မယ်</h2>
+    <p class="note">TikTok / YouTube / Facebook က warning ပေးထားတဲ့ <b>အပိုင်း ဖိုင်</b> (Telegram ကနေ download လုပ်ထားတာ) နဲ့ <b>warning စာ</b> ကို ထည့်ပါ — AI က စစ်ပြီး အဲ့ အပိုင်းကိုပဲ ပြင်ပေးမယ် (frame၊ logo၊ စာတန်း၊ cover အတူတူ)</p>
+    <label class="fixfile"><input type="file" id="fixfile" accept="video/*"> <span id="fixfilename">📁 ဗီဒီယို ဖိုင် ရွေးပါ</span></label>
+    <textarea id="fixmsg" rows="4" placeholder="Warning စာကို ဒီမှာ paste လုပ်ပါ (ဥပမာ: This video is not eligible for the For You feed… / Copyright claim 1:20 - 1:45)"></textarea>
+    <input type="text" id="fixcuts" placeholder="✂️ ဖြတ်ချင်တဲ့ အချိန် (မထည့်လည်း ရ) — ဥပမာ 1:20-1:45, 3:10-3:30">
+    <div class="optgrid chips" id="fixcensor">
+      <button class="opt selected" data-v="auto" type="button"><span class="opt-label">🫣 Mosaic: AI ဆုံးဖြတ်</span></button>
+      <button class="opt" data-v="1" type="button"><span class="opt-label">အမြဲ လုပ်</span></button>
+      <button class="opt" data-v="0" type="button"><span class="opt-label">မလုပ်</span></button>
+    </div>
+    <button class="cta" id="fixgo" type="button">🔧 ပြင်မယ်</button>
+    <button class="ghost center" id="fixback" type="button">← နောက်သို့</button>
   </section>
 
   <!-- STEP 2: options -->
@@ -190,6 +207,8 @@
     <div class="bar"><span id="barfill"></span></div>
     <p class="stage" id="stagelabel">တန်းစီနေတယ်</p>
     <ul class="stages" id="stages">
+      <li data-s="fixcheck" hidden>🔧 Warning ကို စစ်ခြင်း</li>
+      <li data-s="fixing" hidden>🔧 ဗီဒီယို ပြင်ခြင်း</li>
       <li data-s="download">ဗီဒီယို ဒေါင်းခြင်း</li>
       <li data-s="audio">အသံထုတ်ယူခြင်း</li>
       <li data-s="transcribe">စကားပြောမှတ်သားခြင်း</li>

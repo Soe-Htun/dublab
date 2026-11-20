@@ -1,7 +1,8 @@
 // Face boxes (and subtitle text) with Apple's Vision framework (no extra packages).
 // Usage: faces img1.jpg img2.jpg …  →  one line per image:
-//   [T|]x0,y0,x1,y1;x0,y0,x1,y1   (0-1, y from the TOP; "T|" when the lower part
-//   of the picture has a line of text — a subtitle — on it)
+//   [T|]x0,y0,x1,y1[,c];x0,y0,x1,y1   (0-1, y from the TOP; "T|" when the lower part
+//   of the picture has a line of text — a subtitle — on it; ",c" when that face's
+//   eyes are closed / blinking)
 import Foundation
 import Vision
 import AppKit
@@ -9,14 +10,24 @@ import AppKit
 for path in CommandLine.arguments.dropFirst() {
     guard let img = NSImage(contentsOfFile: path),
           let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else { print(""); continue }
-    let faces = VNDetectFaceRectanglesRequest()
+    let faces = VNDetectFaceLandmarksRequest()
     let text = VNRecognizeTextRequest()
     text.recognitionLevel = .fast
     let handler = VNImageRequestHandler(cgImage: cg, options: [:])
     try? handler.perform([faces, text])
+    // how open an eye is: its outline's height / width (open ≈ 0.3+, closed ≈ 0.1)
+    func openness(_ r: VNFaceLandmarkRegion2D?) -> Double? {
+        guard let p = r?.normalizedPoints, p.count >= 4 else { return nil }
+        let xs = p.map { Double($0.x) }, ys = p.map { Double($0.y) }
+        let w = (xs.max()! - xs.min()!)
+        return w > 0 ? (ys.max()! - ys.min()!) / w : nil
+    }
     let boxes = (faces.results ?? []).map { f -> String in
         let b = f.boundingBox   // origin bottom-left, normalised
-        return String(format: "%.3f,%.3f,%.3f,%.3f", b.minX, 1 - b.maxY, b.maxX, 1 - b.minY)
+        var s = String(format: "%.3f,%.3f,%.3f,%.3f", b.minX, 1 - b.maxY, b.maxX, 1 - b.minY)
+        let eyes = [openness(f.landmarks?.leftEye), openness(f.landmarks?.rightEye)].compactMap { $0 }
+        if !eyes.isEmpty && eyes.reduce(0, +) / Double(eyes.count) < 0.17 { s += ",c" }
+        return s
     }
     // a subtitle: text in the lower 40%, reasonably wide
     let sub = (text.results ?? []).contains { o in

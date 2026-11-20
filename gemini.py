@@ -759,6 +759,48 @@ def find_sensitive(frames, step, api_key):
     return out
 
 
+FIX_PROMPT = """A Burmese movie-recap channel posted a video ({duration:.0f} seconds long, a recap of a film
+narrated in Burmese, with a frame, a logo and Burmese captions). TikTok / YouTube / Facebook flagged it.
+The platform's message (may be in any language, may be copied from a screenshot):
+---
+{message}
+---
+Work out what to change in the video so it can be posted again. Answer with JSON only:
+{{"kind": "sensitive" | "copyright" | "gambling" | "misinformation" | "unoriginal" | "other",
+  "cut": [[start_seconds, end_seconds], ...],
+  "censor": true | false,
+  "explain_mm": "...",
+  "appeal": "..."}}
+- "cut": time ranges to remove, ONLY when the message names times (e.g. YouTube's "0:45 - 1:20" copyright
+  matches); convert mm:ss to seconds; otherwise [].
+- "censor": true when the problem is violence / blood / gore / nudity / sexual or other sensitive or mature
+  content (it will be hidden with a mosaic).
+- "explain_mm": 2-3 short sentences in Burmese for the channel owner: what the problem is, what will be changed,
+  and what cannot be fixed by editing (e.g. unoriginal content or a copyright owner claiming the whole film).
+- "appeal": a short, polite English appeal the owner can paste (it is a fictional film recap / review narrated in
+  their own words). Do NOT describe the changes made (they are added after it, from what was really done) and
+  do not claim fair use or any other legal conclusion. Never claim things that are not true."""
+
+
+def analyze_warning(message, duration, api_key):
+    """The platform's warning → {kind, cut [(a, b)], censor, explain_mm, appeal}."""
+    raw = _call(FIX_PROMPT.format(message=(message or "(no message given)")[:4000], duration=duration),
+                api_key, max_tokens=2048)
+    m = re.search(r"\{.*\}", raw, re.S)
+    data = json.loads(re.sub(r",\s*([}\]])", r"\1", m.group(0))) if m else {}
+    cut = []
+    for r in data.get("cut") or []:
+        try:
+            a, b = float(r[0]), float(r[1])
+            if 0 <= a < b:
+                cut.append((a, min(b, duration)))
+        except (TypeError, ValueError, IndexError):
+            pass
+    explain = fix_script([str(data.get("explain_mm") or "").strip()], api_key)[0]   # stray foreign letters
+    return {"kind": str(data.get("kind") or "other"), "cut": cut, "censor": bool(data.get("censor")),
+            "explain_mm": explain, "appeal": str(data.get("appeal") or "").strip()}
+
+
 COVER_PROMPT = """The numbered frames below (0 to {last}) come from one movie.
 Never pick a frame with blood, gore or nudity for anything below.
 First work out its THREE MOST IMPORTANT CHARACTERS: the MAIN character (the protagonist, the person who appears
@@ -773,7 +815,8 @@ Then answer with JSON only, no other text:
   and chest; the face about a quarter to a third of the frame's height) with the WHOLE HEAD inside the frame and
   space above it — NEVER a close-up where the face fills the frame or the forehead/chin is cut off, never a face
   turned away, blurred or half hidden, and the face should be in the middle part of the frame (not at the left or
-  right edge); a dramatic expression is a plus.
+  right edge); the EYES must be OPEN — never a frame where the person blinks or has the eyes closed or
+  half-closed; a dramatic expression is a plus.
 - "scenes": up to 4 striking frames of the movie's key action or setting with people in them, best first.
 - "action": up to 4 frames that show what the movie is ABOUT with the main character in it, doing the movie's
   main thing (a football movie: the hero playing football on the pitch; boxing: in the ring; a heist: the robbery;

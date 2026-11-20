@@ -129,7 +129,7 @@ function showProgress(jid) {
   if (vo) vo.hidden = $('#fullchk').checked && $('#origchk').checked;   // 🔊 original sound: no voicing
   const mu = document.querySelector('#stages li[data-s="music"]');
   if (mu) mu.hidden = true;           // no background-music step any more
-  const order = ['download', 'audio', 'transcribe', 'translate', 'review', 'music', 'voice', 'recap', 'mux', 'split'];
+  const order = ['fixcheck', 'fixing', 'download', 'audio', 'transcribe', 'translate', 'review', 'music', 'voice', 'recap', 'mux', 'split'];
   addRings();
   const stopLog = startLiveLog(jid);
   const stopAll = () => { clearInterval(pollTimer); stopLog(); };
@@ -141,6 +141,9 @@ function showProgress(jid) {
       $('#barfill').style.width = j.pct + '%';
       const vli = document.querySelector('#stages li[data-s="voice"]');
       if (vli && j.orig) vli.hidden = true;            // 🔊 original sound (also after a refresh)
+      if (j.kind === 'fix') document.querySelectorAll('#stages li').forEach((li) => {
+        li.hidden = !['fixcheck', 'fixing'].includes(li.dataset.s);
+      });
       $('#stagelabel').textContent = j.label + (j.pct ? ` · ${j.pct}%` : '');
       document.querySelectorAll('#stages li').forEach((li) => {
         const s = li.dataset.s;
@@ -654,3 +657,45 @@ syncYtMode();
 
 // 📝 upload texts only make sense when the videos go to Telegram
 $('#tgchk').addEventListener('change', () => { $('#postsopts').hidden = $('#tgrow').hidden || !$('#tgchk').checked; });
+
+// ---- 🔧 fix one flagged part (owner only: it needs the admin key) ----
+(function () {
+  const open = $('#fixopen');
+  if (!open) return;
+  if (admKey()) open.hidden = false;
+  let fixCensor = 'auto';
+  open.addEventListener('click', () => { $('#card-upload').hidden = true; $('#card-fix').hidden = false; });
+  $('#fixback').addEventListener('click', () => { $('#card-fix').hidden = true; $('#card-upload').hidden = false; });
+  $('#fixfile').addEventListener('change', () => {
+    const f = $('#fixfile').files[0];
+    $('#fixfilename').textContent = f ? '🎬 ' + f.name : '📁 ဗီဒီယို ဖိုင် ရွေးပါ';
+  });
+  document.querySelectorAll('#fixcensor .opt').forEach((b) => b.addEventListener('click', () => {
+    document.querySelectorAll('#fixcensor .opt').forEach((x) => x.classList.remove('selected'));
+    b.classList.add('selected'); fixCensor = b.dataset.v;
+  }));
+  $('#fixgo').addEventListener('click', () => {
+    const f = $('#fixfile').files[0];
+    if (!f) { $('#fixfilename').textContent = '⚠️ ဗီဒီယို ဖိုင် အရင် ရွေးပါ'; return; }
+    const fd = new FormData();
+    fd.append('video', f);
+    fd.append('message', $('#fixmsg').value);
+    fd.append('cuts', $('#fixcuts').value);
+    fd.append('censor', fixCensor);
+    fd.append('telegram', '1');
+    const btn = $('#fixgo'); btn.disabled = true; btn.textContent = '⬆️ တင်နေတယ်…';
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/fix');
+    xhr.setRequestHeader('X-Admin-Key', admKey());
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) btn.textContent = `⬆️ တင်နေတယ် ${Math.round(e.loaded * 100 / e.total)}%`; };
+    xhr.onload = () => {
+      btn.disabled = false; btn.textContent = '🔧 ပြင်မယ်';
+      let j = {}; try { j = JSON.parse(xhr.responseText); } catch (e) {}
+      if (xhr.status !== 200 || !j.job_id) { showError(j.error || 'upload failed'); return; }
+      $('#card-fix').hidden = true;
+      showProgress(j.job_id);
+    };
+    xhr.onerror = () => { btn.disabled = false; btn.textContent = '🔧 ပြင်မယ်'; showError('upload failed'); };
+    xhr.send(fd);
+  });
+})();

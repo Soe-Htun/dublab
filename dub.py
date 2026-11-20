@@ -1153,6 +1153,58 @@ def render_frames(title, windows, out_dir, layout, logo=None, extra=30.0, tag=No
     return lst
 
 
+def _mosaic_parts(censor, w, h, cur, lead=0.0):
+    """ffmpeg filter steps that pixelate each (start, end, x0, y0, x1, y1) box of the
+    picture (w x h) while it shows. Returns (steps, label of the result)."""
+    parts = []
+    w, h = w // 2 * 2, h // 2 * 2
+    for k, (a, b, x0, y0, x1, y1) in enumerate(censor):
+        bx, by = int(w * x0) // 2 * 2, int(h * y0) // 2 * 2
+        bw = min(max(16, int(w * (x1 - x0)) // 2 * 2), w - bx)
+        bh = min(max(16, int(h * (y1 - y0)) // 2 * 2), h - by)
+        when = f"between(t,{a + lead:.2f},{b + lead:.2f})"
+        parts.append(f"[{cur}]split[cm{k}][cc{k}];"
+                     f"[cc{k}]crop={bw}:{bh}:{bx}:{by},"          # mosaic, like TV censoring
+                     f"scale='max(2,trunc(iw/24))':'max(2,trunc(ih/24))',"
+                     f"scale={bw}:{bh}:flags=neighbor[cb{k}];"
+                     f"[cm{k}][cb{k}]overlay={bx}:{by}:enable='{when}'[cz{k}]")
+        cur = f"cz{k}"
+    return parts, cur
+
+
+def cut_ranges(src, out, cuts, progress=None):
+    """The video without the given (start, end) ranges (picture and sound)."""
+    total = probe_duration(src)
+    keep, t = [], 0.0
+    for a, b in sorted(cuts):
+        if a > t + 0.05:
+            keep.append((t, a))
+        t = max(t, b)
+    if t < total - 0.05:
+        keep.append((t, total))
+    if not keep:
+        raise RuntimeError("nothing would be left of the video")
+    fc = []
+    for i, (a, b) in enumerate(keep):
+        fc.append(f"[0:v]trim={a:.3f}:{b:.3f},setpts=PTS-STARTPTS[v{i}];"
+                  f"[0:a]atrim={a:.3f}:{b:.3f},asetpts=PTS-STARTPTS[a{i}]")
+    fc.append("".join(f"[v{i}][a{i}]" for i in range(len(keep))) + f"concat=n={len(keep)}:v=1:a=1[v][a]")
+    enc = ["-c:v", "h264_videotoolbox", "-b:v", "3500k"] if _has_encoder("h264_videotoolbox") else ["-c:v", "libx264", "-crf", "21"]
+    run_progress(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-filter_complex", ";".join(fc),
+                  "-map", "[v]", "-map", "[a]", *enc, "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k",
+                  "-movflags", "+faststart", str(out)], sum(b - a for a, b in keep), progress)
+
+
+def mosaic_video(src, out, censor, progress=None):
+    """A finished video with a mosaic over each (start, end, box) — sound untouched."""
+    w, h = video_size(src)
+    steps, cur = _mosaic_parts(censor, w, h, "0:v")
+    enc = ["-c:v", "h264_videotoolbox", "-b:v", "3500k"] if _has_encoder("h264_videotoolbox") else ["-c:v", "libx264", "-crf", "21"]
+    run_progress(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-filter_complex", ";".join(steps),
+                  "-map", f"[{cur}]", "-map", "0:a?", *enc, "-pix_fmt", "yuv420p", "-c:a", "copy",
+                  "-movflags", "+faststart", str(out)], probe_duration(src), progress)
+
+
 def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
         captions=None, blur=None, keyframes=None, lead=0.0, tail=0.0, intro_img=None, hide=None,
         frame=None, progress=None, censor=None):
@@ -1251,21 +1303,10 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
             if draw:
                 parts = [f"[0:v]{vf.replace(',format=yuv420p', '')}[s0]"]
                 cur = "s0"
-                if censor:        # blood / nudity: just that part blurred while it shows
+                if censor:        # blood / nudity: just that part pixelated while it shows
                     cw_, ch_ = video_size(src_video)
-                    cw_, ch_ = cw_ // 2 * 2, ch_ // 2 * 2
-                    for k, (a, b, x0, y0, x1, y1) in enumerate(censor):
-                        bx, by = int(cw_ * x0) // 2 * 2, int(ch_ * y0) // 2 * 2
-                        bw = max(16, int(cw_ * (x1 - x0)) // 2 * 2)
-                        bh = max(16, int(ch_ * (y1 - y0)) // 2 * 2)
-                        bw, bh = min(bw, cw_ - bx), min(bh, ch_ - by)
-                        when = f"between(t,{a + lead:.2f},{b + lead:.2f})"
-                        parts.append(f"[{cur}]split[cm{k}][cc{k}];"
-                                     f"[cc{k}]crop={bw}:{bh}:{bx}:{by},"      # mosaic, like TV censoring
-                                     f"scale='max(2,trunc(iw/24))':'max(2,trunc(ih/24))',"
-                                     f"scale={bw}:{bh}:flags=neighbor[cb{k}];"
-                                     f"[cm{k}][cb{k}]overlay={bx}:{by}:enable='{when}'[cz{k}]")
-                        cur = f"cz{k}"
+                    steps, cur = _mosaic_parts(censor, cw_, ch_, cur, lead)
+                    parts += steps
                 if blur:
                     b0, bh = float(blur["bottom"]), float(blur["height"])
                     by = f"ih*{1 - b0 - bh:.4f}"
@@ -2038,14 +2079,16 @@ def detect_faces(jpegs):
         line = out[i] if i < len(out) else ""
         texted = line.startswith("T|")
         line = line[2:] if texted else line
-        boxes = []
+        boxes, closed = [], []
         for part in filter(None, line.split(";")):
+            vals = part.split(",")
             try:
-                x0, y0, x1, y1 = (float(v) for v in part.split(","))
+                x0, y0, x1, y1 = (float(v) for v in vals[:4])
                 boxes.append((x0, y0, x1, y1))
+                closed.append(len(vals) > 4 and vals[4] == "c")
             except ValueError:
                 pass
-        res.append({"faces": boxes, "subtitle": texted})
+        res.append({"faces": boxes, "closed": closed, "subtitle": texted})
     return res
 
 
@@ -2079,7 +2122,11 @@ def _cover_times_by_ai(video, start, end, chooser, samples=30):
             # the biggest face in each frame (the person the shot is about)
             "faces": {times[i]: max(fs["faces"], key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
                       for i, fs in enumerate(faces) if fs["faces"]},
-            "subtitled": {times[i] for i, fs in enumerate(faces) if fs["subtitle"]}}
+            "subtitled": {times[i] for i, fs in enumerate(faces) if fs["subtitle"]},
+            # the main face has its eyes shut (a blink): such shots go last
+            "blink": {times[i] for i, fs in enumerate(faces) if fs["faces"] and fs.get("closed")
+                      and fs["closed"][max(range(len(fs["faces"])), key=lambda k: (fs["faces"][k][2] - fs["faces"][k][0])
+                                                                                    * (fs["faces"][k][3] - fs["faces"][k][1]))]}}
 
 
 def render_art_cover(art, title, out_jpg, portrait=False, logo=None, suffix=""):
@@ -2150,9 +2197,10 @@ def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, bl
                 fh, cx = b[3] - b[1], (b[0] + b[2]) / 2
                 return 0 if 0.15 <= fh <= 0.45 and 0.15 <= cx <= 0.85 and b[1] > 0.03 else 2
             subbed = ai.get("subtitled", set())          # frames with a subtitle line on them go last
-            hero = sorted(hero, key=lambda t: (t in subbed, good(t)))
-            action = sorted(action, key=lambda t: t in subbed)
-            others = sorted(others, key=lambda t: t in subbed)
+            blink = ai.get("blink", set())               # …and so do faces with their eyes shut
+            hero = sorted(hero, key=lambda t: (t in blink, t in subbed, good(t)))
+            action = sorted(action, key=lambda t: (t in blink, t in subbed))
+            others = sorted(others, key=lambda t: (t in blink, t in subbed))
             focus = {t: (b[0] + b[2]) / 2 for t, b in boxes.items()}   # crop around the face
             if portrait:          # TikTok: the main character's face on top, the movie's main action below
                 top = (hero or action or others)[:1]   # (one action photo alone often had no face in it)

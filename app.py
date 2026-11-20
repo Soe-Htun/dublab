@@ -22,11 +22,11 @@ from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tt
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
-                 build_recap_video, make_covers, mux, run, frames_every, synthesize, speech_regions, fit_cues_to_speech, probe_duration, probe_url, separate_music, split_points,
+                 build_recap_video, make_covers, mux, run, frames_every, cut_ranges, mosaic_video, synthesize, speech_regions, fit_cues_to_speech, probe_duration, probe_url, separate_music, split_points,
                  split_video, transcribe)
 from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, find_movie_bounds, pick_cover_frames, translate_lines,
                     write_cover_scene, write_intro, write_recap, write_title, movie_name,
-                    transcribe_burmese, write_posts, find_sensitive)
+                    transcribe_burmese, write_posts, find_sensitive, analyze_warning)
 
 # Gemini TTS key rotation.
 # GEMINI_TTS_API_KEYS is comma-separated; falls back to the single GEMINI_API_KEY.
@@ -109,6 +109,8 @@ def max_mb():
 # dub at this volume, 0-1; 0 = no background at all
 BG_VOLUME = float(os.environ.get("DUBLAB_BG_VOLUME") or 0.8)
 TTL = 24 * 3600        # keep results a day
+KEEP_SMALL = 7 * 24 * 3600   # a job whose videos went to Telegram is only covers + text: kept a week,
+                             # so 🔧 fixing one of its parts still finds that part's cover
 
 # ---- abuse protection (public site) ----
 MAX_QUEUE = 15          # max jobs waiting in line
@@ -153,6 +155,8 @@ STAGE_LABEL = {
     "audio": "အသံထုတ်ယူနေတယ်",
     "transcribe": "စကားပြောမှတ်နေတယ်",
     "translate": "ဘာသာပြန်နေတယ်",
+    "fixcheck": "ပြဿနာကို စစ်နေတယ်",
+    "fixing": "ဗီဒီယိုကို ပြင်နေတယ်",
     "review": "ဘာသာပြန်စာ ပြင်ဖို့ စောင့်နေတယ်",
     "music": "နောက်ခံ music ခွဲထုတ်နေတယ်",
     "voice": "အသံဖော်နေတယ်",
@@ -374,7 +378,7 @@ for _old in JOBS.iterdir():
 
 # what a finished job needs to be shown again (history, after a restart)
 _META_KEYS = ("id", "name", "title_mm", "status", "stage", "pct", "error", "ext", "parts",
-              "part_times", "covers", "covers_tt", "tt", "cover_pick", "created", "owner", "recap", "tg", "url", "files_gone", "yt_child_id")
+              "part_times", "covers", "covers_tt", "tt", "cover_pick", "created", "owner", "recap", "tg", "url", "files_gone", "yt_child_id", "kind", "out_name", "fix_note")
 
 
 def _save_meta(job):
@@ -413,7 +417,8 @@ def _load_saved_jobs():
     for f in JOBS.glob("*/job.json"):
         try:
             meta = json.loads(f.read_text())
-            if meta.get("status") == "done" and time.time() - meta.get("created", 0) < TTL:
+            if meta.get("status") == "done" and time.time() - meta.get("created", 0) < (
+                    KEEP_SMALL if meta.get("files_gone") else TTL):
                 meta["dir"] = f.parent
                 jobs.setdefault(meta["id"], meta)
             elif meta.get("status") in ("processing", "queued", "review"):
@@ -436,7 +441,8 @@ def sweep_old():
     now = time.time()
     for jid, job in list(jobs.items()):
         old = (now - job.get("failed_at", job["created"]) > RESUME_KEEP if job["status"] == "failed"
-               else now - job["created"] > TTL and job["status"] in ("done", "review"))
+               else now - job["created"] > (KEEP_SMALL if job.get("files_gone") else TTL)
+               and job["status"] in ("done", "review"))
         if old:
             shutil.rmtree(job["dir"], ignore_errors=True)
             jobs.pop(jid, None)
@@ -497,7 +503,9 @@ def _queue_youtube_full(parent):
 def process_job(jid):
     job = jobs[jid]
     try:
-        if job.get("phase") == 2:
+        if job.get("kind") == "fix":
+            _fix_job(job)
+        elif job.get("phase") == 2:
             _voice_and_mux(job)
         else:
             _transcribe_and_translate(jid, job)
@@ -524,6 +532,143 @@ def process_job(jid):
         # keep everything for an hour so ▶️ resume can go on from here
         # (the sweep deletes it after RESUME_KEEP)
         _save_failed(job)
+
+
+def _parse_ranges(text):
+    """"1:20-1:45, 3:10–3:30" (or seconds) → [(80, 105), (190, 210)]."""
+    out = []
+    for a, b in re.findall(r"(\d+(?::\d{1,2}){0,2}(?:\.\d+)?)\s*[-–~to]+\s*(\d+(?::\d{1,2}){0,2}(?:\.\d+)?)", text or ""):
+        def sec(v):
+            n = 0.0
+            for p in v.split(":"):
+                n = n * 60 + float(p)
+            return n
+        if sec(b) > sec(a):
+            out.append((sec(a), sec(b)))
+    return out
+
+
+def _fix_job(job):
+    """🔧 A part that TikTok / YouTube / Facebook flagged: read the warning, then cut
+    the named time ranges out and / or pixelate blood & nudity — on the finished
+    video itself (frame, logo and captions stay), with the original part's cover."""
+    d = job["dir"]
+    src = d / "input.mp4"
+    key = os.environ.get("GEMINI_API_KEY")
+    total = probe_duration(src)
+    job["total"] = total
+    job.update(stage="fixcheck", pct=5)
+    jlog(job, f"🔧 fixing {job.get('out_name')} ({total / 60:.1f} min)")
+    plan = {"kind": "other", "cut": [], "censor": False, "explain_mm": "", "appeal": ""}
+    if job.get("fix_msg") and key:
+        try:
+            plan = analyze_warning(job["fix_msg"], total, key)
+            jlog(job, f"warning: {plan['kind']} · cut {plan['cut'] or 'nothing'} · mosaic {'yes' if plan['censor'] else 'no'}")
+        except Exception as e:  # noqa: BLE001 - the ticked options still apply
+            jlog(job, f"reading the warning failed: {str(e)[:150]}")
+    cuts = plan["cut"] + _parse_ranges(job.get("fix_cuts"))
+    censor_on = {"1": True, "0": False}.get(job.get("fix_censor"), plan["censor"])
+    _sp(job, 1)
+    job.update(stage="fixing", pct=40)
+    cur = src
+    if cuts:
+        jlog(job, "cutting out " + ", ".join(f"{a // 60:.0f}:{a % 60:04.1f}–{b // 60:.0f}:{b % 60:04.1f}" for a, b in sorted(cuts)))
+        cut_ranges(cur, d / "cut.mp4", cuts, lambda f: _sp(job, 0.4 * f))
+        cur = d / "cut.mp4"
+        job["total"] = probe_duration(cur)
+    out = d / "dubbed.mp4"
+    spans = _find_sensitive(job, cur) if censor_on else []
+    if spans:
+        mosaic_video(cur, out, spans, lambda f: _sp(job, 0.5 + 0.5 * f))
+    elif cur != src:
+        cur.replace(out)
+    else:
+        shutil.copy2(src, out)
+        if not cuts and not censor_on:
+            jlog(job, "nothing to change in the picture — see the explanation and appeal text")
+    for f in ("cut.mp4", "input.mp4"):
+        (d / f).unlink(missing_ok=True)
+    note = ["🔧 " + (job.get("out_name") or "")]
+    if plan["explain_mm"]:
+        note += ["", plan["explain_mm"]]
+    if cuts:
+        note += ["", "✂️ ဖြတ်ထုတ်လိုက်တာ: " + ", ".join(f"{a // 60:.0f}:{a % 60:02.0f}–{b // 60:.0f}:{b % 60:02.0f}" for a, b in sorted(cuts))]
+    if spans:
+        note += ["", f"🫣 mosaic လုပ်ထားတဲ့ နေရာ {len(spans)} ခု"]
+    if plan["appeal"]:
+        done = []                                  # what was really changed, in plain words
+        if cuts:
+            done.append("removed " + ", ".join(f"{a // 60:.0f}:{a % 60:02.0f}-{b // 60:.0f}:{b % 60:02.0f}" for a, b in sorted(cuts)))
+        if spans:
+            done.append(f"pixelated {len(spans)} sensitive moment(s)")
+        note += ["", "📝 Appeal (copy / paste):",
+                 plan["appeal"] + (" In this version I " + " and ".join(done) + "." if done else "")]
+    note += ["", "ဗီဒီယို အဟောင်းကို ဖျက်ပြီးမှ အသစ်ကို တင်ပါ (duplicate မဖြစ်အောင်)"]
+    job["fix_note"] = "\n".join(note)
+    (d / "fix.txt").write_text(job["fix_note"], encoding="utf-8")
+    jlog(job, job["fix_note"])
+    if job.get("telegram"):
+        job["tg"] = {"state": "sending", "error": "", "pct": 0}
+    job.update(status="done", stage="done", pct=100)
+    _save_meta(job)
+    jlog(job, "done ✅")
+    if job.get("telegram"):
+        threading.Thread(target=_telegram_send, args=(job,), daemon=True).start()
+
+
+def _find_part_cover(filename):
+    """The cover of the part a re-uploaded file came from ("… - mm-2.mp4",
+    "… - mm-tiktok-2.mp4"), while that job is still kept. Path or None."""
+    for j in list(jobs.values()):
+        if j.get("kind") == "fix" or j.get("status") != "done":
+            continue
+        try:
+            for i, (_, name) in enumerate(_outputs(j), 1):
+                if name == filename:
+                    which, k = _out_kind(j, i)
+                    return _cover_file(j, k, which)
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
+@app.post("/api/fix")
+def create_fix_job():
+    """🔧 Re-upload a flagged part with the platform's warning: only that part is fixed."""
+    if not _admin_ok():
+        return jsonify(error="admin password လိုတယ်"), 403
+    f = request.files.get("video")
+    if not f or not f.filename:
+        return jsonify(error="ပြင်မယ့် ဗီဒီယို ဖိုင်ကို ရွေးပါ"), 400
+    jid = uuid.uuid4().hex[:12]
+    d = JOBS / jid
+    d.mkdir(parents=True)
+    src = d / "input.mp4"
+    f.save(src)
+    try:
+        if not has_video_stream(src):
+            raise ValueError("ဗီဒီယိုဖိုင် မဟုတ်ဘူး")
+    except Exception as e:  # noqa: BLE001
+        shutil.rmtree(d, ignore_errors=True)
+        return jsonify(error=clean_err(e)), 400
+    filename = os.path.basename(f.filename)
+    stem = os.path.splitext(filename)[0]
+    job = {"status": "queued", "stage": "queue", "pct": 0, "error": "", "dir": d, "ext": ".mp4", "id": jid,
+           "kind": "fix", "name": stem, "out_name": stem + " (fixed).mp4", "owner": True,
+           "fix_msg": (request.form.get("message") or "")[:4000], "fix_cuts": request.form.get("cuts") or "",
+           "fix_censor": request.form.get("censor") or "auto",
+           "telegram": request.form.get("telegram") == "1" and telegram.configured(),
+           "created": time.time()}
+    cover = _find_part_cover(filename)
+    if cover:
+        shutil.copy2(cover, d / "cover1.jpg")
+        job["covers"] = ["cover1.jpg"]
+    jobs[jid] = job
+    jlog(job, f"uploaded {filename} for fixing" + (" · its cover found" if cover else " · its cover not found (job older than a day)"))
+    with lock:
+        queue.append(jid)
+        lock.notify()
+    return jsonify(job_id=jid)
 
 
 def burmese_chunks(wav, piece=300):
@@ -1358,7 +1503,7 @@ def job_status(jid):
                    name=job.get("name", ""), created=int(job.get("created", 0)),
                    gone=bool(job.get("files_gone")),
                    label=STAGE_LABEL.get(job["stage"], job["stage"]),
-                   error=job["error"], resumable=_resumable(job), orig=bool(job.get("orig_audio")),
+                   error=job["error"], resumable=_resumable(job), orig=bool(job.get("orig_audio")), kind=job.get("kind") or "",
                    yt_child=_child_info(job))
 
 
@@ -1856,6 +2001,8 @@ def _outputs(job):
     """[(path, download name)] — one file, or the parts of a split video;
     then the TikTok (9:16) version's file(s), when one was made."""
     d = job["dir"]
+    if job.get("out_name"):                       # 🔧 a fixed part keeps its own name
+        return [(d / "dubbed.mp4", job["out_name"])]
     if job.get("parts"):
         outs = [(d / f, _download_name(job, ".mp4", i)) for i, f in enumerate(job["parts"], 1)]
     else:
@@ -2012,7 +2159,7 @@ def _telegram_send(job):
             tg["pct"] = int((i + 1) * 100 / len(outs))
             tg["sent"] = i + 1
         tg["how"] = "link" if "link" in hows else "file"
-        text = _posts_text(job)
+        text = job.get("fix_note") or _posts_text(job)
         if text:
             try:
                 telegram.send_message(chat, text)
