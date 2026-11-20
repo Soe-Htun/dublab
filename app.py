@@ -3,6 +3,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import subprocess
 import threading
 import time
@@ -1090,6 +1091,41 @@ def worker():
 
 
 threading.Thread(target=worker, daemon=True, name="worker").start()
+
+
+def _busy():
+    """A job is queued / running, or videos are still going to Telegram."""
+    for j in list(jobs.values()):
+        if j.get("status") in ("queued", "processing"):
+            return True
+        if (j.get("tg") or {}).get("state") == "sending" or (j.get("tg_pre") or {}).get("state") == "uploading":
+            return True
+    return False
+
+
+def _stay_awake():
+    """☕ macOS: while there is work (a job, a Telegram upload) the Mac must not
+    fall asleep — sleep stopped uploads half-way. `caffeinate -i` keeps it awake
+    (the screen may still turn off) and is stopped as soon as the work is done;
+    -w ties it to this server, so it never outlives it. Closing a MacBook's lid
+    still sleeps it."""
+    if sys.platform != "darwin" or not shutil.which("caffeinate"):
+        return
+    proc = None
+    while True:
+        try:
+            busy = _busy()
+            if busy and (proc is None or proc.poll() is not None):
+                proc = subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())])
+            elif not busy and proc is not None and proc.poll() is None:
+                proc.terminate()
+                proc = None
+        except Exception:  # noqa: BLE001 - never let this take the server down
+            pass
+        time.sleep(15)
+
+
+threading.Thread(target=_stay_awake, daemon=True, name="awake").start()
 
 
 @app.get("/")
