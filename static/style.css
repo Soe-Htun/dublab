@@ -242,3 +242,34 @@ button.gear{padding:0;cursor:pointer;font:inherit}
 .eprow input:focus{outline:none;border-color:var(--acc)}
 .eprow .dim{flex:1;min-width:200px;font-size:13px}
 .eprow[hidden]{display:none}
+
+/* confirm dialog (static/dialog.js) */
+.dlg-back{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:16px;
+  background:rgba(3,4,10,.62);backdrop-filter:blur(6px);opacity:0;transition:opacity .15s}
+.dlg-back.in{opacity:1} .dlg-back.out{opacity:0}
+.dlg{position:relative;width:min(420px,100%);padding:26px 22px 18px;border-radius:20px;text-align:center;
+  background:#15151f;border:1px solid var(--card-br);box-shadow:0 24px 60px rgba(0,0,0,.55);
+  transform:translateY(8px) scale(.98);transition:transform .15s}
+.dlg-back.in .dlg{transform:none}
+.dlg-ic{width:52px;height:52px;margin:0 auto 12px;border-radius:50%;display:grid;place-items:center;font-size:24px}
+.dlg-ic.danger{color:#f87171;background:rgba(248,113,113,.12);border:1px solid rgba(248,113,113,.35)}
+.dlg-ic.primary{color:#8fb2ff;background:rgba(101,148,242,.12);border:1px solid rgba(101,148,242,.35)}
+.dlg h3{font-size:18px;margin-bottom:8px}
+.dlg p{color:var(--dim);line-height:1.6;font-size:14.5px;margin-bottom:20px}
+.dlg-btns{display:flex;gap:10px}
+.dlg-btns button{flex:1;padding:12px;border-radius:12px;font:inherit;font-weight:700;cursor:pointer;transition:filter .15s,background .15s}
+.dlg-cancel{background:rgba(255,255,255,.06);border:1px solid var(--card-br);color:var(--txt)}
+.dlg-cancel:hover{background:rgba(255,255,255,.1)}
+.dlg-ok{border:0;color:#fff;display:inline-flex;align-items:center;justify-content:center;gap:8px}
+.dlg-ok.danger{background:#dc2626} .dlg-ok.danger:hover{filter:brightness(1.12)}
+.dlg-ok.primary{background:var(--grad)} .dlg-ok.primary:hover{filter:brightness(1.08)}
+.dlg-btns button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.iconbtn{display:inline-flex;align-items:center;justify-content:center;gap:8px}
+
+/* the page's own stop button: a destructive action, so red */
+#stopjob{color:#f87171;border-color:rgba(248,113,113,.45);background:rgba(248,113,113,.08)}
+#stopjob:hover{color:#fff;background:#dc2626;border-color:#dc2626}
+.dlg-x{position:absolute;top:12px;right:12px;width:32px;height:32px;display:grid;place-items:center;border-radius:9px;
+  background:transparent;border:0;color:var(--dim);cursor:pointer;transition:color .15s,background .15s}
+.dlg-x:hover{color:var(--txt);background:rgba(255,255,255,.08)}
+.dlg h3{padding:0 28px}

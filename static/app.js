@@ -544,7 +544,8 @@ $('#tg-keybtn').addEventListener('click', () => {
 });
 let tgSent = false;
 $('#tg-btn').addEventListener('click', async () => {
-  if (tgSent && !confirm('Telegram ကို ပို့ပြီးသားပါ — ထပ်ပို့မလား?')) return;
+  if (tgSent && !(await askConfirm({ title: 'Telegram ကို ထပ်ပို့မလား?', icon: 'send', tone: 'primary',
+    message: 'ပို့ပြီးသားပါ' }))) return;
   $('#tg-btn').disabled = true;
   try {
     const r = await fetch('/api/jobs/' + tgJid + '/telegram' + (tgSent ? '?again=1' : ''),
@@ -696,7 +697,9 @@ $('#ytchk').addEventListener('change', () => { try { partsNote(); } catch (e) { 
 
 // ⏹ stop the running job and start over (it would otherwise come back after a refresh)
 $('#stopjob').addEventListener('click', async () => {
-  if (!confirm('ဒီ dub ကို ရပ်ပြီး အသစ်ပြန်လုပ်မလား? လုပ်ပြီးသမျှ ပျက်သွားမယ်')) return;
+  const yes = await askConfirm({ title: 'ရပ်ပြီး အသစ်ပြန်လုပ်မလား?', icon: 'restart',
+    message: 'လုပ်ပြီးသမျှ ပျက်သွားမယ်၊ ဆက်လုပ်လို့ မရတော့ဘူး' });
+  if (!yes) return;
   let jid = null;
   try { jid = localStorage.getItem(JOBKEY); localStorage.removeItem(JOBKEY); } catch (e) {}
   if (jid) { try { await fetch('/api/jobs/' + jid + '/cancel', { method: 'POST' }); } catch (e) {} }

@@ -69,7 +69,7 @@ function renderList() {
       `<div class="stars">${stars}</div>` +
       `<div class="msg">${esc(r.message || '—')}</div>`;
     el.querySelector('.del').addEventListener('click', async () => {
-      if (!confirm('ဒီ review ကို ဖျက်မလား?')) return;
+      if (!(await askConfirm({ title: 'ဒီ review ကို ဖျက်မလား?', icon: 'trash', message: 'ပြန်ယူလို့ မရတော့ဘူး' }))) return;
       try {
         const dr = await fetch('/admin/api/reviews/' + encodeURIComponent(r.id || '') +
           '?key=' + encodeURIComponent(key), { method: 'DELETE' });
@@ -176,7 +176,7 @@ $('#logofile').addEventListener('change', async () => {
   $('#logofile').value = '';
 });
 $('#logodel').addEventListener('click', async () => {
-  if (!confirm('Logo ကို ဖျက်မလား?')) return;
+  if (!(await askConfirm({ title: 'Logo ကို ဖျက်မလား?', icon: 'trash', message: 'နောက် ဗီဒီယိုတွေမှာ logo မပါတော့ဘူး' }))) return;
   const r = await fetch('/admin/api/logo?key=' + encodeURIComponent(key), { method: 'DELETE' });
   if (r.ok) showLogo(false);
 });
@@ -224,7 +224,7 @@ $('#tg-connect').addEventListener('click', () => {
   tgConnect(t, $('#tg-connect'));
 });
 $('#tg-disconnect').addEventListener('click', async () => {
-  if (!confirm('Telegram bot ကို Disconnect လုပ်မလား? (ပြန်ချိတ်ရင် token ပြန်ထည့်ရမယ်)')) return;
+  if (!(await askConfirm({ title: 'Telegram bot ကို ဖြုတ်မလား?', icon: 'unplug', message: 'ပြန်ချိတ်ရင် token ပြန်ထည့်ရမယ်' }))) return;
   await fetch('/api/telegram/disconnect?key=' + encodeURIComponent(key), { method: 'POST' }).catch(() => {});
   tgSay('✅ Disconnect လုပ်ပြီးပြီ — ပြန်ချိတ်ချင်ရင် token ထည့်ပြီး Connect နှိပ်ပါ'); loadTelegram();
 });
