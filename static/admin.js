@@ -234,3 +234,11 @@ load();
 setInterval(() => { if (!document.hidden) load(); }, 30000);
 
 $('#speakspeed').addEventListener('input', () => { $('#speakspeedv').textContent = (+$('#speakspeed').value).toFixed(2) + 'x'; });
+
+// fill each slider's track up to its thumb (also when a value is set from the server)
+function fillRange(el) { const p = (el.value - el.min) * 100 / (el.max - el.min); el.style.setProperty('--fill', p + '%'); }
+document.querySelectorAll('.setinput input[type=range]').forEach((el) => {
+  fillRange(el); el.addEventListener('input', () => fillRange(el));
+  new MutationObserver(() => fillRange(el)).observe(el, { attributes: true });
+});
+setInterval(() => document.querySelectorAll('.setinput input[type=range]').forEach(fillRange), 500);

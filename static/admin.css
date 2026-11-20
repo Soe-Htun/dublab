@@ -71,3 +71,12 @@
 .danger{color:#f87171 !important;border-color:rgba(248,113,113,.45) !important;background:rgba(248,113,113,.08) !important}
 .danger:hover{color:#fff !important;background:rgba(239,68,68,.85) !important;border-color:#ef4444 !important}
 .del{display:inline-grid;place-items:center;width:32px;height:30px;border-radius:9px;cursor:pointer;border:1px solid}
+
+/* sliders: a filled track up to the thumb (brand gradient), a smooth round thumb */
+.setinput input[type=range]{-webkit-appearance:none;appearance:none;width:160px;height:6px;padding:0;border:0;border-radius:99px;cursor:pointer;
+  background:linear-gradient(90deg,var(--p1),var(--p2)) 0/var(--fill,50%) 100% no-repeat,rgba(255,255,255,.12)}
+.setinput input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;border-radius:50%;background:#fff;
+  border:3px solid var(--acc);box-shadow:0 2px 8px rgba(0,0,0,.4);transition:transform .15s}
+.setinput input[type=range]:active::-webkit-slider-thumb{transform:scale(1.15)}
+.setinput input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:#fff;border:3px solid var(--acc)}
+.setinput b{min-width:52px;text-align:right}
