@@ -48,23 +48,27 @@
       <div class="logorow">
         <div class="logobox" id="logobox"><span class="dim" id="logonone">logo မရှိသေးဘူး</span><img id="logoimg" alt="logo" hidden></div>
         <div class="logobtns">
-          <label class="mini filebtn">📤 ပုံတင်မယ်<input type="file" id="logofile" accept="image/png,image/jpeg,image/webp" hidden></label>
-          <button class="mini" id="logodel" hidden>🗑️ ဖျက်မယ်</button>
+          <label class="mini filebtn"><svg class="ic" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V5"/><path d="m7 10 5-5 5 5"/><path d="M5 20h14"/></svg> ပုံတင်မယ်<input type="file" id="logofile" accept="image/png,image/jpeg,image/webp" hidden></label>
+          <button class="mini danger" id="logodel" hidden><svg class="ic" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/><path d="M10 11v6M14 11v6"/></svg> ဖျက်မယ်</button>
         </div>
       </div>
     </div>
     <label class="setrow" for="logopos">
       <span>📍 Logo နေရာ</span>
       <select id="logopos" class="setselect">
-        <option value="top-right">↗️ ညာ အပေါ်</option>
-        <option value="top-left">↖️ ဘယ် အပေါ်</option>
-        <option value="bottom-right">↘️ ညာ အောက်</option>
-        <option value="bottom-left">↙️ ဘယ် အောက်</option>
+        <option value="top-right">↗ ညာ အပေါ်</option>
+        <option value="top-left">↖ ဘယ် အပေါ်</option>
+        <option value="bottom-right">↘ ညာ အောက်</option>
+        <option value="bottom-left">↙ ဘယ် အောက်</option>
       </select>
     </label>
     <label class="setrow" for="logosize">
       <span>📏 Logo အရွယ်အစား</span>
       <span class="setinput"><input type="range" id="logosize" min="5" max="30" step="1"> <b id="logosizev">12%</b></span>
+    </label>
+    <label class="setrow" for="speakspeed">
+      <span>🗣️ အသံ အမြန်နှုန်း <span class="dim">(1.00 = AI အသံရဲ့ ပုံမှန် · 1.20 = ၂၀% မြန်)</span></span>
+      <span class="setinput"><input type="range" id="speakspeed" min="0.9" max="1.5" step="0.05"> <b id="speakspeedv">1.15x</b></span>
     </label>
     <label class="setrow" for="capsize">
       <span>📝 Caption စာလုံး အရွယ်</span>

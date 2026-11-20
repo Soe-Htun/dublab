@@ -345,7 +345,7 @@ function showResult(jid, parts) {
         box.querySelectorAll('.ghost').forEach((b) => b.classList.toggle('on', b === play));
       });
       const dl = document.createElement('a'); dl.className = 'cta dl'; dl.href = '/r/' + jid + '/' + p.n;
-      dl.textContent = '⬇️'; dl.title = p.name;
+      dl.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg>'; dl.title = 'Download · ' + p.name; dl.setAttribute('aria-label', 'Download');
       row.append(play, dl); box.append(row);
     });
   }

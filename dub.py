@@ -5,6 +5,14 @@ import subprocess
 from pathlib import Path
 
 SPEAK_SPEED = float(os.environ.get("DUBLAB_SPEAK_SPEED") or 1.15)   # every voice line is sped up this much (1.0 = TTS's own pace, felt slow)
+
+
+def set_speak_speed(v):
+    """The admin Settings page changes the voice speed (no restart needed)."""
+    global SPEAK_SPEED
+    SPEAK_SPEED = float(v)
+    import gemini
+    gemini.TTS_CPS = 15.0 * SPEAK_SPEED          # the recap length estimate follows
 MAX_ATEMPO = 1.65  # never speed speech up more than this (1.5->1.8 on 2026-10-26 to fix ~1.7s drift, then 1.8->1.65 same night: 1.8 sounded too fast; 1.65 fits every ratio measured on the Oct 25 test video, 1.61-1.67, with ~0.04s total drift)
 
 

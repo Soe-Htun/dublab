@@ -15,7 +15,7 @@ from flask import Flask, jsonify, redirect, render_template, request, send_file
 
 import telegram
 
-from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tts, frame_layout, render_frames,
+from dub import (WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segments, configure_tts, frame_layout, render_frames,
                  frame_caption_y,
                  footage, speech_spans, trim_copy, picture_area,
                  add_outro_tail, caption_y, normalize_logo, render_captions, sample_frames, video_size, write_srt,
@@ -65,10 +65,13 @@ _settings = {"max_minutes": int(os.environ.get("DUBLAB_MAX_MINUTES") or 30),
              "caption_size": 5.5, "caption_bottom": 8, "blur_bottom": 4, "blur_height": 16,
              # portrait (TikTok/Shorts) videos: TikTok's own UI covers the bottom
              # ~20%, and burned-in captions there usually sit higher up
-             "caption_bottom_v": 24, "blur_bottom_v": 20, "blur_height_v": 12}
+             "caption_bottom_v": 24, "blur_bottom_v": 20, "blur_height_v": 12,
+             # how fast the Burmese voice speaks (1.0 = the TTS's own pace)
+             "speak_speed": float(os.environ.get("DUBLAB_SPEAK_SPEED") or 1.15)}
 _RANGES = {"caption_size": (3, 10), "caption_bottom": (0, 40),
            "blur_bottom": (0, 60), "blur_height": (4, 40),
-           "caption_bottom_v": (0, 60), "blur_bottom_v": (0, 70), "blur_height_v": (4, 40)}
+           "caption_bottom_v": (0, 60), "blur_bottom_v": (0, 70), "blur_height_v": (4, 40),
+           "speak_speed": (0.9, 1.5)}
 try:
     _saved = json.loads(SETTINGS_FILE.read_text())
     if isinstance(_saved.get("max_minutes"), int) and 1 <= _saved["max_minutes"] <= MAX_MINUTES_LIMIT:
@@ -91,6 +94,7 @@ try:
         _settings["telegram_chat_name"] = str(_saved.get("telegram_chat_name") or "")[:80]
 except (OSError, ValueError, AttributeError):
     pass
+set_speak_speed(_settings["speak_speed"])
 
 # Largest upload / link download, set in .env only (run.sh sizes waitress's
 # request-body limit from the same value).
@@ -1831,6 +1835,7 @@ def admin_get_settings():
                    channel_name=_settings["channel_name"],
                    has_logo=LOGO_FILE.exists(), logo_position=_settings["logo_position"],
                    logo_size=_settings["logo_size"], caption_size=_settings["caption_size"],
+                   speak_speed=_settings["speak_speed"],
                    caption_bottom=_settings["caption_bottom"],
                    blur_bottom=_settings["blur_bottom"], blur_height=_settings["blur_height"],
                    caption_bottom_v=_settings["caption_bottom_v"],
@@ -1865,9 +1870,10 @@ def admin_set_settings():
     for k, (lo, hi) in _RANGES.items():
         if k in data:
             try:
-                _settings[k] = max(lo, min(hi, round(float(data[k]), 1)))
+                _settings[k] = max(lo, min(hi, round(float(data[k]), 2 if k == "speak_speed" else 1)))
             except (TypeError, ValueError):
                 pass
+    set_speak_speed(_settings["speak_speed"])
     try:
         SETTINGS_FILE.write_text(json.dumps(_settings, ensure_ascii=False))
     except OSError:

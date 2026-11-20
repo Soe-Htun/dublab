@@ -144,7 +144,7 @@ textarea:focus{outline:none;border-color:var(--acc)}
 .part{display:flex;align-items:center;gap:8px}
 .part .ghost{margin:0;flex:1;text-align:left;padding:11px 14px}
 .part .ghost.on{border-color:var(--acc)}
-.part .dl{flex:0 0 auto;width:auto;padding:11px 16px;margin:0;text-decoration:none}
+.part .dl{flex:0 0 auto;width:52px;height:46px;padding:0;margin:0;text-decoration:none;display:grid;place-items:center;color:#fff}
 .checkrow input{width:18px;height:18px;flex:0 0 18px;accent-color:var(--acc)}   /* never squeezed by long text */
 .titlerow{margin:4px 0 16px;font-size:14px}
 .titlerow .titlein[hidden]{display:none}
@@ -224,3 +224,5 @@ button.gear{padding:0;cursor:pointer;font:inherit}
 .riskbox li{line-height:1.55;font-size:14.5px;padding-left:22px;position:relative}
 .riskbox li::before{position:absolute;left:0;top:0}
 .riskbox li.high::before{content:"🔴"} .riskbox li.mid::before{content:"🟡"} .riskbox li.low::before{content:"🟢"}
+
+.dlbtn{display:flex;align-items:center;justify-content:center;gap:8px}

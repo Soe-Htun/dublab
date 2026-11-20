@@ -65,3 +65,9 @@
 .tgbtns{display:flex;gap:8px}
 .tgbtns .ghost{width:auto;flex:1}
 
+
+.mini{display:inline-flex;align-items:center;gap:6px}
+.mini .ic,.del .ic{flex:0 0 auto}
+.danger{color:#f87171 !important;border-color:rgba(248,113,113,.45) !important;background:rgba(248,113,113,.08) !important}
+.danger:hover{color:#fff !important;background:rgba(239,68,68,.85) !important;border-color:#ef4444 !important}
+.del{display:inline-grid;place-items:center;width:32px;height:30px;border-radius:9px;cursor:pointer;border:1px solid}

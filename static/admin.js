@@ -65,7 +65,7 @@ function renderList() {
     const stars = r.stars ? '⭐'.repeat(r.stars) : '<span style="color:var(--dim)">no rating</span>';
     el.innerHTML =
       `<div class="meta"><span>${esc(fmtTime(r.ts))} · ${esc(r.ip || '?')}${r.job_id ? ' · job ' + esc(r.job_id) : ''}</span>` +
-      `<button class="del" title="delete">🗑️</button></div>` +
+      `<button class="del danger" title="delete"><svg class="ic" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/><path d="M10 11v6M14 11v6"/></svg></button></div>` +
       `<div class="stars">${stars}</div>` +
       `<div class="msg">${esc(r.message || '—')}</div>`;
     el.querySelector('.del').addEventListener('click', async () => {
@@ -103,6 +103,7 @@ async function loadSettings() {
     $('#logosizev').textContent = j.logo_size + '%';
     showLogo(j.has_logo);
     $('#capsize').value = j.caption_size; $('#capsizev').textContent = j.caption_size + '%';
+    $('#speakspeed').value = j.speak_speed; $('#speakspeedv').textContent = (+j.speak_speed).toFixed(2) + 'x';
     pos.h = { capbottom: j.caption_bottom, blurbottom: j.blur_bottom, blurheight: j.blur_height };
     pos.v = { capbottom: j.caption_bottom_v, blurbottom: j.blur_bottom_v, blurheight: j.blur_height_v };
     showOrient();
@@ -118,7 +119,7 @@ $('#setsave').addEventListener('click', async () => {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ max_minutes: +$('#maxmin').value, outro: $('#outroin').value, channel_name: $('#chanin').value,
         logo_position: $('#logopos').value, logo_size: +$('#logosize').value,
-        caption_size: +$('#capsize').value,
+        caption_size: +$('#capsize').value, speak_speed: +$('#speakspeed').value,
         caption_bottom: +pos.h.capbottom, blur_bottom: +pos.h.blurbottom, blur_height: +pos.h.blurheight,
         caption_bottom_v: +pos.v.capbottom, blur_bottom_v: +pos.v.blurbottom, blur_height_v: +pos.v.blurheight }),
     });
@@ -231,3 +232,5 @@ loadTelegram();
 
 load();
 setInterval(() => { if (!document.hidden) load(); }, 30000);
+
+$('#speakspeed').addEventListener('input', () => { $('#speakspeedv').textContent = (+$('#speakspeed').value).toFixed(2) + 'x'; });
