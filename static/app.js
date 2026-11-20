@@ -651,8 +651,8 @@ function syncRecap() {
   // 🖼️ title: on for a recap, off for the plain video (can still be changed by hand)
   $('#titlechk').checked = $('#recapchk').checked;
   $('#covertitle_in').hidden = !$('#titlechk').checked; $('#eprow').hidden = !$('#titlechk').checked;
-  // 📺 YouTube 16:9: on for the plain video, off for a recap (can still be changed by hand)
-  $('#ytchk').checked = $('#fullchk').checked;
+  // 📺 YouTube 16:9: on by default in both modes (can still be unticked by hand)
+  $('#ytchk').checked = true;
   try { syncYtMode(); partsNote(); } catch (e) { /* not ready */ }
 }));
 document.querySelectorAll('#recapgrid .opt').forEach((b) => b.addEventListener('click', () => {
