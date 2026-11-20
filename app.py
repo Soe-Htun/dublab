@@ -615,13 +615,7 @@ def _fix_job(job):
     job["fix_note"] = "\n".join(note)
     (d / "fix.txt").write_text(job["fix_note"], encoding="utf-8")
     jlog(job, job["fix_note"])
-    if not changed:                    # no video: the note alone goes to Telegram
-        if job.get("telegram") and _settings.get("telegram_chat_id"):
-            try:
-                telegram.send_message(_settings["telegram_chat_id"], job["fix_note"])
-                job["tg"] = {"state": "done", "error": "", "pct": 100, "sent": 0, "how": "file"}
-            except Exception as e:  # noqa: BLE001
-                jlog(job, f"Telegram send failed: {e}")
+    if not changed:                    # no new video: nothing goes to Telegram (the page shows why)
         job.update(status="done", stage="done", pct=100, files_gone=True)
         _save_meta(job)
         jlog(job, "done (explanation only) ✅")
@@ -2191,7 +2185,7 @@ def _telegram_send(job):
             tg["pct"] = int((i + 1) * 100 / len(outs))
             tg["sent"] = i + 1
         tg["how"] = "link" if "link" in hows else "file"
-        text = job.get("fix_note") or _posts_text(job)
+        text = "" if job.get("kind") == "fix" else _posts_text(job)   # 🔧 the explanation stays on the page
         if text:
             try:
                 telegram.send_message(chat, text)
