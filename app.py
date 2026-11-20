@@ -383,7 +383,7 @@ for _old in JOBS.iterdir():
 
 # what a finished job needs to be shown again (history, after a restart)
 _META_KEYS = ("id", "name", "title_mm", "status", "stage", "pct", "error", "ext", "parts",
-              "part_times", "covers", "covers_tt", "tt", "cover_pick", "created", "owner", "recap", "tg", "url", "files_gone", "yt_child_id", "kind", "out_name", "fix_note", "fix_changed", "fix_appeal", "risk")
+              "part_times", "covers", "covers_tt", "tt", "cover_pick", "created", "owner", "recap", "tg", "url", "files_gone", "yt_child_id", "kind", "out_name", "fix_note", "fix_changed", "fix_appeal", "risk", "title_mm", "film_name", "episode", "orig_audio")
 
 
 def _save_meta(job):
@@ -482,7 +482,7 @@ def _queue_youtube_full(parent):
     except OSError:
         shutil.copy2(parent["dir"] / name, d / name)
     keep = ("ext", "direction", "voice", "model", "outro", "cover", "logo", "name", "telegram", "owner",
-            "captions", "blur", "my_title", "no_title", "url", "segs", "seg_lang", "seg_engine", "lang", "total", "title_mm", "want_posts", "censor", "episode")
+            "captions", "blur", "my_title", "no_title", "url", "segs", "seg_lang", "seg_engine", "lang", "total", "title_mm", "want_posts", "censor", "episode", "film_name")
     child = {k: parent[k] for k in keep if k in parent}
     # a LONG recap (narrated in our own words, ~80% of the film's length) — not a plain
     # dub of the whole film, which would look like a re-upload of someone else's video
@@ -964,13 +964,16 @@ def _transcribe_and_translate(jid, job):
             # the title typed on the form wins; else a known film keeps its real
             # name on the cover, so people can search for it
             name = job.get("my_title") or ""
+            film = ""
+            try:                          # the film's real name (also for the file name)
+                film = movie_name(job.get("name") or "", api_key) or ""
+            except Exception as e:  # noqa: BLE001 - fall back to a made-up Burmese title
+                jlog(job, f"movie name lookup failed: {str(e)[:120]}")
+            job["film_name"] = film
             if name:
                 jlog(job, f"cover title (typed): {name}")
             else:
-                try:
-                    name = movie_name(job.get("name") or "", api_key)
-                except Exception as e:  # noqa: BLE001 - fall back to a made-up Burmese title
-                    jlog(job, f"movie name lookup failed: {str(e)[:120]}")
+                name = film
             if job.get("my_title"):
                 job["title_mm"] = name
             elif name:
@@ -2150,7 +2153,9 @@ def _outputs(job):
         outs = [(d / "dubbed.mp4", _download_name(job, ".mp4"))]
     tt = job.get("tt") or []
     for i, f in enumerate(tt, 1):
-        name = _download_name(job, ".mp4", i if len(tt) > 1 else None).replace(" - mm", " - mm-tiktok", 1)
+        name = _download_name(job, ".mp4", i if len(tt) > 1 else None, tiktok=True)
+        if not _ready_title(job):
+            name = name.replace(" - mm", " - mm-tiktok", 1)
         outs.append((d / f, name))
     return outs
 
@@ -2353,7 +2358,30 @@ def telegram_job_status(jid):
     return jsonify(out)
 
 
-def _download_name(job, ext, part=None):
+_MODE_TAG = {"recap": "မြန်မာ Recap", "orig": "မြန်မာစာတန်း", "dub": "မြန်မာ အသံ"}
+
+
+def _ready_title(job):
+    """A YouTube-ready file name (YouTube takes the file name as the video's title):
+    "စွန်းဝူခုန်း Ep 01 | Journey to the West (မြန်မာ Recap)". None when there is no title."""
+    title = (job.get("title_mm") or "").strip()
+    if not title or job.get("kind") == "fix":
+        return None
+    ep = job.get("episode")
+    film = (job.get("film_name") or "").strip()
+    tag = _MODE_TAG["recap" if job.get("recap") else "orig" if job.get("orig_audio") else "dub"]
+    out = title + (f" Ep {int(ep):02d}" if ep else "")
+    if film and film.casefold() not in title.casefold():
+        out += f" | {film}"
+    out = re.sub(r'[\\/:*?"<>\x00-\x1f]+', " ", out + f" ({tag})")   # "|" is fine in a Mac file name
+    return re.sub(r"\s+", " ", out).strip()[:120]
+
+
+def _download_name(job, ext, part=None, tiktok=False):
+    ready = _ready_title(job)
+    if ready:                                   # "… (မြန်မာ Recap).mp4", "… (မြန်မာ Recap) - TikTok 2.mp4"
+        return ready + (" - TikTok" if tiktok else "") + (f" {part}" if tiktok and part else
+                                                        f" - {part}" if part else "") + ext
     """Short, file-system-safe name from the source video's title or file name,
     e.g. "Bullies Picked on the Wrong Girl - mm.mp4"."""
     name = re.sub(r"#\S+", "", job.get("name") or "")        # drop hashtags
@@ -2373,7 +2401,9 @@ def result_cover(jid, n):
     if not job or not 1 <= n <= len(covers):
         return jsonify(error="မရှိဘူး"), 404
     tag = "tiktok-cover" if n > len(job.get("covers") or []) else "cover"
-    name = _download_name(job, ".jpg").replace(" - mm.jpg", f" - {tag}" + (f"-{n}" if len(covers) > 1 else "") + ".jpg")
+    name = _download_name(job, ".jpg")
+    name = (name.replace(" - mm.jpg", f" - {tag}" + (f"-{n}" if len(covers) > 1 else "") + ".jpg") if " - mm.jpg" in name
+            else name[:-4] + f" - cover {tag}" + (f" {n}" if len(covers) > 1 else "") + ".jpg")
     return send_file(job["dir"] / covers[n - 1], mimetype="image/jpeg",
                      as_attachment=request.args.get("dl") == "1", download_name=name)
 
