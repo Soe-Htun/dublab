@@ -657,6 +657,12 @@ def _caption_times(job):
     return merged or None
 
 
+def _series_thumb(title):
+    """Where a series' cover picture is kept (brand/series/<title>.jpg)."""
+    key = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', " ", title).strip()[:80] or "series"
+    return BRAND_DIR / "series" / f"{key}.jpg"
+
+
 def _parse_ranges(text):
     """"1:20-1:45, 3:10–3:30" (or seconds) → [(80, 105), (190, 210)]."""
     out = []
@@ -1388,6 +1394,17 @@ def _voice_and_mux(job):
                     art = None
                     jlog(job, f"AI cover picture failed ({str(e)[:150]}) — using a photo collage")
             thumb = d / "src_thumb.jpg"
+            # 📚 a series: every episode uses part 1's picture (only the number changes) —
+            # the first episode made under a title keeps its picture for the next ones
+            if job.get("episode") and job.get("title_mm"):
+                series = _series_thumb(job["title_mm"])
+                if series.exists():
+                    thumb = series
+                    jlog(job, "series cover: the same picture as the earlier episodes")
+                elif thumb.exists():
+                    series.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(thumb, series)
+                    jlog(job, "series cover: this picture is kept for the next episodes")
             if thumb.exists() and not job.get("yt_child_frames"):
                 # 🖼️ from the video's own thumbnail (the look the uploader chose): its text
                 # blurred away, our title, part number and logo on it
