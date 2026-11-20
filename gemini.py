@@ -644,7 +644,7 @@ def write_recap(lines, minutes, api_key, lang=None, channel=None, min_minutes=0,
         # ask again for the short ones, scaled up by how short they came out
         need = min_minutes * 60 * TTS_CPS * 1.08 / k
         # up to `slack` min short of the minimum is fine (saves quota; 0 for the YouTube
-        # long version, which must reach its 80%); more than that is
+        # long version, which must reach its 83%); more than that is
         # rewritten, up to 3 times. Longer than asked is always fine.
         for rnd in range(3):
             got = sum(_chars(p) for p in parts) / TTS_CPS / 60
