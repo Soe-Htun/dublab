@@ -824,6 +824,10 @@ Then answer with JSON only, no other text:
   no motion blur. They may repeat "hero"/"scenes" frames.
 - "tiktok": 1 when one "action" frame alone shows the movie well (the main character clearly visible in the
   action), else 2.
+Pick BEAUTIFUL, cinematic frames that look like a film poster or a still from a trailer: well lit, sharp, a
+good composition, a strong or attractive expression. Never pick snapshot-like frames — an awkward moment, the
+mouth half open in the middle of a word, a person caught mid-movement or mid-turn, an odd angle, a dull
+in-between moment.
 Never pick dark, blurry, black, fading, empty or unclear frames (furniture, walls, backs of heads, crowds far away),
 landscape-only, logo, title, credit or text frames, and never frames with SUBTITLE text on them (any language). Apart from "action", a frame may appear in only one list."""
 

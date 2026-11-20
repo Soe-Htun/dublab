@@ -2077,6 +2077,11 @@ def detect_faces(jpegs):
     res = []
     for i in range(len(jpegs)):
         line = out[i] if i < len(out) else ""
+        line, _, sc = line.partition("#")
+        try:
+            score = float(sc) if sc else None
+        except ValueError:
+            score = None
         texted = line.startswith("T|")
         line = line[2:] if texted else line
         boxes, closed = [], []
@@ -2088,7 +2093,7 @@ def detect_faces(jpegs):
                 closed.append(len(vals) > 4 and vals[4] == "c")
             except ValueError:
                 pass
-        res.append({"faces": boxes, "closed": closed, "subtitle": texted})
+        res.append({"faces": boxes, "closed": closed, "subtitle": texted, "score": score})
     return res
 
 
@@ -2123,6 +2128,8 @@ def _cover_times_by_ai(video, start, end, chooser, samples=30):
             "faces": {times[i]: max(fs["faces"], key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
                       for i, fs in enumerate(faces) if fs["faces"]},
             "subtitled": {times[i] for i, fs in enumerate(faces) if fs["subtitle"]},
+            # how good a photo each frame is (Vision aesthetics, -1…1): nicer shots first
+            "score": {times[i]: fs.get("score") for i, fs in enumerate(faces) if fs.get("score") is not None},
             # the main face has its eyes shut (a blink): such shots go last
             "blink": {times[i] for i, fs in enumerate(faces) if fs["faces"] and fs.get("closed")
                       and fs["closed"][max(range(len(fs["faces"])), key=lambda k: (fs["faces"][k][2] - fs["faces"][k][0])
@@ -2198,9 +2205,11 @@ def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, bl
                 return 0 if 0.15 <= fh <= 0.45 and 0.15 <= cx <= 0.85 and b[1] > 0.03 else 2
             subbed = ai.get("subtitled", set())          # frames with a subtitle line on them go last
             blink = ai.get("blink", set())               # …and so do faces with their eyes shut
-            hero = sorted(hero, key=lambda t: (t in blink, t in subbed, good(t)))
-            action = sorted(action, key=lambda t: (t in blink, t in subbed))
-            others = sorted(others, key=lambda t: (t in blink, t in subbed))
+            sc = ai.get("score", {})                     # then the nicer photo first (not a snapshot look)
+            ugly = lambda t: sc.get(t, 0.0) < -0.2       # a clearly poor / snapshot-like shot
+            hero = sorted(hero, key=lambda t: (t in blink, t in subbed, ugly(t), good(t), -sc.get(t, 0.0)))
+            action = sorted(action, key=lambda t: (t in blink, t in subbed, ugly(t), -sc.get(t, 0.0)))
+            others = sorted(others, key=lambda t: (t in blink, t in subbed, ugly(t), -sc.get(t, 0.0)))
             focus = {t: (b[0] + b[2]) / 2 for t, b in boxes.items()}   # crop around the face
             if portrait:          # TikTok: the main character's face on top, the movie's main action below
                 top = (hero or action or others)[:1]   # (one action photo alone often had no face in it)

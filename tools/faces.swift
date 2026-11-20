@@ -2,7 +2,8 @@
 // Usage: faces img1.jpg img2.jpg …  →  one line per image:
 //   [T|]x0,y0,x1,y1[,c];x0,y0,x1,y1   (0-1, y from the TOP; "T|" when the lower part
 //   of the picture has a line of text — a subtitle — on it; ",c" when that face's
-//   eyes are closed / blinking)
+//   eyes are closed / blinking), then "#score": how good a photo it is (-1…1, Vision's
+//   aesthetics score; low for snapshot-like, badly framed or dull shots), when available
 import Foundation
 import Vision
 import AppKit
@@ -33,5 +34,13 @@ for path in CommandLine.arguments.dropFirst() {
     let sub = (text.results ?? []).contains { o in
         o.boundingBox.maxY < 0.42 && o.boundingBox.width > 0.15
     }
-    print((sub ? "T|" : "") + boxes.joined(separator: ";"))
+    var score = ""
+    if #available(macOS 15.0, *) {
+        let aes = VNCalculateImageAestheticsScoresRequest()
+        try? VNImageRequestHandler(cgImage: cg, options: [:]).perform([aes])
+        if let o = aes.results?.first as? VNImageAestheticsScoresObservation {
+            score = String(format: "#%.3f", o.isUtility ? min(o.overallScore, -0.5) : o.overallScore)
+        }
+    }
+    print((sub ? "T|" : "") + boxes.joined(separator: ";") + score)
 }
