@@ -2187,7 +2187,7 @@ def part_suffix(i, n):
 
 
 def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, blur=None, parts=1,
-                chooser=None, log=None, art=None, hide=None):
+                chooser=None, log=None, art=None, hide=None, picks=None):
     """The film's cover: 4 photos in a 2x2 grid with the title in the middle.
     With `chooser` (Gemini) the first photo is the main character and the rest
     show the main scenes / other characters; otherwise the sharpest frames.
@@ -2200,7 +2200,11 @@ def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, bl
     pick, focus = None, {}
     if chooser:
         try:
-            ai = _cover_times_by_ai(video, start, end, chooser)
+            # the YouTube and the TikTok covers use the SAME photos (one choice, made once):
+            # `picks` is a dict shared by both calls
+            ai = (picks or {}).get("ai") or _cover_times_by_ai(video, start, end, chooser)
+            if picks is not None:
+                picks["ai"] = ai
             hero, others, action = ai["hero"], ai["others"], ai["action"]
             boxes = {**ai["focus"], **ai.get("faces", {})}   # Vision's exact boxes win over the model's
             # the model often picks close-ups despite being asked not to: put the shots

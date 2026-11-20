@@ -1258,16 +1258,17 @@ def _voice_and_mux(job):
                 except Exception as e:  # noqa: BLE001 - fall back to the photo collage
                     art = None
                     jlog(job, f"AI cover picture failed ({str(e)[:150]}) — using a photo collage")
+            picks = {}                    # one photo choice for both the YouTube and the TikTok covers
             covers = make_covers(src, job["title_mm"], d, job["total"] * 0.04, job["total"] * 0.9,
                                  portrait=bool(sfx or tt_only), blur=blur, hide=hide, logo=logo_png,
                                  parts=1 if want_tt else nparts,      # the YouTube video stays whole
-                                 chooser=chooser, log=lambda m: jlog(job, m), art=art)
+                                 chooser=chooser, log=lambda m: jlog(job, m), art=art, picks=picks)
             job["covers"] = [c.name for c in covers]
             if want_tt:                  # 9:16 covers for the TikTok version
                 (d / "tt").mkdir(exist_ok=True)
                 tt = make_covers(src, job["title_mm"], d / "tt", job["total"] * 0.04, job["total"] * 0.9,
                                  portrait=True, blur=blur, hide=hide, logo=logo_png, parts=nparts,
-                                 chooser=chooser, log=lambda m: jlog(job, m))
+                                 chooser=chooser, log=lambda m: jlog(job, m), picks=picks)
                 job["covers_tt"] = ["tt/" + c.name for c in tt]
             jlog(job, f"made {len(job['covers']) + len(job.get('covers_tt') or [])} cover image(s)")
             _check_covers(job)
