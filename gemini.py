@@ -730,29 +730,32 @@ def fix_script(lines, api_key):
 
 # ---- cover photos: let the model find the main character ----
 SENSITIVE_PROMPT = """The numbered frames below (0 to {last}) come from a movie, one every {step:.0f} seconds.
-List the numbers of the frames that show:
-- "blood": visible blood, gore, open wounds, a dead body with injuries, or a bloody/gruesome injury;
-- "sex": nudity (bare breasts, genitals or buttocks) or sexual activity / a sex scene.
+Find the frames that show:
+- "blood": visible blood, gore, open wounds, or a bloody / gruesome injury;
+- "sex": nudity (bare breasts, genitals or buttocks) or sexual activity.
 Ordinary fighting, guns or punches WITHOUT blood, kissing, hugging, swimwear or a bare male chest are fine — do
 not list them. When unsure, leave the frame out.
-Answer with JSON only: {{"blood": [numbers], "sex": [numbers]}}"""
+For each one give the box around ONLY the part to hide (the blood / wound / bare body part — not the whole person
+or the whole frame) as "box": [ymin, xmin, ymax, xmax], each 0-1000 of the frame's height / width.
+Answer with JSON only: {{"hits": [{{"frame": number, "kind": "blood" or "sex", "box": [ymin, xmin, ymax, xmax]}}]}}"""
 
 
 def find_sensitive(frames, step, api_key):
-    """frames: JPEGs one every `step` seconds → set of frame numbers showing blood/gore
-    or nudity/sex (to blur them: TikTok limits such videos)."""
+    """frames: JPEGs one every `step` seconds → [(frame number, (x0, y0, x1, y1))]
+    boxes (fractions) around blood / gore or nudity, to blur just that part."""
     items = [(f"Frame {i}:", f) for i, f in enumerate(frames)]
-    raw = _call(SENSITIVE_PROMPT.format(last=len(frames) - 1, step=step), api_key, max_tokens=2048, images=items)
+    raw = _call(SENSITIVE_PROMPT.format(last=len(frames) - 1, step=step), api_key, max_tokens=4096, images=items)
     m = re.search(r"\{.*\}", raw, re.S)
     data = json.loads(re.sub(r",\s*([}\]])", r"\1", m.group(0))) if m else {}
-    out = set()
-    for k in ("blood", "sex"):
-        for v in data.get(k) or []:
-            try:
-                if 0 <= int(v) < len(frames):
-                    out.add(int(v))
-            except (TypeError, ValueError):
-                pass
+    out = []
+    for h in data.get("hits") or []:
+        try:
+            n = int(h.get("frame"))
+            y0, x0, y1, x1 = (min(1000, max(0, float(v))) / 1000 for v in (h.get("box") or [0, 0, 1000, 1000])[:4])
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if 0 <= n < len(frames) and x1 > x0 and y1 > y0:
+            out.append((n, (x0, y0, x1, y1)))
     return out
 
 

@@ -262,8 +262,9 @@ def _find_blur(job, src, sfx):
 
 
 def _find_sensitive(job, src):
-    """🫣 Scenes with blood / gore or nudity / sex: [(start, end)] seconds to blur.
-    Gemini looks at a small frame every 2 s (in batches); each hit blurs ±1.5 s."""
+    """🫣 Blood / gore or nudity: [(start, end, x0, y0, x1, y1)] — only that part of the
+    picture is blurred, like TV censoring. Gemini looks at a small frame every 2 s (in
+    batches) and boxes the part; each hit covers ±1.5 s with a padded box (people move)."""
     key = os.environ.get("GEMINI_API_KEY")
     if not key:
         return []
@@ -280,24 +281,29 @@ def _find_sensitive(job, src):
             hits = find_sensitive([f for _, f in batch], step, key)
             done[0] += 1
             _sp(job, 0.5 * done[0] / max(1, len(batches)))
-            return [batch[i][0] for i in hits]
+            return [(batch[i][0], box) for i, box in hits]
         with ThreadPoolExecutor(4) as ex:
-            hit_times = sorted(t for part in ex.map(check, batches) for t in part)
+            hits = sorted(h for part in ex.map(check, batches) for h in part)
     except Exception as e:  # noqa: BLE001 - the video goes on without it
         jlog(job, f"blood / nudity check skipped: {str(e)[:150]}")
         return []
-    spans = []
-    for t in hit_times:
-        a, b = max(0.0, t - 1.5), t + 1.5
-        if spans and a <= spans[-1][1] + 1.0:
-            spans[-1] = (spans[-1][0], b)
+    pad = 0.06                      # a margin around each box: the part moves between samples
+    spans = []                      # [start, end, x0, y0, x1, y1]
+    for t, (x0, y0, x1, y1) in hits:
+        r = [max(0.0, t - 1.5), t + 1.5, max(0.0, x0 - pad), max(0.0, y0 - pad), min(1.0, x1 + pad), min(1.0, y1 + pad)]
+        for s in spans:             # the same part a moment later: one region covering both
+            if r[0] <= s[1] + 0.5 and r[2] < s[4] and s[2] < r[4] and r[3] < s[5] and s[3] < r[5]:
+                s[1] = max(s[1], r[1])
+                s[2], s[3], s[4], s[5] = min(s[2], r[2]), min(s[3], r[3]), max(s[4], r[4]), max(s[5], r[5])
+                break
         else:
-            spans.append((a, b))
+            spans.append(r)
     if spans:
-        jlog(job, f"🫣 blurring {len(spans)} scene(s) with blood / nudity ({sum(b - a for a, b in spans):.0f} s)")
+        jlog(job, f"🫣 blurring {len(spans)} part(s) with blood / nudity "
+                  f"({sum(s[1] - s[0] for s in spans):.0f} s in all, only those areas)")
     else:
         jlog(job, "no blood / nudity scenes found")
-    return spans
+    return [tuple(s) for s in spans]
 
 
 def _find_logos(job, src):
@@ -1222,7 +1228,7 @@ def create_job():
         split = 0
     split = split if split in SPLIT_CHOICES else 0
     blur = request.form.get("blur", "0") == "1"
-    censor = request.form.get("censor", "1") == "1"      # 🫣 blur blood / nudity (on unless unticked)
+    censor = request.form.get("censor", "0") == "1"      # 🫣 hide blood / nudity (only when ticked)
     want_posts = request.form.get("posts") == "1"        # 📝 upload texts to Telegram (off unless ticked)
     orig_audio = request.form.get("orig_audio") == "1"   # 🔊 keep the film's own sound, Burmese captions only
     model = request.form.get("model") or default_whisper_model()

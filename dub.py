@@ -1157,7 +1157,8 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
         captions=None, blur=None, keyframes=None, lead=0.0, tail=0.0, intro_img=None, hide=None,
         frame=None, progress=None, censor=None):
     """Combine picture + dub track. progress: optional cb(fraction) while encoding.
-    censor: optional [(start, end)] seconds blurred over the whole picture (blood / nudity).
+    censor: optional [(start, end, x0, y0, x1, y1)]: that box (fractions) of the picture
+    blurred while it shows — blood / nudity hidden like TV censoring.
 
     bg_wav: music/effects with the original voices removed (separate_music).
     It goes under the dub at bg_volume and dips a little whenever the dub
@@ -1250,11 +1251,21 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
             if draw:
                 parts = [f"[0:v]{vf.replace(',format=yuv420p', '')}[s0]"]
                 cur = "s0"
-                if censor:        # blood / nudity: the whole picture blurred while it shows
-                    when = "+".join(f"between(t,{a + lead:.2f},{b + lead:.2f})" for a, b in censor)
-                    parts.append(f"[{cur}]boxblur=luma_radius='min(w,h)/14':luma_power=3:"
-                                 f"chroma_radius='min(cw,ch)/14':chroma_power=3:enable='{when}'[cz]")
-                    cur = "cz"
+                if censor:        # blood / nudity: just that part blurred while it shows
+                    cw_, ch_ = video_size(src_video)
+                    cw_, ch_ = cw_ // 2 * 2, ch_ // 2 * 2
+                    for k, (a, b, x0, y0, x1, y1) in enumerate(censor):
+                        bx, by = int(cw_ * x0) // 2 * 2, int(ch_ * y0) // 2 * 2
+                        bw = max(16, int(cw_ * (x1 - x0)) // 2 * 2)
+                        bh = max(16, int(ch_ * (y1 - y0)) // 2 * 2)
+                        bw, bh = min(bw, cw_ - bx), min(bh, ch_ - by)
+                        when = f"between(t,{a + lead:.2f},{b + lead:.2f})"
+                        parts.append(f"[{cur}]split[cm{k}][cc{k}];"
+                                     f"[cc{k}]crop={bw}:{bh}:{bx}:{by},"      # mosaic, like TV censoring
+                                     f"scale='max(2,trunc(iw/24))':'max(2,trunc(ih/24))',"
+                                     f"scale={bw}:{bh}:flags=neighbor[cb{k}];"
+                                     f"[cm{k}][cb{k}]overlay={bx}:{by}:enable='{when}'[cz{k}]")
+                        cur = f"cz{k}"
                 if blur:
                     b0, bh = float(blur["bottom"]), float(blur["height"])
                     by = f"ih*{1 - b0 - bh:.4f}"
