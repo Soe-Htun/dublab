@@ -1719,6 +1719,23 @@ def download_url(url, job_dir, max_mb):
         info = ydl.extract_info(url, download=True) or {}
     if not out.exists():
         raise RuntimeError("video download failed")
+    # the video's own thumbnail: the covers can be made from it (its look, our title)
+    try:
+        import io as _io
+        import urllib.request as _ur
+        from PIL import Image as _Img
+        url = info.get("thumbnail") or ""
+        if url:
+            import ssl as _ssl
+            try:
+                import certifi as _certifi
+                ctx = _ssl.create_default_context(cafile=_certifi.where())
+            except ImportError:
+                ctx = _ssl.create_default_context()
+            data = _ur.urlopen(_ur.Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=20, context=ctx).read()
+            _Img.open(_io.BytesIO(data)).convert("RGB").save(Path(job_dir) / "src_thumb.jpg", quality=95)
+    except Exception:  # noqa: BLE001 - the covers are made from frames then
+        pass
     # who posted it and under what licence — for the copyright risk note
     try:
         import json as _json
@@ -1767,11 +1784,16 @@ def pick_cover_times(video, start, end, count=3, samples=24, tmp="."):
     return picked or [start + span / 3]
 
 
+# TikTok covers are 3:4: TikTok's cover picker (and the profile grid) crops a 9:16
+# picture to 3:4, cutting the top and bottom off — so the cover is made 3:4 to begin with
+TT_COVER = (1080, 1440)
+
+
 def render_cover(video, t, title, out_jpg, portrait=False, logo=None, blur=None):
     """Frame at t, cropped to 1280x720 (or 1080x1920), darkened at the
     bottom, with the Burmese title in big outlined yellow/white letters."""
     from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
-    W, H = (1080, 1920) if portrait else (1280, 720)
+    W, H = TT_COVER if portrait else (1280, 720)
     tmp = Path(out_jpg).with_suffix(".src.png")
     run(["ffmpeg", "-y", "-v", "error", "-ss", f"{t:.2f}", "-i", str(video), "-frames:v", "1",
          "-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}", str(tmp)])
@@ -2025,7 +2047,7 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
                    focus=None):
     """3–5 frames in panels with a big gold Burmese title across the bottom."""
     from PIL import Image, ImageEnhance, ImageFilter
-    W, H = (1080, 1920) if portrait else (1280, 720)
+    W, H = TT_COVER if portrait else (1280, 720)
     n = len(times) if len(times) in (1, 2) else max(3, min(5, len(times)))
     times = (list(times) * 5)[:n]
     import numpy as np
@@ -2034,15 +2056,15 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
         if not title:
             return _cover_logo_save(img, logo, W, portrait, out_jpg)
         img = img.convert("RGBA")
-        band_h = int(H * 0.34)
+        band_h = int(H * 0.5)                        # dark at the bottom, fading out upwards
         grad = Image.new("L", (1, band_h))
         for yy in range(band_h):
-            grad.putpixel((0, yy), int(215 * (yy / band_h) ** 1.2))
+            grad.putpixel((0, yy), int(225 * (yy / band_h) ** 1.1))
         shade = Image.new("RGBA", (W, band_h), (12, 4, 0, 255))
         shade.putalpha(grad.resize((W, band_h)))
         img.alpha_composite(shade, (0, H - band_h))
         img = img.convert("RGB")
-        _gold_title(img, title, int(W * 0.86), W // 2, int(H * 0.85), 2, int(H * 0.13), suffix)
+        _gold_title(img, title, int(W * 0.86), W // 2, int(H * 0.78), 2, int(H * 0.13), suffix)   # ~20% above the bottom
         return _cover_logo_save(img, logo, W, portrait, out_jpg)
     # photos BLEND into each other (soft overlapping edges, like Burmese movie
     # posters) instead of sitting in boxes with gold lines between them
@@ -2076,7 +2098,7 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
     # warm dark band behind the title: across the middle (between photos), or in
     # the lower part when a single photo fills the cover (the face is higher up)
     # landscape: along the bottom (faces sit in the upper part of the photos)
-    cy = int(H * 0.74) if n == 1 else (H // 2 if portrait else int(H * 0.84))
+    cy = int(H * 0.74) if n == 1 else (H // 2 if portrait else int(H * 0.78))   # landscape: ~20% above the bottom
     band_h = int(H * (0.26 if portrait else 0.4))
     band_y = min(cy - band_h // 2, H - band_h)
     grad = Image.new("L", (1, band_h))
@@ -2094,6 +2116,69 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
     return _cover_logo_save(img, logo, W, portrait, out_jpg)
 
 
+def thumb_cover(thumb, title, out_jpg, portrait=False, logo=None, suffix=""):
+    """A cover from the source video's own thumbnail (the look the uploader chose), with
+    its own text taken away cleanly: a corner badge ("ENG SUB") is cut off at the side,
+    and only the picture ABOVE its old title is kept — our gold title goes on a dark
+    band under it. Portrait (TikTok): the picture over a blurred, dimmed copy of itself."""
+    from PIL import Image, ImageFilter, ImageOps
+    src = Image.open(thumb).convert("RGB")
+    try:
+        import io as _io
+        b = _io.BytesIO(); src.save(b, "JPEG", quality=92)
+        boxes = detect_text_boxes([b.getvalue()])[0]
+    except Exception:  # noqa: BLE001
+        boxes = []
+    w0, h0 = src.size
+    lower = [bx for bx in boxes if (bx[1] + bx[3]) / 2 >= 0.5]          # the thumbnail's own title
+    corner = [bx for bx in boxes if bx not in lower and bx[1] < 0.35]
+    # a corner badge: cut that side off (never the top — that is where the faces are)
+    left = max([x1 + 0.06 for x0, y0, x1, y1 in corner if x0 < 0.25 and x1 < 0.35] + [0.0])   # + its ribbon edge
+    right = max([1 - x0 + 0.06 for x0, y0, x1, y1 in corner if x1 > 0.75 and x0 > 0.65] + [0.0])
+    keep_to = max(0.5, min([y0 for _, y0, _, _ in lower] + [1.0]) - 0.02)   # above its old title
+    pic = src.crop((int(left * w0), 0, int((1 - right) * w0), int(keep_to * h0)))
+    W, H = TT_COVER if portrait else (1280, 720)
+    fg = None
+    if portrait:
+        # the faces bigger (a 1.3x zoom on the middle), over a blurred, dark copy of the
+        # CLEAN picture (no old text showing through the blur)
+        zw = int(W * 1.7)
+        fg = pic.resize((zw, max(1, int(pic.height * zw / pic.width))), Image.LANCZOS)
+        fg = fg.crop(((zw - W) // 2, 0, (zw - W) // 2 + W, fg.height))
+        canvas = ImageOps.fit(pic, (W, H)).filter(ImageFilter.GaussianBlur(45))
+        canvas = Image.blend(canvas, Image.new("RGB", (W, H), (8, 6, 4)), 0.6)
+        top = 0                                        # the picture at the top, the title under it
+    else:
+        # the picture (above its old title) at the top, a dark band under it for ours
+        canvas = Image.new("RGB", (W, H), (10, 6, 2))
+        fg = pic.resize((W, max(1, int(pic.height * W / pic.width))), Image.LANCZOS)
+        if fg.height > int(H * 0.82):
+            fg = fg.crop((0, 0, W, int(H * 0.82)))      # keep the top (faces)
+        top = 0
+    if fg is not None:
+        canvas.paste(fg, (0, top))
+        pic_bottom = top + fg.height
+    else:
+        pic_bottom = H
+    # a soft fade from the picture into the dark band
+    canvas = canvas.convert("RGBA")
+    fade = int(H * 0.08)
+    sh = Image.new("RGBA", (W, fade), (10, 6, 2, 0))
+    a = Image.new("L", (1, fade))
+    for yy in range(fade):
+        a.putpixel((0, yy), int(255 * (yy / fade) ** 1.3))
+    sh.putalpha(a.resize((W, fade)))
+    canvas.alpha_composite(sh, (0, pic_bottom - fade))
+    img = canvas.convert("RGB")
+    if title:
+        if portrait:
+            cy = pic_bottom + (H - pic_bottom) // 2
+            _gold_title(img, title, int(W * 0.9), W // 2, cy, 3, int(W * 0.13), suffix)
+        else:
+            _gold_title(img, title, int(W * 0.92), W // 2, int(H * 0.8), 2, int(H * 0.14), suffix)   # ~20% above the bottom
+    return _cover_logo_save(img, logo, W, portrait, out_jpg)
+
+
 def _cover_logo_save(img, logo, W, portrait, out_jpg):
     """Channel logo top-right, then save the cover."""
     from PIL import Image
@@ -2104,7 +2189,7 @@ def _cover_logo_save(img, logo, W, portrait, out_jpg):
         lg = lg.resize((lw, max(1, int(lg.height * lw / lg.width))))
         m = int(W * 0.025)
         # 9:16: TikTok's profile grid shows only the middle 3:4 — keep the logo inside it
-        my = int(img.size[1] * 0.14) if portrait else m
+        my = int(img.size[1] * 0.05) if portrait else m
         mx = int(W * 0.06) if portrait else m
         img.alpha_composite(lg, (W - lw - mx, my))
         img = img.convert("RGB")
@@ -2161,6 +2246,30 @@ def _arrange(hero, others, layout=4):
 
 _FACES_SRC = Path(__file__).with_name("tools") / "faces.swift"
 _FACES_BIN = Path(__file__).with_name("tools") / ".faces-bin"
+
+
+def detect_text_boxes(jpegs):
+    """[[(x0, y0, x1, y1) of each line of text]] per image (0-1, y from the top), Apple Vision."""
+    import tempfile
+    if not _FACES_BIN.exists() or _FACES_BIN.stat().st_mtime < _FACES_SRC.stat().st_mtime:
+        run(["swiftc", "-O", str(_FACES_SRC), "-o", str(_FACES_BIN)])
+    with tempfile.TemporaryDirectory() as tmp:
+        paths = []
+        for i, j in enumerate(jpegs):
+            p = Path(tmp) / f"{i}.jpg"
+            p.write_bytes(j)
+            paths.append(str(p))
+        out = run([str(_FACES_BIN), "--text", *paths]).stdout.splitlines()
+    res = []
+    for i in range(len(jpegs)):
+        boxes = []
+        for part in filter(None, (out[i] if i < len(out) else "").split(";")):
+            try:
+                boxes.append(tuple(float(v) for v in part.split(",")[:4]))
+            except ValueError:
+                pass
+        res.append(boxes)
+    return res
 
 
 def detect_faces(jpegs):
@@ -2248,7 +2357,7 @@ def render_art_cover(art, title, out_jpg, portrait=False, logo=None, suffix=""):
     big gold Burmese title in the lower third, like popular recap thumbnails."""
     from PIL import Image, ImageEnhance, ImageOps
     import io
-    W, H = (1080, 1920) if portrait else (1280, 720)
+    W, H = TT_COVER if portrait else (1280, 720)
     img = ImageOps.fit(Image.open(io.BytesIO(art)).convert("RGB"), (W, H), Image.LANCZOS)
     img = ImageEnhance.Contrast(img).enhance(1.05).convert("RGBA")
     band_h = int(H * (0.38 if portrait else 0.48))
@@ -2257,7 +2366,7 @@ def render_art_cover(art, title, out_jpg, portrait=False, logo=None, suffix=""):
         grad.putpixel((0, yy), int(215 * (yy / band_h) ** 1.4))
     shade = Image.new("RGBA", (W, band_h), (10, 4, 0, 255))
     shade.putalpha(grad.resize((W, band_h)))
-    bottom = H - (int(H * 0.16) if portrait else 0)            # TikTok buttons cover the very bottom
+    bottom = H - (0 if portrait else 0)            # TikTok buttons cover the very bottom
     img.alpha_composite(shade, (0, bottom - band_h))
     if portrait:
         img.alpha_composite(Image.new("RGBA", (W, H - bottom), (10, 4, 0, 215)), (0, bottom))

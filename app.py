@@ -186,6 +186,10 @@ def _sp(job, frac):
     job["spct_stage"] = job["stage"]
 
 
+class _CoversDone(Exception):
+    """The covers were made from the video's own thumbnail (skips the photo collage)."""
+
+
 class Cancelled(Exception):
     """The user pressed ⏹ stop."""
 
@@ -481,6 +485,10 @@ def _queue_youtube_full(parent):
         os.link(parent["dir"] / name, d / name)       # same file, no copy
     except OSError:
         shutil.copy2(parent["dir"] / name, d / name)
+    try:                                              # the same thumbnail-based covers
+        shutil.copy2(parent["dir"] / "src_thumb.jpg", d / "src_thumb.jpg")
+    except OSError:
+        pass
     keep = ("ext", "direction", "voice", "model", "outro", "cover", "logo", "name", "telegram", "owner",
             "captions", "blur", "my_title", "no_title", "url", "segs", "seg_lang", "seg_engine", "lang", "total", "title_mm", "want_posts", "censor", "episode", "film_name")
     child = {k: parent[k] for k in keep if k in parent}
@@ -1300,6 +1308,22 @@ def _voice_and_mux(job):
                 except Exception as e:  # noqa: BLE001 - fall back to the photo collage
                     art = None
                     jlog(job, f"AI cover picture failed ({str(e)[:150]}) — using a photo collage")
+            thumb = d / "src_thumb.jpg"
+            if thumb.exists() and not job.get("yt_child_frames"):
+                # 🖼️ from the video's own thumbnail (the look the uploader chose): its text
+                # blurred away, our title, part number and logo on it
+                from dub import thumb_cover, part_suffix
+                ep = job.get("episode")
+                n_yt = 1 if want_tt else nparts
+                job["covers"] = [thumb_cover(thumb, job["title_mm"], d / f"cover{i}.jpg", bool(sfx or tt_only), logo_png,
+                                             part_suffix(i, n_yt, ep)).name for i in range(1, n_yt + 1)]
+                if want_tt:
+                    (d / "tt").mkdir(exist_ok=True)
+                    job["covers_tt"] = ["tt/" + thumb_cover(thumb, job["title_mm"], d / "tt" / f"cover{i}.jpg", True, logo_png,
+                                                            part_suffix(i, nparts, ep)).name for i in range(1, nparts + 1)]
+                jlog(job, f"covers made from the video's own thumbnail ({len(job['covers']) + len(job.get('covers_tt') or [])})")
+                _check_covers(job)
+                raise _CoversDone()
             picks = {}                    # one photo choice for both the YouTube and the TikTok covers
             covers = make_covers(src, job["title_mm"], d, job["total"] * 0.04, job["total"] * 0.9,
                                  portrait=bool(sfx or tt_only), blur=blur, hide=hide, logo=logo_png,
@@ -1314,6 +1338,8 @@ def _voice_and_mux(job):
                 job["covers_tt"] = ["tt/" + c.name for c in tt]
             jlog(job, f"made {len(job['covers']) + len(job.get('covers_tt') or [])} cover image(s)")
             _check_covers(job)
+        except _CoversDone:            # made from the thumbnail
+            pass
         except Exception as e:  # noqa: BLE001 - never lose the dub over a cover
             jlog(job, f"cover skipped: {e}")
     intro_img = d / job["covers"][0] if lead and job.get("covers") else None
@@ -2298,7 +2324,8 @@ def _telegram_send(job):
             jlog(job, f"sending {name} to Telegram ({path.stat().st_size / 1048576:.0f} MB)…")
             which, k = _out_kind(job, i + 1)
             tag = ("📱 TikTok" if which == "covers_tt" else "📺 YouTube") if job.get("tt") else "🎬"
-            caption = f"{tag} {name[:-4]}" + (f"  ({i + 1}/{len(outs)})" if len(outs) > 1 else "")
+            same = [x for x in range(1, len(outs) + 1) if _out_kind(job, x)[0] == which]   # this kind's files
+            caption = f"{tag} {name[:-4]}" + (f"  ({same.index(i + 1) + 1}/{len(same)})" if len(same) > 1 else "")
             def prog(f, i=i):
                 tg["pct"] = int((i + f) * 100 / len(outs))
             hows.append(_send_one(job, chat, path, name, caption, prog, i + 1))
@@ -2369,14 +2396,14 @@ _MODE_TAG = {"recap": "မြန်မာ Recap", "orig": "မြန်မာစ
 
 def _ready_title(job):
     """A YouTube-ready file name (YouTube takes the file name as the video's title):
-    "စွန်းဝူခုန်း Ep 01 | Journey to the West (မြန်မာ Recap)". None when there is no title."""
+    "စွန်းဝူခုန်း - 1 | Journey to the West (မြန်မာ Recap)" (the cover's title). None when there is no title."""
     title = (job.get("title_mm") or "").strip()
     if not title or job.get("kind") == "fix":
         return None
     ep = job.get("episode")
     film = (job.get("film_name") or "").strip()
     tag = _MODE_TAG["recap" if job.get("recap") else "orig" if job.get("orig_audio") else "dub"]
-    out = title + (f" Ep {int(ep):02d}" if ep else "")
+    out = title + (f" - {ep}" if ep else "")          # the same as on the cover: "Title - 1"
     if film and film.casefold() not in title.casefold():
         out += f" | {film}"
     out = re.sub(r'[\\/:*?"<>\x00-\x1f]+', " ", out + f" ({tag})")   # "|" is fine in a Mac file name

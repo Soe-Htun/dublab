@@ -8,6 +8,25 @@ import Foundation
 import Vision
 import AppKit
 
+// "--text": print only the text lines' boxes per image ("x0,y0,x1,y1;…", y from the top)
+let textMode = CommandLine.arguments.dropFirst().first == "--text"
+if textMode {
+    for path in CommandLine.arguments.dropFirst(2) {
+        guard let img = NSImage(contentsOfFile: path),
+              let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else { print(""); continue }
+        let text = VNRecognizeTextRequest()
+        text.recognitionLevel = .accurate
+        text.usesLanguageCorrection = false
+        try? VNImageRequestHandler(cgImage: cg, options: [:]).perform([text])
+        let boxes = (text.results ?? []).map { o -> String in
+            let b = o.boundingBox
+            return String(format: "%.3f,%.3f,%.3f,%.3f", b.minX, 1 - b.maxY, b.maxX, 1 - b.minY)
+        }
+        print(boxes.joined(separator: ";"))
+    }
+    exit(0)
+}
+
 for path in CommandLine.arguments.dropFirst() {
     guard let img = NSImage(contentsOfFile: path),
           let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else { print(""); continue }
