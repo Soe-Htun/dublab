@@ -560,9 +560,10 @@ def _fix_job(job):
     job.update(stage="fixcheck", pct=5)
     jlog(job, f"🔧 fixing {job.get('out_name')} ({total / 60:.1f} min)")
     plan = {"kind": "other", "cut": [], "censor": False, "explain_mm": "", "appeal": ""}
-    if job.get("fix_msg") and key:
+    shots = [p.read_bytes() for p in sorted(d.glob("shot*.jpg"))]
+    if (job.get("fix_msg") or shots) and key:
         try:
-            plan = analyze_warning(job["fix_msg"], total, key)
+            plan = analyze_warning(job.get("fix_msg"), total, key, shots)
             jlog(job, f"warning: {plan['kind']} · cut {plan['cut'] or 'nothing'} · mosaic {'yes' if plan['censor'] else 'no'}")
         except Exception as e:  # noqa: BLE001 - the ticked options still apply
             jlog(job, f"reading the warning failed: {str(e)[:150]}")
@@ -651,6 +652,15 @@ def create_fix_job():
     except Exception as e:  # noqa: BLE001
         shutil.rmtree(d, ignore_errors=True)
         return jsonify(error=clean_err(e)), 400
+    # screenshots of the warning: JPEGs (≤1600 px) for the model to read
+    from PIL import Image as _Img
+    for k, shot in enumerate(request.files.getlist("shots")[:5], 1):
+        try:
+            im = _Img.open(shot.stream).convert("RGB")
+            im.thumbnail((1600, 1600))
+            im.save(d / f"shot{k}.jpg", quality=88)
+        except Exception:  # noqa: BLE001 - a bad image is just left out
+            pass
     filename = os.path.basename(f.filename)
     stem = os.path.splitext(filename)[0]
     job = {"status": "queued", "stage": "queue", "pct": 0, "error": "", "dir": d, "ext": ".mp4", "id": jid,
@@ -664,7 +674,9 @@ def create_fix_job():
         shutil.copy2(cover, d / "cover1.jpg")
         job["covers"] = ["cover1.jpg"]
     jobs[jid] = job
-    jlog(job, f"uploaded {filename} for fixing" + (" · its cover found" if cover else " · its cover not found (job older than a day)"))
+    n_shots = len(list(d.glob("shot*.jpg")))
+    jlog(job, f"uploaded {filename} for fixing" + (f" · {n_shots} screenshot(s)" if n_shots else "")
+              + (" · its cover found" if cover else " · its cover not found (job older than a week)"))
     with lock:
         queue.append(jid)
         lock.notify()

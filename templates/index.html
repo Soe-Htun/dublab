@@ -69,14 +69,15 @@
   <!-- 🔧 fix one flagged part -->
   <section class="card" id="card-fix" hidden>
     <h2>🔧 Warning ထိထားတဲ့ ဗီဒီယို ပြင်မယ်</h2>
-    <p class="note">TikTok / YouTube / Facebook က warning ပေးထားတဲ့ <b>အပိုင်း ဖိုင်</b> (Telegram ကနေ download လုပ်ထားတာ) နဲ့ <b>warning စာ</b> ကို ထည့်ပါ — AI က စစ်ပြီး အဲ့ အပိုင်းကိုပဲ ပြင်ပေးမယ် (frame၊ logo၊ စာတန်း၊ cover အတူတူ)</p>
+    <p class="note">TikTok / YouTube / Facebook က warning ပေးထားတဲ့ <b>အပိုင်း ဖိုင်</b> (Telegram ကနေ download လုပ်ထားတာ) နဲ့ <b>warning ရဲ့ screenshot</b> (ဒါမှမဟုတ် စာ) ကို ထည့်ပါ — AI က စစ်ပြီး အဲ့ အပိုင်းကိုပဲ ပြင်ပေးမယ် (frame၊ logo၊ စာတန်း၊ cover အတူတူ)</p>
     <div class="drop" id="fixdrop">
       <div class="drop-icon">📤</div>
       <p class="drop-title" id="fixfilename">နှိပ်၍ ရွေးပါ <span class="dim">သို့မဟုတ် ဖိုင်ဆွဲချပါ</span></p>
       <p class="drop-sub">Warning ထိထားတဲ့ အပိုင်း ဖိုင် · MP4 / MOV</p>
       <input type="file" id="fixfile" accept="video/*" hidden>
     </div>
-    <textarea id="fixmsg" rows="4" placeholder="Warning စာကို ဒီမှာ paste လုပ်ပါ (ဥပမာ: This video is not eligible for the For You feed… / Copyright claim 1:20 - 1:45)"></textarea>
+    <label class="fixfile"><input type="file" id="fixshots" accept="image/*" multiple> <span id="fixshotsname">📸 Warning ရဲ့ screenshot တင်ပါ (၁ ပုံ ဒါမှမဟုတ် အများကြီး)</span></label>
+    <textarea id="fixmsg" rows="3" placeholder="(မထည့်လည်း ရ) Warning စာကို paste လုပ်ပါ — screenshot နဲ့ တွဲထည့်လည်း ရ"></textarea>
     <input type="text" id="fixcuts" placeholder="✂️ ဖြတ်ချင်တဲ့ အချိန် (မထည့်လည်း ရ) — ဥပမာ 1:20-1:45, 3:10-3:30">
     <div class="optgrid chips" id="fixcensor">
       <button class="opt selected" data-v="auto" type="button"><span class="opt-label">🫣 Mosaic: AI ဆုံးဖြတ်</span></button>

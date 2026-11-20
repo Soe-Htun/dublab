@@ -761,7 +761,7 @@ def find_sensitive(frames, step, api_key):
 
 FIX_PROMPT = """A Burmese movie-recap channel posted a video ({duration:.0f} seconds long, a recap of a film
 narrated in Burmese, with a frame, a logo and Burmese captions). TikTok / YouTube / Facebook flagged it.
-The platform's message (may be in any language, may be copied from a screenshot):
+The platform's message (may be in any language; screenshots of it may follow — read the text in them):
 ---
 {message}
 ---
@@ -782,10 +782,12 @@ Work out what to change in the video so it can be posted again. Answer with JSON
   do not claim fair use or any other legal conclusion. Never claim things that are not true."""
 
 
-def analyze_warning(message, duration, api_key):
-    """The platform's warning → {kind, cut [(a, b)], censor, explain_mm, appeal}."""
-    raw = _call(FIX_PROMPT.format(message=(message or "(no message given)")[:4000], duration=duration),
-                api_key, max_tokens=2048)
+def analyze_warning(message, duration, api_key, shots=None):
+    """The platform's warning (typed text and / or screenshot JPEGs) →
+    {kind, cut [(a, b)], censor, explain_mm, appeal}."""
+    images = [(f"Screenshot {i + 1}:", b) for i, b in enumerate(shots or [])]
+    raw = _call(FIX_PROMPT.format(message=(message or "(see the screenshots)")[:4000], duration=duration),
+                api_key, max_tokens=2048, images=images or None)
     m = re.search(r"\{.*\}", raw, re.S)
     data = json.loads(re.sub(r",\s*([}\]])", r"\1", m.group(0))) if m else {}
     cut = []

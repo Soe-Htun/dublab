@@ -688,6 +688,12 @@ $('#tgchk').addEventListener('change', () => { $('#postsopts').hidden = $('#tgro
     if (f && f.type.startsWith('video/')) setFixFile(f);
   });
   finput.addEventListener('change', () => setFixFile(finput.files[0]));
+  // 📸 screenshots of the warning (the model reads the text in them)
+  $('#fixshots').addEventListener('change', () => {
+    const n = $('#fixshots').files.length;
+    $('#fixshotsname').textContent = n ? `📸 screenshot ${n} ပုံ ရွေးထားတယ် — ပြောင်းချင်ရင် နှိပ်ပါ`
+      : '📸 Warning ရဲ့ screenshot တင်ပါ (၁ ပုံ ဒါမှမဟုတ် အများကြီး)';
+  });
   document.querySelectorAll('#fixcensor .opt').forEach((b) => b.addEventListener('click', () => {
     document.querySelectorAll('#fixcensor .opt').forEach((x) => x.classList.remove('selected'));
     b.classList.add('selected'); fixCensor = b.dataset.v;
@@ -698,6 +704,7 @@ $('#tgchk').addEventListener('change', () => { $('#postsopts').hidden = $('#tgro
     const fd = new FormData();
     fd.append('video', f);
     fd.append('message', $('#fixmsg').value);
+    [...$('#fixshots').files].slice(0, 5).forEach((s) => fd.append('shots', s));
     fd.append('cuts', $('#fixcuts').value);
     fd.append('censor', fixCensor);
     fd.append('telegram', '1');
