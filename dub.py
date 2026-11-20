@@ -2154,12 +2154,28 @@ def thumb_cover(thumb, title, out_jpg, portrait=False, logo=None, suffix=""):
     pic = src.crop((int(left * w0), 0, int((1 - right) * w0), int(keep_to * h0)))
     W, H = TT_COVER if portrait else (1280, 720)
     fg = None
+    _logo_left = False
     if portrait:
         # the faces bigger (a 1.3x zoom on the middle), over a blurred, dark copy of the
         # CLEAN picture (no old text showing through the blur)
         zw = int(W * 1.7)
         fg = pic.resize((zw, max(1, int(pic.height * zw / pic.width))), Image.LANCZOS)
-        fg = fg.crop(((zw - W) // 2, 0, (zw - W) // 2 + W, fg.height))
+        cx = 0.5                                       # centre on the faces (Apple Vision), not the middle
+        try:
+            import io as _io
+            b2 = _io.BytesIO(); pic.save(b2, "JPEG", quality=90)
+            faces = detect_faces([b2.getvalue()])[0]["faces"]
+            if faces:
+                big = max(faces, key=lambda f: (f[2] - f[0]) * (f[3] - f[1]))
+                # all faces if they fit in the crop, else the biggest one
+                xs = [f[0] for f in faces] + [f[2] for f in faces]
+                cx = (min(xs) + max(xs)) / 2 if max(xs) - min(xs) < W / zw * 0.9 else (big[0] + big[2]) / 2
+        except Exception:  # noqa: BLE001
+            pass
+        x0 = int(min(max(cx * zw - W / 2, 0), zw - W))
+        fg = fg.crop((x0, 0, x0 + W, fg.height))
+        # the channel logo (top-right) must not sit on a face: then it goes top-left
+        _logo_left = ("at", fg.height)                 # faces sit high: the logo goes low, on the picture's bottom edge
         canvas = ImageOps.fit(pic, (W, H)).filter(ImageFilter.GaussianBlur(45))
         canvas = Image.blend(canvas, Image.new("RGB", (W, H), (8, 6, 4)), 0.6)
         top = 0                                        # the picture at the top, the title under it
@@ -2191,10 +2207,10 @@ def thumb_cover(thumb, title, out_jpg, portrait=False, logo=None, suffix=""):
             _gold_title(img, title, int(W * 0.9), W // 2, cy, 3, int(W * 0.13), suffix)
         else:
             _gold_title(img, title, int(W * 0.92), W // 2, int(H * 0.8), 2, int(H * 0.14), suffix)   # ~20% above the bottom
-    return _cover_logo_save(img, logo, W, portrait, out_jpg)
+    return _cover_logo_save(img, logo, W, portrait, out_jpg, left=_logo_left)
 
 
-def _cover_logo_save(img, logo, W, portrait, out_jpg):
+def _cover_logo_save(img, logo, W, portrait, out_jpg, left=False):
     """Channel logo top-right, then save the cover."""
     from PIL import Image
     if logo and Path(logo).exists():
@@ -2206,7 +2222,11 @@ def _cover_logo_save(img, logo, W, portrait, out_jpg):
         # 9:16: TikTok's profile grid shows only the middle 3:4 — keep the logo inside it
         my = int(img.size[1] * 0.05) if portrait else m
         mx = int(W * 0.06) if portrait else m
-        img.alpha_composite(lg, (W - lw - mx, my))
+        if isinstance(left, tuple):          # both top corners have faces: right side, on the picture's
+            y = int(left[1] - lg.height * 0.75)            # bottom edge (above our title)
+            img.alpha_composite(lg, (W - lw - mx, max(my, y)))
+        else:
+            img.alpha_composite(lg, (mx if left else W - lw - mx, my))   # left: the top-right has a face
         img = img.convert("RGB")
     img.save(out_jpg, "JPEG", quality=90)
     return Path(out_jpg)
