@@ -2173,7 +2173,7 @@ def thumb_cover(thumb, title, out_jpg, portrait=False, logo=None, suffix=""):
         except Exception:  # noqa: BLE001
             pass
         x0 = int(min(max(cx * zw - W / 2, 0), zw - W))
-        fg = fg.crop((x0, 0, x0 + W, fg.height))
+        fg = fg.crop((x0, 0, x0 + W, min(fg.height, int(H * 0.58))))   # leave the lower ~40% for the title
         # the channel logo (top-right) must not sit on a face: then it goes top-left
         _logo_left = ("at", fg.height)                 # faces sit high: the logo goes low, on the picture's bottom edge
         canvas = ImageOps.fit(pic, (W, H)).filter(ImageFilter.GaussianBlur(45))
@@ -2203,8 +2203,9 @@ def thumb_cover(thumb, title, out_jpg, portrait=False, logo=None, suffix=""):
     img = canvas.convert("RGB")
     if title:
         if portrait:
-            cy = pic_bottom + (H - pic_bottom) // 2
-            _gold_title(img, title, int(W * 0.9), W // 2, cy, 3, int(W * 0.13), suffix)
+            band = H - pic_bottom                          # the whole title must fit in the band
+            cy = pic_bottom + band // 2
+            _gold_title(img, title, int(W * 0.9), W // 2, cy, 2, int(min(W * 0.12, band * 0.34)), suffix)
         else:
             _gold_title(img, title, int(W * 0.92), W // 2, int(H * 0.8), 2, int(H * 0.14), suffix)   # ~20% above the bottom
     return _cover_logo_save(img, logo, W, portrait, out_jpg, left=_logo_left)
