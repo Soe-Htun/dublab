@@ -697,7 +697,10 @@ $('#titlechk').addEventListener('change', () => { $('#covertitle_in').hidden = $
     }
     if (j.status === 'processing' || j.status === 'queued') showProgress(jid);
     else if (j.status === 'review') showReview(jid);
-    else if (j.status === 'done') localStorage.removeItem(JOBKEY);   // finished (sent to Telegram): fresh upload page
+    else if (j.status === 'done') {
+      localStorage.removeItem(JOBKEY);
+      if (q) openDone(jid);            // opened by its link (/?job=…): show that result, not an empty page
+    }
     else if (j.status === 'failed') showError(j.error || 'အမှားရှိတယ်', j.resumable ? jid : null);
   } catch (e) { /* server down: stay on the upload page */ }
 })();
