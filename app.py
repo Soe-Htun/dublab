@@ -870,8 +870,14 @@ def _transcribe_and_translate(jid, job):
             jlog(job, f"cutting the ads off failed: {str(e)[:150]}")
     job["have_src"] = True
     if job.get("recap") and not job.get("yt_child") and job["recap"] * RECAP_AIM * 60 >= total * 0.85:
-        jlog(job, f"video is only {total / 60:.0f} min — no shorter recap possible, doing a full dub")
-        job["recap"] = 0
+        # the chosen length is about as long as the video itself: still a recap (narrated
+        # all the way through — a plain dub left every scene without dialogue silent),
+        # as close to the chosen length as the video allows (at most ~88% of it)
+        mins = max(1, min(job["recap"], int(total * 0.83 / 60)))
+        job["recap_aim"] = (total * 0.88 / 60) / mins
+        jlog(job, f"video is {total / 60:.0f} min — a recap of at least {mins} min "
+                  f"(aiming ~{total * 0.88 / 60:.0f}), narrated all the way through")
+        job["recap"] = mins
     jlog(job, f"video duration: {total:.1f}s")
     if not has_video_stream(src):
         raise ValueError("ဗီဒီယိုဖိုင် မဟုတ်ဘူး")
