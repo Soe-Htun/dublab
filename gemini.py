@@ -749,11 +749,24 @@ or the whole frame) as "box": [ymin, xmin, ymax, xmax], each 0-1000 of the frame
 Answer with JSON only: {{"hits": [{{"frame": number, "kind": "blood" or "sex", "box": [ymin, xmin, ymax, xmax]}}]}}"""
 
 
-def find_sensitive(frames, step, api_key):
+STRICT_EXTRA = """
+ALSO list (this video was already flagged for sensitive / mature content, so be thorough):
+- "violence": graphic or brutal violence — a person being beaten, stabbed, shot or strangled, a weapon pressed
+  to or aimed at someone's head, torture, a dead or badly hurt body, an execution;
+- "sexual": sexually suggestive moments — a sex scene even without nudity, underwear / lingerie close-ups,
+  sexual touching.
+For these the box covers the people and the act."""
+
+
+def find_sensitive(frames, step, api_key, strict=False):
     """frames: JPEGs one every `step` seconds → [(frame number, (x0, y0, x1, y1))]
-    boxes (fractions) around blood / gore or nudity, to blur just that part."""
+    boxes (fractions) around blood / gore or nudity, to blur just that part.
+    strict: a flagged video — also graphic violence and sexual moments."""
     items = [(f"Frame {i}:", f) for i, f in enumerate(frames)]
-    raw = _call(SENSITIVE_PROMPT.format(last=len(frames) - 1, step=step), api_key, max_tokens=4096, images=items)
+    prompt = SENSITIVE_PROMPT.format(last=len(frames) - 1, step=step)
+    if strict:
+        prompt = prompt.replace("Answer with JSON only:", STRICT_EXTRA.strip() + "\nAnswer with JSON only:", 1)
+    raw = _call(prompt, api_key, max_tokens=4096, images=items)
     m = re.search(r"\{.*\}", raw, re.S)
     data = json.loads(re.sub(r",\s*([}\]])", r"\1", m.group(0))) if m else {}
     out = []
@@ -786,9 +799,10 @@ Work out what to change in the video so it can be posted again. Answer with JSON
   matches); convert mm:ss to seconds; otherwise [].
 - "censor": true when the problem is violence / blood / gore / nudity / sexual or other sensitive or mature
   content (it will be hidden with a mosaic).
-- "fixable": true only when cutting the named times and / or hiding blood / nudity can really solve it; false
-  for misinformation, unoriginal / reused content, a copyright owner claiming the whole film, spam, account or
-  other problems that editing the picture does not change.
+- "fixable": true when editing can address it: named times cut out; sensitive / violent / sexual content hidden
+  with a mosaic; misinformation (a clear "fictional film recap, not real news" notice is added on screen); betting /
+  gambling logos or ads hidden. false only for unoriginal / reused content, a copyright owner claiming the whole
+  film, spam, account problems and the like.
 - "explain_mm": 2-3 short sentences in Burmese for the channel owner: what the problem is and what will be changed
   (or why editing the video cannot solve it).
 - "advice_mm": 2-4 short Burmese lines with the next steps (e.g. appeal with the text below and wait for the result

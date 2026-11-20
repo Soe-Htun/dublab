@@ -1203,6 +1203,84 @@ def cut_ranges(src, out, cuts, progress=None):
                   "-movflags", "+faststart", str(out)], sum(b - a for a, b in keep), progress)
 
 
+def edit_video(src, out, censor=None, hide=None, overlays=None, progress=None):
+    """A finished video, edited in one pass (sound untouched): a mosaic over each
+    (start, end, box), logos erased (delogo) in each (x0, y0, x1, y1) box, and PNG
+    overlays [(png, x, y, enable expression or None)]."""
+    w, h = video_size(src)
+    w2, h2 = w // 2 * 2, h // 2 * 2
+    steps, cur = [], "0:v"
+    if censor:
+        st, cur = _mosaic_parts(censor, w, h, cur)
+        steps += st
+    if hide:
+        dl = []
+        for x0, y0, x1, y1 in hide:
+            dx, dy = max(1, int(w2 * x0)), max(1, int(h2 * y0))
+            dw, dh = min(int(w2 * x1), w2 - 2) - dx, min(int(h2 * y1), h2 - 2) - dy
+            if dw > 4 and dh > 4:
+                dl.append(f"delogo=x={dx}:y={dy}:w={dw}:h={dh}")
+        if dl:
+            steps.append(f"[{cur}]{','.join(dl)}[dl]")
+            cur = "dl"
+    inputs = []
+    for k, (png, x, y, when) in enumerate(overlays or []):
+        inputs += ["-i", str(png)]
+        steps.append(f"[{k + 1}:v]format=rgba[ov{k}];[{cur}][ov{k}]overlay={x}:{y}"
+                     + (f":enable='{when}'" if when else "") + f"[o{k}]")
+        cur = f"o{k}"
+    if not steps:
+        import shutil
+        shutil.copy2(src, out)
+        return
+    enc = ["-c:v", "h264_videotoolbox", "-b:v", "3500k"] if _has_encoder("h264_videotoolbox") else ["-c:v", "libx264", "-crf", "21"]
+    run_progress(["ffmpeg", "-y", "-v", "error", "-i", str(src), *inputs, "-filter_complex", ";".join(steps),
+                  "-map", f"[{cur}]", "-map", "0:a?", *enc, "-pix_fmt", "yuv420p", "-c:a", "copy",
+                  "-movflags", "+faststart", str(out)], probe_duration(src), progress)
+
+
+def fiction_notice(video_w, video_h, out_dir):
+    """PNGs for a misinformation fix: a small banner for the whole video and a
+    larger card for its first seconds, both saying it is a recap of a fictional film.
+    Returns [(png, x, y, enable)] for edit_video."""
+    from PIL import Image, ImageDraw
+    out_dir = Path(out_dir)
+    out_dir.mkdir(exist_ok=True)
+    f_small = _caption_font(max(22, int(video_w * 0.032)))
+    f_big = _caption_font(max(28, int(video_w * 0.045)))
+
+    def pill(text, font, pad, fill):
+        tmp = ImageDraw.Draw(Image.new("RGBA", (10, 10)))
+        tw = sum(tmp.textlength(s, font=ft) for s, ft in _runs(text, font))
+        th = font.asc + int(font.asc * 0.45)
+        im = Image.new("RGBA", (int(tw + 2 * pad), int(th + pad)), (0, 0, 0, 0))
+        d = ImageDraw.Draw(im)
+        d.rounded_rectangle((0, 0, im.width - 1, im.height - 1), radius=im.height // 2, fill=fill)
+        _tdraw(d, (pad, pad * 0.35), text, font, fill=(255, 255, 255, 255))
+        return im
+    banner = pill("FICTIONAL FILM RECAP  |  ဇာတ်ကား ဇာတ်လမ်းသာ", f_small, int(video_w * 0.025), (37, 99, 235, 225))
+    if banner.width > video_w * 0.92:
+        banner = banner.resize((int(video_w * 0.92), int(banner.height * video_w * 0.92 / banner.width)))
+    b = out_dir / "notice_banner.png"
+    banner.save(b)
+    lines = ["ဒီဗီဒီယိုက ရုပ်ရှင် ဇာတ်လမ်းကို ပြန်ပြောပြထားတာပါ", "အဖြစ်မှန် သတင်း မဟုတ်ပါ",
+             "A recap of a fictional film, not real news"]
+    parts = [pill(t, f_big if i < 2 else f_small, int(video_w * 0.03), (8, 12, 24, 235)) for i, t in enumerate(lines)]
+    cw = min(int(video_w * 0.94), max(p.width for p in parts))
+    parts = [p if p.width <= cw else p.resize((cw, int(p.height * cw / p.width))) for p in parts]
+    gap = int(video_h * 0.012)
+    card = Image.new("RGBA", (cw, sum(p.height for p in parts) + gap * (len(parts) - 1)), (0, 0, 0, 0))
+    y = 0
+    for p in parts:
+        card.alpha_composite(p, ((cw - p.width) // 2, y))
+        y += p.height + gap
+    c = out_dir / "notice_card.png"
+    card.save(c)
+    top = int(video_h * 0.02)
+    return [(b, (video_w - banner.width) // 2, top, None),
+            (c, (video_w - card.width) // 2, (video_h - card.height) // 2, "lt(t,4)")]
+
+
 def mosaic_video(src, out, censor, progress=None):
     """A finished video with a mosaic over each (start, end, box) — sound untouched."""
     w, h = video_size(src)

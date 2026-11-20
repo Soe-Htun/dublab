@@ -22,7 +22,7 @@ from dub import (WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segme
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
-                 build_recap_video, make_covers, mux, run, frames_every, cut_ranges, mosaic_video, synthesize, speech_regions, fit_cues_to_speech, probe_duration, probe_url, separate_music, split_points,
+                 build_recap_video, make_covers, mux, run, frames_every, cut_ranges, mosaic_video, edit_video, fiction_notice, synthesize, speech_regions, fit_cues_to_speech, probe_duration, probe_url, separate_music, split_points,
                  split_video, transcribe)
 from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, find_movie_bounds, pick_cover_frames, translate_lines,
                     write_cover_scene, write_intro, write_recap, write_title, movie_name,
@@ -270,7 +270,7 @@ def _find_blur(job, src, sfx):
         return {"bottom": bb / 100, "height": bh / 100}
 
 
-def _find_sensitive(job, src):
+def _find_sensitive(job, src, strict=False):
     """🫣 Blood / gore or nudity: [(start, end, x0, y0, x1, y1)] — only that part of the
     picture is blurred, like TV censoring. Gemini looks at a small frame every 2 s (in
     batches) and boxes the part; each hit covers ±1.5 s with a padded box (people move)."""
@@ -287,7 +287,7 @@ def _find_sensitive(job, src):
         done = [0]
 
         def check(batch):
-            hits = find_sensitive([f for _, f in batch], step, key)
+            hits = find_sensitive([f for _, f in batch], step, key, strict)
             done[0] += 1
             _sp(job, 0.5 * done[0] / max(1, len(batches)))
             return [(batch[i][0], box) for i, box in hits]
@@ -649,12 +649,29 @@ def _fix_job(job):
         cur = d / "cut.mp4"
         job["total"] = probe_duration(cur)
     out = d / "dubbed.mp4"
-    spans = _find_sensitive(job, cur) if censor_on else []
-    if spans:
-        mosaic_video(cur, out, spans, lambda f: _sp(job, 0.5 + 0.5 * f))
+    kind = plan.get("kind") or "other"
+    # 🫣 sensitive / mature: a thorough scan (also graphic violence and sexual moments)
+    spans = _find_sensitive(job, cur, strict=kind == "sensitive" or job.get("fix_censor") == "1") if censor_on else []
+    # 🎰 betting / gambling: the video's own logos and ads erased (not our channel logo)
+    hide = []
+    if kind == "gambling":
+        hide = [b for b in _find_logos(job, cur)
+                if not ((b[0] + b[2]) / 2 > 0.72 and (b[1] + b[3]) / 2 < 0.30)]   # our logo's corner
+    # 📰 misinformation: a "fictional film recap — not real news" banner + an opening card
+    overlays = []
+    if kind == "misinformation":
+        try:
+            vw, vh = video_size(cur)
+            overlays = fiction_notice(vw, vh, d / "notice")
+            jlog(job, "adding a \"fictional film recap — not real news\" notice")
+        except Exception as e:  # noqa: BLE001
+            jlog(job, f"notice skipped: {str(e)[:150]}")
+    if spans or hide or overlays:
+        edit_video(cur, out, censor=spans, hide=hide, overlays=overlays, progress=lambda f: _sp(job, 0.5 + 0.5 * f))
     elif cur != src:
         cur.replace(out)
-    changed = bool(cuts or spans)
+    shutil.rmtree(d / "notice", ignore_errors=True)
+    changed = bool(cuts or spans or hide or overlays)
     job["fix_changed"] = changed
     if not changed:
         # nothing in the picture was changed: the same video is NOT sent back (re-posting
@@ -673,12 +690,22 @@ def _fix_job(job):
         note += ["", "✂️ ဖြတ်ထုတ်လိုက်တာ: " + ", ".join(f"{a // 60:.0f}:{a % 60:02.0f}–{b // 60:.0f}:{b % 60:02.0f}" for a, b in sorted(cuts))]
     if spans:
         note += ["", f"🫣 mosaic လုပ်ထားတဲ့ နေရာ {len(spans)} ခု"]
+    if hide:
+        note += ["", f"🎰 လောင်းကစား / ကြော်ငြာ logo {len(hide)} ခု ဖျက်ထားတယ်"]
+    if overlays:
+        note += ["", "📰 \"ရုပ်ရှင် ဇာတ်လမ်းသာ၊ အဖြစ်မှန် သတင်း မဟုတ်\" ဆိုတဲ့ စာ ထည့်ထားတယ် (အပေါ်မှာ အမြဲ + အစ ၄ စက္ကန့်)"]
+    if not changed and kind == "sensitive":
+        note += ["", "🔍 AI က သွေး / အကြမ်းဖက် / လိင် အခန်း မတွေ့ပါ — ဇာတ်လမ်း အကြောင်းအရာ တစ်ခုလုံးကြောင့် ကန့်သတ်တာ ဖြစ်နိုင်တယ်"]
     if plan["appeal"]:
         done = []                                  # what was really changed, in plain words
         if cuts:
             done.append("removed " + ", ".join(f"{a // 60:.0f}:{a % 60:02.0f}-{b // 60:.0f}:{b % 60:02.0f}" for a, b in sorted(cuts)))
         if spans:
             done.append(f"pixelated {len(spans)} sensitive moment(s)")
+        if hide:
+            done.append("removed the betting / advertising logos")
+        if overlays:
+            done.append("added an on-screen notice that it is a recap of a fictional film, not real news")
         job["fix_appeal"] = plan["appeal"] + (" In this version I " + " and ".join(done) + "." if done else "")
         note += ["", "📝 Appeal (copy / paste):", job["fix_appeal"]]
     if changed:
