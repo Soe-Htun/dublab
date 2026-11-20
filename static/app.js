@@ -323,6 +323,7 @@ function showRisk(j) {
 function showResult(jid, parts) {
   $('#card-progress').hidden = true;
   $('#card-result').hidden = false;
+  $('#homeback').hidden = false;          // the header's back arrow: to a fresh upload page
   ['#resultvideo', '#speedrow'].forEach((s) => { const e = $(s); if (e) e.hidden = false; });
   $('#fixnote').hidden = true; $('#fixappeal').hidden = true; $('#riskbox').hidden = true;
   lastJid = jid;
@@ -375,7 +376,10 @@ $('#resume').addEventListener('click', async () => {
   btn.disabled = false;
 });
 
-$('#again').addEventListener('click', () => { try { localStorage.removeItem(JOBKEY); } catch (e) {} location.reload(); });
+// back to a fresh upload page (not location.reload(): the address may hold ?job=… and reopen it)
+const goHome = () => { try { localStorage.removeItem(JOBKEY); } catch (e) {} location.href = '/'; };
+$('#again').addEventListener('click', goHome);
+$('#homeback').addEventListener('click', goHome);
 $('#retry').addEventListener('click', () => { try { localStorage.removeItem(JOBKEY); } catch (e) {} location.reload(); });
 
 // ---- reviews ----
