@@ -90,6 +90,7 @@ $('#go').addEventListener('click', () => {
   fd.append('posts', !$('#tgrow').hidden && $('#tgchk').checked && $('#postschk').checked ? '1' : '0');
   fd.append('captions', $('#capchk').checked ? '1' : '0');
   fd.append('blur', $('#blurchk').checked ? '1' : '0');
+  fd.append('censor', $('#censorchk').checked ? '1' : '0');
   // NOTE: iOS Safari's fetch() throws "The string did not match the expected
   // pattern" on FormData POST uploads (WebKit bug) — XHR works reliably.
   const xhr = new XMLHttpRequest();

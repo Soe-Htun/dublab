@@ -1155,8 +1155,9 @@ def render_frames(title, windows, out_dir, layout, logo=None, extra=30.0, tag=No
 
 def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
         captions=None, blur=None, keyframes=None, lead=0.0, tail=0.0, intro_img=None, hide=None,
-        frame=None, progress=None):
+        frame=None, progress=None, censor=None):
     """Combine picture + dub track. progress: optional cb(fraction) while encoding.
+    censor: optional [(start, end)] seconds blurred over the whole picture (blood / nudity).
 
     bg_wav: music/effects with the original voices removed (separate_music).
     It goes under the dub at bg_volume and dips a little whenever the dub
@@ -1239,7 +1240,7 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
     frame_idx = intro_idx + (1 if intro_img else 0)
     if intro_img:
         iw, ih = video_size(src_video)
-    draw = bool(logo or captions or blur or intro_img or hide or frame)
+    draw = bool(logo or captions or blur or intro_img or hide or frame or censor)
 
     def _cmd(copy_video, encoder="libx264"):
         if copy_video:   # nothing to draw: keep the original picture, no re-encode
@@ -1249,6 +1250,11 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
             if draw:
                 parts = [f"[0:v]{vf.replace(',format=yuv420p', '')}[s0]"]
                 cur = "s0"
+                if censor:        # blood / nudity: the whole picture blurred while it shows
+                    when = "+".join(f"between(t,{a + lead:.2f},{b + lead:.2f})" for a, b in censor)
+                    parts.append(f"[{cur}]boxblur=luma_radius='min(w,h)/14':luma_power=3:"
+                                 f"chroma_radius='min(cw,ch)/14':chroma_power=3:enable='{when}'[cz]")
+                    cur = "cz"
                 if blur:
                     b0, bh = float(blur["bottom"]), float(blur["height"])
                     by = f"ih*{1 - b0 - bh:.4f}"
@@ -1945,6 +1951,21 @@ def _cover_logo_save(img, logo, W, portrait, out_jpg):
         img = img.convert("RGB")
     img.save(out_jpg, "JPEG", quality=90)
     return Path(out_jpg)
+
+
+def frames_every(video, total, step=2.0, width=256, workers=8):
+    """One small JPEG every `step` seconds over the whole video, grabbed in
+    parallel (a seek per frame — far faster than decoding everything)."""
+    from concurrent.futures import ThreadPoolExecutor
+    times = [step * (i + 0.5) for i in range(max(1, int(total // step)))]
+
+    def grab(t):
+        r = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.2f}", "-i", str(video), "-frames:v", "1",
+                            "-vf", f"scale={width}:-2", "-q:v", "6", "-f", "image2pipe", "-vcodec", "mjpeg", "-"],
+                           capture_output=True)
+        return r.stdout if not r.returncode and r.stdout else None
+    with ThreadPoolExecutor(workers) as ex:
+        return times, list(ex.map(grab, times))
 
 
 def sample_frames(video, start, end, count=8, width=640):

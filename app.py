@@ -22,11 +22,11 @@ from dub import (WHISPER_MODELS, build_dub_track, cleanup_segments, configure_tt
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
-                 build_recap_video, make_covers, mux, run, synthesize, speech_regions, fit_cues_to_speech, probe_duration, probe_url, separate_music, split_points,
+                 build_recap_video, make_covers, mux, run, frames_every, synthesize, speech_regions, fit_cues_to_speech, probe_duration, probe_url, separate_music, split_points,
                  split_video, transcribe)
 from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, find_movie_bounds, pick_cover_frames, translate_lines,
                     write_cover_scene, write_intro, write_recap, write_title, movie_name,
-                    transcribe_burmese, write_posts)
+                    transcribe_burmese, write_posts, find_sensitive)
 
 # Gemini TTS key rotation.
 # GEMINI_TTS_API_KEYS is comma-separated; falls back to the single GEMINI_API_KEY.
@@ -261,6 +261,45 @@ def _find_blur(job, src, sfx):
         return {"bottom": bb / 100, "height": bh / 100}
 
 
+def _find_sensitive(job, src):
+    """🫣 Scenes with blood / gore or nudity / sex: [(start, end)] seconds to blur.
+    Gemini looks at a small frame every 2 s (in batches); each hit blurs ±1.5 s."""
+    key = os.environ.get("GEMINI_API_KEY")
+    if not key:
+        return []
+    from concurrent.futures import ThreadPoolExecutor
+    step = 2.0
+    try:
+        jlog(job, "checking for blood / nudity scenes to blur…")
+        times, frames = frames_every(src, job["total"], step)
+        good = [(t, f) for t, f in zip(times, frames) if f]
+        batches = [good[i:i + 40] for i in range(0, len(good), 40)]
+        done = [0]
+
+        def check(batch):
+            hits = find_sensitive([f for _, f in batch], step, key)
+            done[0] += 1
+            _sp(job, 0.5 * done[0] / max(1, len(batches)))
+            return [batch[i][0] for i in hits]
+        with ThreadPoolExecutor(4) as ex:
+            hit_times = sorted(t for part in ex.map(check, batches) for t in part)
+    except Exception as e:  # noqa: BLE001 - the video goes on without it
+        jlog(job, f"blood / nudity check skipped: {str(e)[:150]}")
+        return []
+    spans = []
+    for t in hit_times:
+        a, b = max(0.0, t - 1.5), t + 1.5
+        if spans and a <= spans[-1][1] + 1.0:
+            spans[-1] = (spans[-1][0], b)
+        else:
+            spans.append((a, b))
+    if spans:
+        jlog(job, f"🫣 blurring {len(spans)} scene(s) with blood / nudity ({sum(b - a for a, b in spans):.0f} s)")
+    else:
+        jlog(job, "no blood / nudity scenes found")
+    return spans
+
+
 def _find_logos(job, src):
     """The video's own fixed logos/watermarks (found by Gemini), padded a little,
     to blur before our logo goes on. [] when none or on any error."""
@@ -426,7 +465,7 @@ def _queue_youtube_full(parent):
     except OSError:
         shutil.copy2(parent["dir"] / name, d / name)
     keep = ("ext", "direction", "voice", "model", "outro", "cover", "logo", "name", "telegram", "owner",
-            "captions", "blur", "my_title", "no_title", "url", "segs", "seg_lang", "seg_engine", "lang", "total", "title_mm", "want_posts")
+            "captions", "blur", "my_title", "no_title", "url", "segs", "seg_lang", "seg_engine", "lang", "total", "title_mm", "want_posts", "censor")
     child = {k: parent[k] for k in keep if k in parent}
     # a LONG recap (narrated in our own words, ~80% of the film's length) — not a plain
     # dub of the whole film, which would look like a re-upload of someone else's video
@@ -913,6 +952,7 @@ def _voice_and_mux(job):
     if job.get("blur"):
         blur = _find_blur(job, src, sfx)
     hide = _find_logos(job, src)
+    censor = _find_sensitive(job, src) if job.get("censor") else []
     # TikTok (9:16) is the default for a landscape film; ticking "YouTube" also
     # (or, for a portrait source, only) keeps the normal 16:9 video
     landscape = vw > vh
@@ -989,7 +1029,7 @@ def _voice_and_mux(job):
         _sp(job, 0)
         mux(src, dub_wav, out, bg_wav=bg_wav, bg_volume=BG_VOLUME, logo=logo,
             captions=caps, blur=blur, hide=hide, keyframes=cuts or None, lead=lead, tail=tail,
-            intro_img=intro_img, frame=frame,
+            intro_img=intro_img, frame=frame, censor=censor or None,
             progress=lambda f: _sp(job, f))
         orig_outro = job.get("orig_audio") and outro and (d / "outro.mp3").exists()
         if not cuts:
@@ -1182,6 +1222,7 @@ def create_job():
         split = 0
     split = split if split in SPLIT_CHOICES else 0
     blur = request.form.get("blur", "0") == "1"
+    censor = request.form.get("censor", "1") == "1"      # 🫣 blur blood / nudity (on unless unticked)
     want_posts = request.form.get("posts") == "1"        # 📝 upload texts to Telegram (off unless ticked)
     orig_audio = request.form.get("orig_audio") == "1"   # 🔊 keep the film's own sound, Burmese captions only
     model = request.form.get("model") or default_whisper_model()
@@ -1265,7 +1306,7 @@ def create_job():
                  "tg_src": tg_msg,
                  "id": jid, "telegram": send_tg, "owner": _admin_ok(),
                  "captions": captions, "blur": blur, "split": split, "youtube": youtube, "my_title": my_title, "no_title": no_title,
-                 "yt_full": yt_full and not orig_audio, "orig_audio": orig_audio, "want_posts": want_posts and send_tg,
+                 "yt_full": yt_full and not orig_audio, "orig_audio": orig_audio, "want_posts": want_posts and send_tg, "censor": censor,
                  "created": time.time()}
     jlog(jobs[jid], "uploaded " + re.sub(r"[\r\n]", " ", label)[:160])
     with lock:

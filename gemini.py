@@ -729,7 +729,35 @@ def fix_script(lines, api_key):
 
 
 # ---- cover photos: let the model find the main character ----
+SENSITIVE_PROMPT = """The numbered frames below (0 to {last}) come from a movie, one every {step:.0f} seconds.
+List the numbers of the frames that show:
+- "blood": visible blood, gore, open wounds, a dead body with injuries, or a bloody/gruesome injury;
+- "sex": nudity (bare breasts, genitals or buttocks) or sexual activity / a sex scene.
+Ordinary fighting, guns or punches WITHOUT blood, kissing, hugging, swimwear or a bare male chest are fine — do
+not list them. When unsure, leave the frame out.
+Answer with JSON only: {{"blood": [numbers], "sex": [numbers]}}"""
+
+
+def find_sensitive(frames, step, api_key):
+    """frames: JPEGs one every `step` seconds → set of frame numbers showing blood/gore
+    or nudity/sex (to blur them: TikTok limits such videos)."""
+    items = [(f"Frame {i}:", f) for i, f in enumerate(frames)]
+    raw = _call(SENSITIVE_PROMPT.format(last=len(frames) - 1, step=step), api_key, max_tokens=2048, images=items)
+    m = re.search(r"\{.*\}", raw, re.S)
+    data = json.loads(re.sub(r",\s*([}\]])", r"\1", m.group(0))) if m else {}
+    out = set()
+    for k in ("blood", "sex"):
+        for v in data.get(k) or []:
+            try:
+                if 0 <= int(v) < len(frames):
+                    out.add(int(v))
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
 COVER_PROMPT = """The numbered frames below (0 to {last}) come from one movie.
+Never pick a frame with blood, gore or nudity for anything below.
 First work out its THREE MOST IMPORTANT CHARACTERS: the MAIN character (the protagonist, the person who appears
 most and the story is about), the SECOND (e.g. the villain or partner) and the THIRD (e.g. the love interest).
 Then answer with JSON only, no other text:
