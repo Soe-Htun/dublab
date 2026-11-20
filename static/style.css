@@ -21,7 +21,7 @@ body{
 .gear{position:absolute;top:18px;right:0;display:grid;place-items:center;width:42px;height:42px;border-radius:12px;color:var(--dim);background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);transition:color .2s,border-color .2s}
 .gear.back{right:auto;left:0}
 .gear:hover{color:var(--txt);border-color:rgba(255,255,255,.2)}
-.logo{display:inline-flex;align-items:center;gap:10px}
+.logo{display:inline-flex;align-items:center;gap:10px;text-decoration:none;color:inherit}
 .logo-mark{width:44px;height:44px;border-radius:13px;display:block;
   box-shadow:0 6px 24px rgba(101,148,242,.45)}
 .logo-name{font-size:30px;font-weight:800;letter-spacing:.5px;
