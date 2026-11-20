@@ -590,7 +590,8 @@ def _risk_report(job):
         n = job.get("censored") or 0
         add("low" if n else "low", f"🫣 သွေး/လိင် စစ်ပြီး — {n} နေရာ mosaic လုပ်ထားတယ်" if n else "🫣 သွေး/လိင် စစ်ပြီး — မတွေ့ပါ")
     elif job.get("recap") or not job.get("orig_audio"):
-        add("mid", "🫣 သွေး/လိင် မစစ်ထားဘူး — action/horror ဇာတ်ကားဆိုရင် ✓ ပေးပြီး ပြန်လုပ်သင့်တယ်")
+        add("mid", "🫣 သွေး/လိင် မစစ်ထားဘူး — action/horror ဇာတ်ကားဆိုရင် 🔧 ပြင်မယ် မှာ ဒီဗီဒီယိုကို တင်ပြီး "
+                    "Mosaic \"အမြဲ လုပ်\" ရွေးပါ (ပြန်ထုတ်စရာ မလို · comedy ဆိုရင် လျစ်လျူရှုလို့ ရ)")
     if job.get("logos_hidden"):
         add("low", f"မူရင်း / လောင်းကစား logo {job['logos_hidden']} ခု ဖုံးထားပြီး")
     if _AI_WORDS.search(job.get("name") or "") or (job.get("posts") or {}).get("ai_film"):
