@@ -76,7 +76,6 @@ $('#go').addEventListener('click', () => {
   fd.append('outro', $('#outrochk') && $('#outrochk').checked ? '1' : '0');
   fd.append('intro', $('#introchk').checked ? '1' : '0');
   fd.append('hook', $('#hookchk') && $('#hookchk').checked ? '1' : '0');
-  { const c = document.querySelector('input[name="cover_src"]:checked'); fd.append('cover_src', c ? c.value : 'auto'); }
   fd.append('youtube', $('#ytchk').checked ? '1' : '0');
   { const m = document.querySelector('input[name="ytmode"]:checked'); fd.append('ytmode', m && $('#recapchk').checked ? m.value : 'recap'); }
   fd.append('show_title', $('#titlechk').checked ? '1' : '0');

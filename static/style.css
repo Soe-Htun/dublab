@@ -274,11 +274,6 @@ button.gear{padding:0;cursor:pointer;font:inherit}
 .dlg-x:hover{color:var(--txt);background:rgba(255,255,255,.08)}
 .dlg h3{padding:0 28px}
 
-/* 🖼️ cover source choice */
-.coversrc { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; margin: 10px 0 2px; font-size: 14px; }
-.coversrc > span { font-weight: 600; }
-.coversrc label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
-.coversrc input { accent-color: var(--acc); }
 
 .warnnote { margin: 6px 0 10px; padding: 10px 12px; border-radius: 10px; font-size: 13.5px; line-height: 1.6;
   background: rgba(242, 166, 90, .1); border: 1px solid rgba(242, 166, 90, .35); color: #f2c28e; }

@@ -1718,7 +1718,7 @@ def create_job():
     keep_bg = request.form.get("keep_bg", "0") == "1"
     outro = request.form.get("outro", "1") == "1"
     intro = request.form.get("intro", "0") == "1"      # off unless ticked
-    cover_src = request.form.get("cover_src") if request.form.get("cover_src") in ("auto", "thumb", "frames") else "frames"
+    cover_src = "frames"       # 🖼️ covers always from the video: the main character (+ one more photo)
     hook = request.form.get("hook", "0") == "1"        # ⚡ a teaser scene from inside the video first (off unless ticked)
     youtube = request.form.get("youtube", "0") == "1"  # TikTok 9:16 always; this adds the 16:9 YouTube one
     yt_full = youtube and request.form.get("ytmode") == "full"   # YouTube = long dub (~80%), TikTok = recap
