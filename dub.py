@@ -1081,7 +1081,7 @@ def frame_layout(vw, vh, blur=None):
         if b0 < 0.15 and 1 - b0 - bh >= 0.5:
             keep = 1 - b0 - bh
     hv = int(round(FRAME_W * vh * keep / vw / 2)) * 2
-    vy = max(420, int(880 - hv / 2)) // 2 * 2
+    vy = max(480, int(940 - hv / 2)) // 2 * 2       # room above for the tag + title, below TikTok's top bar
     # captions are drawn for the picture's full size (not the tall frame), so
     # they stay in proportion to it; cap_w/cap_h go to render_captions
     full = int(round(FRAME_W * vh / vw))
@@ -1147,14 +1147,16 @@ def render_frames(title, windows, out_dir, layout, logo=None, extra=30.0, tag=No
         for x in range(W):
             px[x, y] = c
     top_y = 60          # the channel logo sits on the picture (top-right), not up here
-    _recap_tag(base, W // 2, 64, tag)     # "MOVIE RECAP · ရုပ်ရှင်ဇာတ်လမ်း": plainly a film story, not news
-    top_y = 120
+    # below TikTok's own top bar (status bar + search ≈ the top 12% of the screen)
+    tag_cy = int(H * 0.145)
+    _recap_tag(base, W // 2, tag_cy, tag)  # "MOVIE RECAP · ရုပ်ရှင်ဇာတ်လမ်း": plainly a film story, not news
+    top_y = tag_cy + 45
     files = []
     for i in range(1, n + 1):
         img = base.copy().convert("RGB")
         title_cy = (top_y + vy - 30) // 2
         if title:                            # "Jaat - 1", "Jaat - 2"… like the covers
-            _gold_title(img, title, int(W * 0.9), W // 2, title_cy, 2, 104, part_suffix(i, n, episode))
+            _gold_title(img, title, int(W * 0.9), W // 2, title_cy, 2, 92, part_suffix(i, n, episode))
         img = img.convert("RGBA")
         hole = Image.new("RGBA", (W, hv), (0, 0, 0, 0))
         img.paste(hole, (0, vy))             # the picture shows through here
