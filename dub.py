@@ -1669,53 +1669,6 @@ def _outro_tail_fast(part, outro_audio, out, caption_png, caption_y):
         _sh.rmtree(tmp, ignore_errors=True)
 
 
-def _tiny_frames(cmd, w=17, h=16):
-    """Run an ffmpeg command that writes w x h gray raw frames to stdout."""
-    p = subprocess.run(cmd, capture_output=True, timeout=600)
-    raw, n = p.stdout, w * h
-    return [raw[i:i + n] for i in range(0, len(raw) - n + 1, n)]
-
-
-def _dhash(px, w=17, h=16):
-    """256-bit difference hash of a 17x16 gray frame, None for flat frames
-    (black, white, a plain title card) that match anything."""
-    mean = sum(px) / len(px)
-    if (sum((v - mean) ** 2 for v in px) / len(px)) ** 0.5 < 10:
-        return None
-    bits = 0
-    for y in range(h):
-        row = px[y * w:(y + 1) * w]
-        for x in range(w - 1):
-            bits = (bits << 1) | (row[x] > row[x + 1])
-    return bits
-
-
-def opens_with_teaser(video, head=25.0, gap=20.0, max_dist=22):
-    """True when the video already opens with a teaser: pictures from its first
-    `head` seconds come again later in it (a highlight shown first, then the
-    story from the start). Compares the opening (4 frames/s) with the keyframes
-    of the rest (fast: only keyframes are decoded)."""
-    total = probe_duration(video)
-    if total < head + gap + 60:
-        return False
-    sc = "scale=17:16:flags=area,format=gray"
-    top = _tiny_frames(["ffmpeg", "-v", "error", "-t", f"{head:.1f}", "-i", str(video),
-                        "-vf", f"fps=4,{sc}", "-f", "rawvideo", "-"])
-    rest = _tiny_frames(["ffmpeg", "-v", "error", "-skip_frame", "nokey", "-ss", f"{head + gap:.1f}",
-                         "-t", f"{total * 0.9 - head - gap:.1f}", "-i", str(video),
-                         "-vf", sc, "-fps_mode", "vfr", "-f", "rawvideo", "-"])
-    th = [(i, hh) for i, f in enumerate(top) if (hh := _dhash(f)) is not None]
-    rh = [(j, hh) for j, f in enumerate(rest) if (hh := _dhash(f)) is not None]
-    secs, places = set(), set()
-    for i, a in th:
-        for j, b in rh:
-            if bin(a ^ b).count("1") <= max_dist:
-                secs.add(i // 4)
-                places.add(j)
-    # a real teaser: several opening moments found again at several later places
-    return len(secs) >= 3 and len(places) >= 2
-
-
 def quiet_points(video, a, b, noise="-32dB", min_len=0.25):
     """Middles of the pauses (no speech) in video between a and b seconds,
     as times in the video. [] on error or when it is never quiet."""

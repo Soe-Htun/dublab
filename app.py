@@ -251,18 +251,7 @@ def _hooks_on(job, d, names):
     key = os.environ.get("GEMINI_API_KEY")
     if not key or not job.get("hook"):
         return
-    from dub import add_hook, hook_span, opens_with_teaser
-    if not job.get("recap"):
-        # the film keeps its own opening: if it already starts with a teaser, don't add one
-        if "src_teaser" not in job:
-            try:
-                job["src_teaser"] = opens_with_teaser(d / ("input" + job["ext"]))
-            except Exception as e:  # noqa: BLE001
-                job["src_teaser"] = False
-                jlog(job, f"teaser check skipped: {str(e)[:120]}")
-        if job["src_teaser"]:
-            jlog(job, "⚡ the video already opens with its own teaser — not adding one")
-            return
+    from dub import add_hook, hook_span
     picks = job.setdefault("_hook_picks", {})
     for n in names:
         p = d / n
@@ -1674,7 +1663,7 @@ def create_job():
     keep_bg = request.form.get("keep_bg", "0") == "1"
     outro = request.form.get("outro", "1") == "1"
     intro = request.form.get("intro", "0") == "1"      # off unless ticked
-    hook = request.form.get("hook", "1") == "1"        # ⚡ a ~6 s teaser from inside the video first
+    hook = request.form.get("hook", "0") == "1"        # ⚡ a teaser scene from inside the video first (off unless ticked)
     youtube = request.form.get("youtube", "0") == "1"  # TikTok 9:16 always; this adds the 16:9 YouTube one
     yt_full = youtube and request.form.get("ytmode") == "full"   # YouTube = long dub (~80%), TikTok = recap
     my_title = re.sub(r"\s+", " ", request.form.get("title") or "").strip()[:60]   # typed by the user
