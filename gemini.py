@@ -561,13 +561,15 @@ def transcribe_burmese(chunks, api_key, log=None):
     instead. chunks: [(start_seconds, length_seconds, mp3 bytes)].
     Returns [{start, end, text}] on the film's timeline."""
     from concurrent.futures import ThreadPoolExecutor
+    errors = []
 
     def one(ch):
         t0, length, mp3 = ch
         try:
             raw = _call(TRANSCRIBE_PROMPT.format(length=length), api_key, max_tokens=8192,
                         images=[("Audio:", mp3, "audio/mp3")])
-        except (RuntimeError, Blocked):
+        except (RuntimeError, Blocked) as e:
+            errors.append(e)
             return []          # music / credits only (nothing said), or refused: skip this piece
         out = []
         for line in raw.splitlines():
@@ -590,6 +592,10 @@ def transcribe_burmese(chunks, api_key, log=None):
         return r
     with ThreadPoolExecutor(min(4, len(chunks)) or 1) as ex:
         found = [x for part in ex.map(track, chunks) for x in part]
+    if not found and errors and len(errors) == len(chunks):
+        # every piece failed (no internet, VPN country, quota…): say why, not "no speech"
+        loc = next((e for e in errors if "သုံးခွင့်မပေး" in str(e)), None)
+        raise RuntimeError(str(loc or errors[-1]))
     found.sort()
     segs = []
     for i, (t, text) in enumerate(found):

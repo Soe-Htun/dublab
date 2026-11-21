@@ -1005,7 +1005,7 @@ def _transcribe_and_translate(jid, job):
         segs, lang = transcribe(wav, SRC_LANG[direction], stt_prog, job.get("model"), title=job.get("name") or "",
                                 words=bool(job.get("orig_audio")))   # 🔊 captions: exact word times
         job["segs"], job["seg_lang"] = segs, lang
-    if lang == "my" and job.get("seg_engine") != "gemini":
+    if lang == "my" and (job.get("seg_engine") != "gemini" or not segs):
         # whisper writes Burmese speech as junk ("වවවව…"): let Gemini listen instead
         jlog(job, "Burmese speech — transcribing with Gemini (whisper can't write Burmese)…")
         def g_prog(i, n):
@@ -1017,7 +1017,10 @@ def _transcribe_and_translate(jid, job):
         except RateLimited as e:
             raise ValueError("Gemini quota ဒီနေ့အတွက် ကုန်သွားပြီ — မနက်ဖြန် ပြန်စမ်းပါ" if e.daily else
                              "Gemini က ခဏ ပိတ်ထားတယ် — ၁–၂ မိနစ်နေရင် ▶️ ဆက်လုပ်မယ် ကို နှိပ်ပါ") from None
-        job["segs"], job["seg_engine"] = segs, "gemini"
+        except RuntimeError as e:          # every piece failed: why (VPN country, network…)
+            raise ValueError(str(e)[:400]) from None
+        if segs:                           # ▶️ resume asks Gemini again when it found nothing
+            job["segs"], job["seg_engine"] = segs, "gemini"
     if not segs:
         raise ValueError("အသံထဲမှာ စကားပြောသံ မတွေ့ဘူး")
     if direction == "auto2mm":
