@@ -2265,6 +2265,61 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
     return _cover_logo_save(img, logo, W, portrait, out_jpg)
 
 
+def _clean_crop(w0, h0, boxes, faces, aspect):
+    """The biggest part of a thumbnail with NONE of its text in it (title, "EP01",
+    an "ENG SUB" ribbon…) that still shows the faces: (x0, y0, x1, y1) in pixels, or
+    None. Tries the cover's own shape first, then narrower ones (shown in the middle
+    over a blurred copy) — "EP01" top-left plus "ENG SUB" top-right once left only a
+    thin middle strip, blown up to a blur of petals above the faces."""
+    pad = [(max(0, x0 - 0.015), max(0, y0 - 0.015), min(1, x1 + 0.015), min(1, y1 + 0.015))
+           for x0, y0, x1, y1 in boxes]
+    # a corner badge is usually on a ribbon wider than its letters
+    pad = [(max(0, x0 - 0.04), y0, min(1, x1 + 0.04), min(1, y1 + 0.04)) if y0 < 0.1 and (x0 < 0.05 or x1 > 0.95)
+           else (x0, y0, x1, y1) for x0, y0, x1, y1 in pad]
+    need = faces
+    if faces:
+        big = max(faces, key=lambda f: (f[2] - f[0]) * (f[3] - f[1]))
+        need_sets = [faces, [big]]
+    else:
+        need_sets = [[]]
+    fx = ((min(f[0] for f in faces) + max(f[2] for f in faces)) / 2) if faces else 0.5
+    fy = ((min(f[1] for f in faces) + max(f[3] for f in faces)) / 2) if faces else 0.4
+    best, best_score = None, 0.0
+    for need in need_sets:
+        for k, asp in enumerate((aspect, aspect * 0.8, aspect * 0.62)):
+            for step in range(33):                         # crop height: 100% down to 36%
+                ch = 1.0 - step * 0.02
+                cw = ch * h0 * asp / w0
+                if cw > 1:
+                    cw, ch = 1.0, w0 / asp / h0
+                score = cw * ch * (asp / aspect) ** 0.5     # big, and as wide as the cover
+                if score <= best_score:
+                    break
+                found = None
+                for yi in range(0, int((1 - ch) * 50) + 1):
+                    y = yi / 50
+                    for xi in range(0, int((1 - cw) * 50) + 1):
+                        x = xi / 50
+                        if any(x < bx1 and x + cw > bx0 and y < by1 and y + ch > by0 for bx0, by0, bx1, by1 in pad):
+                            continue
+                        if any(not (f[0] >= x - 0.005 and f[2] <= x + cw + 0.005 and f[1] >= y - 0.005
+                                    and f[3] <= y + ch + 0.005) for f in need):
+                            continue
+                        # faces centred across, and in the upper half of the crop
+                        off = abs(x + cw / 2 - fx) + abs(y + ch * 0.42 - fy) * 0.5
+                        if found is None or off < found[0]:
+                            found = (off, x, y)
+                if found:
+                    best, best_score = (found[1], found[2], cw, ch), score
+                    break
+        if best:
+            break
+    if not best or best_score < 0.12:
+        return None
+    x, y, cw, ch = best
+    return (int(x * w0), int(y * h0), int(min(1, x + cw) * w0), int(min(1, y + ch) * h0))
+
+
 def thumb_cover(thumb, title, out_jpg, portrait=False, logo=None, suffix=""):
     """A cover from the source video's own thumbnail (the look the uploader chose), with
     its own text taken away cleanly: a corner badge ("ENG SUB") is cut off at the side,
@@ -2279,49 +2334,33 @@ def thumb_cover(thumb, title, out_jpg, portrait=False, logo=None, suffix=""):
     except Exception:  # noqa: BLE001
         boxes = []
     w0, h0 = src.size
-    lower = [bx for bx in boxes if (bx[1] + bx[3]) / 2 >= 0.5]          # the thumbnail's own title
-    corner = [bx for bx in boxes if bx not in lower and bx[1] < 0.35]
-    # a corner badge: cut that side off (never the top — that is where the faces are)
-    left = max([x1 + 0.06 for x0, y0, x1, y1 in corner if x0 < 0.25 and x1 < 0.35] + [0.0])   # + its ribbon edge
-    right = max([1 - x0 + 0.06 for x0, y0, x1, y1 in corner if x1 > 0.75 and x0 > 0.65] + [0.0])
-    keep_to = max(0.5, min([y0 for _, y0, _, _ in lower] + [1.0]) - 0.02)   # above its old title
-    pic = src.crop((int(left * w0), 0, int((1 - right) * w0), int(keep_to * h0)))
+    try:
+        import io as _io
+        b2 = _io.BytesIO(); src.save(b2, "JPEG", quality=90)
+        faces = detect_faces([b2.getvalue()])[0]["faces"]
+    except Exception:  # noqa: BLE001
+        faces = []
     W, H = TT_COVER if portrait else (1280, 720)
-    fg = None
-    _logo_left = False
-    if portrait:
-        # the faces bigger (a 1.3x zoom on the middle), over a blurred, dark copy of the
-        # CLEAN picture (no old text showing through the blur)
-        zw = int(W * 1.7)
-        fg = pic.resize((zw, max(1, int(pic.height * zw / pic.width))), Image.LANCZOS)
-        cx = 0.5                                       # centre on the faces (Apple Vision), not the middle
-        try:
-            import io as _io
-            b2 = _io.BytesIO(); pic.save(b2, "JPEG", quality=90)
-            faces = detect_faces([b2.getvalue()])[0]["faces"]
-            if faces:
-                big = max(faces, key=lambda f: (f[2] - f[0]) * (f[3] - f[1]))
-                # all faces if they fit in the crop, else the biggest one
-                xs = [f[0] for f in faces] + [f[2] for f in faces]
-                cx = (min(xs) + max(xs)) / 2 if max(xs) - min(xs) < W / zw * 0.9 else (big[0] + big[2]) / 2
-        except Exception:  # noqa: BLE001
-            pass
-        x0 = int(min(max(cx * zw - W / 2, 0), zw - W))
-        fg = fg.crop((x0, 0, x0 + W, min(fg.height, int(H * 0.58))))   # leave the lower ~40% for the title
-        # the channel logo (top-right) must not sit on a face: then it goes top-left
-        _logo_left = ("at", fg.height)                 # faces sit high: the logo goes low, on the picture's bottom edge
-        canvas = ImageOps.fit(pic, (W, H)).filter(ImageFilter.GaussianBlur(45))
-        canvas = Image.blend(canvas, Image.new("RGB", (W, H), (8, 6, 4)), 0.6)
-        top = 0                                        # the picture at the top, the title under it
-    else:
-        # the picture (above its old title) at the top, a dark band under it for ours
-        canvas = Image.new("RGB", (W, H), (10, 6, 2))
-        fg = pic.resize((W, max(1, int(pic.height * W / pic.width))), Image.LANCZOS)
-        if fg.height > int(H * 0.82):
-            fg = fg.crop((0, 0, W, int(H * 0.82)))      # keep the top (faces)
-        top = 0
+    box_h = int(H * (0.58 if portrait else 0.82))         # the picture's place; our title goes under it
+    crop = _clean_crop(w0, h0, boxes, faces, W / box_h)
+    if crop is None:                                      # text everywhere: the old way (above its title)
+        lower = [bx for bx in boxes if (bx[1] + bx[3]) / 2 >= 0.5]
+        keep_to = max(0.5, min([y0 for _, y0, _, _ in lower] + [1.0]) - 0.02)
+        crop = (0, 0, w0, int(keep_to * h0))
+    pic = src.crop(crop)
+    # the clean picture as large as its place allows; a narrower one sits in the middle
+    # over a blurred, dimmed copy of itself
+    fh = box_h
+    fw = min(W, int(pic.width * fh / pic.height))
+    fh = int(pic.height * fw / pic.width) if fw == W else fh
+    fg = pic.resize((fw, fh), Image.LANCZOS)
+    canvas = ImageOps.fit(pic, (W, H)).filter(ImageFilter.GaussianBlur(45))
+    canvas = Image.blend(canvas, Image.new("RGB", (W, H), (8, 6, 4) if portrait else (10, 6, 2)), 0.6 if portrait else 0.7)
+    top = 0
+    # 9:16: faces sit high, so the logo goes low, on the picture's bottom edge (above our title)
+    _logo_left = ("at", fg.height) if portrait else False
     if fg is not None:
-        canvas.paste(fg, (0, top))
+        canvas.paste(fg, ((W - fg.width) // 2, top))
         pic_bottom = top + fg.height
     else:
         pic_bottom = H
