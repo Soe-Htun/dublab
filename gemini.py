@@ -735,13 +735,79 @@ _GARBLED = (("비디오", "ဗီဒီယို"), ("디오", "ဒီယို"
 _E_BEFORE = re.compile("([\u102B-\u103E])\u1031([\u1000-\u102A])")
 
 
-def fix_script(lines, api_key):
+# Unicode storage order of the marks on one Burmese consonant (UTN #11): medials
+# ျ ြ ွ ှ, then ေ, upper vowels, lower vowels, ါ ာ, ံ, ့, ်, း. Text typed or generated
+# in another order looks the same in some fonts but breaks in others (dotted circles)
+# and in TTS: "ကွြား" → "ကြွား", "ရှင့််" → "ရှင့်", "ကှွာ" → "ကွှာ".
+_MARK_RANK = {0x103B: 1, 0x103C: 2, 0x103D: 3, 0x103E: 4, 0x1031: 5, 0x102D: 6, 0x102E: 6, 0x1032: 6,
+              0x102F: 7, 0x1030: 7, 0x102B: 8, 0x102C: 8, 0x1036: 9, 0x1037: 10, 0x103A: 11, 0x1038: 12}
+_MARK_RUN = re.compile("[\u102B-\u1038\u103A-\u103E]{2,}")
+
+
+def _order_marks(t):
+    def fix(m):
+        run = m.group(0)
+        out = []
+        for ch in sorted(run, key=lambda c: _MARK_RANK.get(ord(c), 0)):
+            if not (out and out[-1] == ch):           # a mark typed twice ("််")
+                out.append(ch)
+        return "".join(out)
+    return _MARK_RUN.sub(fix, t)
+
+
+SPELL_PROMPT = """You are a careful Burmese (Myanmar Unicode) proofreader. Below are numbered lines of Burmese
+narration / subtitles. Fix SPELLING ONLY — wrong or missing medials (ျ ြ ွ ှ), tone marks (့ း ်), vowel
+signs, wrong look-alike letters (ဥ/ဉ, ဝ/၀, ရ/ယ, ပ/ဗ, ည/ဉ) and run-together or broken words. Common words to
+get exactly right: ဗျာ, ဗျ, ရှင့်, ရှင်, ကွာ, ကြားလား, ကြွားသည်, အမှား, အမုန်း, မှန်တယ်, လှလိုက်တာ, ကျွန်တော်,
+ကျွန်မ, ငြိမ်း, ချစ်တယ်, ပြောတယ်, ဖြစ်တယ်, သွားမယ်, ရှိတယ်, မျက်နှာ, ကြောက်တယ်, ငွေ, ရွာ, လျှော့.
+Do NOT change the meaning, the words chosen, names, or the style; do not translate; do not add or remove
+sentences. A line that is already correct is copied unchanged.
+Answer with every line, in the same format: number|||line"""
+
+
+def proofread_my(lines, api_key, batch=60):
+    """Gemini spelling pass over Burmese lines; a 'fix' that rewrites the line
+    (more than small spelling changes) is not taken."""
+    import difflib
+    from concurrent.futures import ThreadPoolExecutor
+    out = list(lines)
+    idx = [i for i, t in enumerate(lines) if re.search("[\u1000-\u109F]", t or "")]
+    chunks = [idx[k:k + batch] for k in range(0, len(idx), batch)]
+
+    def one(chunk):
+        raw = _call(SPELL_PROMPT + "\n\n" + "\n".join(f"{n + 1}|||{lines[i]}" for n, i in enumerate(chunk)),
+                    api_key, max_tokens=8192)
+        got = {}
+        for ln in raw.strip().split("\n"):
+            m = re.match(r"\s*(\d+)\|\|\|(.+)", ln)
+            if m and 1 <= int(m.group(1)) <= len(chunk):
+                got[chunk[int(m.group(1)) - 1]] = m.group(2).strip()
+        return got
+
+    try:
+        with ThreadPoolExecutor(4) as ex:
+            for got in ex.map(one, chunks):
+                for i, new in got.items():
+                    old = lines[i]
+                    if new and new != old and difflib.SequenceMatcher(None, old, new).ratio() >= 0.75 \
+                            and not has_foreign(new):
+                        out[i] = _order_marks(new)
+    except Exception:  # noqa: BLE001 - keep the lines as they were
+        pass
+    return out
+
+
+def fix_script(lines, api_key, proof=True):
     lines = [(t or "").translate(_LOOKALIKE) for t in lines]
     for bad, good in _GARBLED:
         lines = [t.replace(bad, good) for t in lines]
     lines = [_E_BEFORE.sub(lambda m: m.group(1) + m.group(2) + "\u1031", t) for t in lines]
     # …and what was left of it after its foreign letters were dropped ("ဗီအသည်", "ဗီအကို")
     lines = [re.sub(r"ဗီအ(?!ိ)", "ဗီဒီယို", t) for t in lines]
+    # an ASCII colon typed for the visarga ("ကြာ:လား" → "ကြားလား")
+    lines = [_order_marks(re.sub("(?<=[\u1000-\u109F]):", "\u1038", t)) for t in lines]
+    if proof and api_key:
+        lines = proofread_my(lines, api_key)
     bad = [i for i, t in enumerate(lines) if has_foreign(t)]
     if not bad:
         return lines
@@ -755,8 +821,8 @@ def fix_script(lines, api_key):
                 out[bad[int(m.group(1)) - 1]] = m.group(2).strip()
     except Exception:  # noqa: BLE001 - fall through to stripping
         pass
-    return [re.sub(r"\s{2,}", " ", _ORPHAN.sub("", _FOREIGN_SYL.sub("", t.translate(_LOOKALIKE)))).strip()
-            if has_foreign(t) else t for t in out]
+    return [_order_marks(re.sub(r"\s{2,}", " ", _ORPHAN.sub("", _FOREIGN_SYL.sub("", t.translate(_LOOKALIKE)))).strip())
+            if has_foreign(t) else _order_marks(t) for t in out]
 
 
 # ---- cover photos: let the model find the main character ----

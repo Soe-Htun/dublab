@@ -2717,30 +2717,59 @@ def footage(start, dur, spans, min_piece=1.5):
     return out
 
 
+def _spread(timeline, need, piece=3.0, roomy=1.3):
+    """timeline: [(a, b)] real-time stretches in film order. Take `need` seconds from
+    them. When there is much more than needed, take short pieces spread EVENLY across
+    the whole stretch (not only its beginning): the narration walks through the beat's
+    scene in order, so its later sentences meet the later pictures."""
+    total = sum(b - a for a, b in timeline)
+    if total < need * roomy:
+        k, L, g = 1, need, 0.0                         # contiguous from the start
+    else:
+        k = max(1, int(need // piece))
+        L, g = need / k, (total - need) / k
+    out = []
+    for i in range(k):
+        o, left = i * (L + g) + g / 2, L                 # offset on the joined timeline
+        for a, b in timeline:
+            ln = b - a
+            if o >= ln:
+                o -= ln
+                continue
+            take = min(ln - o, left)
+            out.append((a + o, take))
+            left -= take
+            o = 0.0
+            if left <= 1e-3:
+                break
+        if left > 1e-3:                                # ran off the end: last bit from the end
+            out.append((max(timeline[0][0], timeline[-1][1] - left), left))
+    # drop slivers (a cut under 0.4 s looks like a glitch): give their time to a neighbour
+    clean = []
+    for a, ln in out:
+        if ln < 0.4 and clean:
+            pa, pl = clean[-1]
+            clean[-1] = (pa, pl + ln)
+        else:
+            clean.append((a, ln))
+    return clean
+
+
 def beat_footage(start, end, need, spans, max_slow=1.35):
     """Scenes for one recap beat, kept INSIDE that beat's own part of the film
     [start, end) so the picture matches what is being said: the talking parts of that
     stretch first; when they are shorter than the narration, its quiet parts too; when
     even the whole stretch is shorter, it is played a little slower (up to max_slow),
-    and only then does it reach a little past `end`. Returns [(start, len[, out_len])]."""
+    and only then does it reach a little past `end`. A long stretch is sampled evenly
+    from start to end. Returns [(start, len[, out_len])]."""
     end = max(end, start + 0.5)
     talk = [(max(a, start), min(b, end)) for a, b in spans if b > start and a < end] or [(start, end)]
-    talk_len = sum(b - a for a, b in talk)
-    if talk_len >= need:                              # enough talking in its own scene
-        out, left = [], need
-        for a, b in talk:
-            take = min(b - a, left)
-            if take >= 0.4 or take == left:
-                out.append((a, take))
-                left -= take
-            if left <= 0.05:
-                break
-        if left > 0.05:                               # (tiny talk bits were skipped) keep the length exact
-            out.append((start, left))
-        return out or [(start, need)]
+    talk = [(a, b) for a, b in talk if b - a > 0.05] or [(start, end)]
+    if sum(b - a for a, b in talk) >= need:          # enough talking in its own scene
+        return _spread(talk, need)
     whole = end - start
     if whole >= need:                                 # the quiet moments of that scene fill the rest
-        return [(start, need)]
+        return _spread([(start, end)], need)
     if whole * max_slow >= need:                      # the whole scene, a little slower
         return [(start, whole, need)]
     return [(start, whole, whole * max_slow), (end, need - whole * max_slow)]   # then carry on past it
@@ -2774,6 +2803,23 @@ def build_recap_video(src, clips, out_mp4, tmp, progress=None):
            else ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"])
     fps = run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
                "stream=avg_frame_rate", "-of", "csv=p=0", str(src)]).stdout.strip() or "30"
+    try:
+        num, _, den = fps.partition("/")
+        rate = float(num) / float(den or 1)
+        if not 5 <= rate <= 120:
+            raise ValueError
+    except ValueError:
+        fps, rate = "30", 30.0
+    # exact frame counts on a running total: every clip rounded up by a fraction of a
+    # frame added up over hundreds of clips (seconds of drift: the picture fell behind
+    # the narration)
+    want = [c[2] if len(c) > 2 else c[1] for c in clips]
+    frames, acc, prev = [], 0.0, 0
+    for w in want:
+        acc += w
+        f = round(acc * rate)
+        frames.append(max(1, f - prev))
+        prev += frames[-1]
     done = [0]
 
     def cut(item):
@@ -2783,8 +2829,12 @@ def build_recap_video(src, clips, out_mp4, tmp, progress=None):
         start = max(0.0, min(start, total_src - dur - 0.05))
         out = tmp / f"clip{i:05d}.mp4"
         pts = f"setpts={slow:.4f}*PTS," if slow > 1.001 else ""
-        run(["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", str(src), "-t", f"{dur:.3f}",
-             "-an", "-vf", f"{pts}scale=trunc(iw/2)*2:trunc(ih/2)*2,fps={fps},format=yuv420p",
+        # -t before -i limits what is READ (a slowed clip then really plays longer —
+        # as an output option it cut the slowed clip back to its original length);
+        # -frames:v gives the exact length, tpad covers a clip at the film's very end
+        run(["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{dur + 0.25:.3f}", "-i", str(src),
+             "-an", "-vf", f"{pts}scale=trunc(iw/2)*2:trunc(ih/2)*2,fps={fps},tpad=stop_mode=clone:stop_duration=2,"
+             f"format=yuv420p", "-frames:v", str(frames[i]),
              *enc, "-video_track_timescale", "90000", str(out)])
         done[0] += 1
         if progress:
