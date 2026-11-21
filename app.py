@@ -1577,12 +1577,26 @@ def _stay_awake():
         return None
 
 
+_running = [None]          # the job the worker is on (Gemini's "waiting for VPN" goes to its log)
+
+
+def _gemini_wait(msg):
+    j = jobs.get(_running[0] or "")
+    if j:
+        jlog(j, msg)
+
+
+import gemini as _gemini_mod  # noqa: E402
+_gemini_mod.on_wait = _gemini_wait
+
+
 def worker():
     while True:
         with lock:
             while not queue:
                 lock.wait()
             jid = queue.pop(0)
+        _running[0] = jid
         jobs[jid]["status"] = "processing"
         awake = _stay_awake()
         try:

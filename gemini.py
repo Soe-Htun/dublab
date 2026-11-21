@@ -169,6 +169,23 @@ FALLBACK_MODELS = [m.strip() for m in (os.environ.get("DUBLAB_GEMINI_FALLBACKS")
                    "gemini-flash-lite-latest,gemini-3.1-flash-lite,gemini-3.5-flash").split(",") if m.strip()]
 
 
+# "User location is not supported": the network / VPN is in a country Gemini doesn't
+# serve. Instead of failing the job, wait (up to LOC_WAIT s) and try again — switching
+# the VPN on lets the job go on by itself. on_wait(message) tells the job's log (set by app).
+LOC_WAIT = int(os.environ.get("DUBLAB_LOCATION_WAIT") or 1800)
+on_wait = None
+_loc_said = [0.0]
+
+
+def _say_wait(msg):
+    if on_wait and time.time() - _loc_said[0] > 60:       # once a minute, not per thread
+        _loc_said[0] = time.time()
+        try:
+            on_wait(msg)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _call_one(prompt, api_key, max_tokens=8192, images=None):
     models = [MODEL] + [m for m in FALLBACK_MODELS if m != MODEL]
     parts = [{"text": prompt}]
@@ -187,6 +204,7 @@ def _call_one(prompt, api_key, max_tokens=8192, images=None):
                 "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT")]}
     limited = 0
     attempt = 0
+    loc_wait = 0
     busy = 0                       # 5xx answers so far: each one moves on to the next model
     while True:
         url = (f"https://generativelanguage.googleapis.com/v1beta/models/{models[busy % len(models)]}"
@@ -212,6 +230,13 @@ def _call_one(prompt, api_key, max_tokens=8192, images=None):
                 except Exception:  # noqa: BLE001
                     detail = ""
                 print(f"[gemini] HTTP {e.code}: {detail}")
+                if "location is not supported" in detail and loc_wait < LOC_WAIT:
+                    _say_wait("⏸️ Gemini က ဒီနိုင်ငံကနေ သုံးခွင့်မပေးဘူး — VPN ဖွင့်ပါ (Singapore / Japan / US)၊ "
+                              "ဖွင့်တာနဲ့ အလိုလို ဆက်လုပ်မယ် (စောင့်နေတယ်…)")
+                    time.sleep(20)
+                    loc_wait += 20
+                    attempt -= 1
+                    continue
                 if "location is not supported" in detail:   # the VPN / network is in a country
                     raise RuntimeError(                    # Gemini doesn't serve: retrying won't help
                         "Gemini က ဒီနိုင်ငံကနေ သုံးခွင့်မပေးဘူး (User location is not supported) — "
