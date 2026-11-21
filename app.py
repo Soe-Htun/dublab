@@ -1803,8 +1803,13 @@ def job_status(jid):
             parts.append({"n": i, "k": k, "tt": which == "covers_tt", "name": name,
                           "full": which == "covers" and not job.get("parts"),
                           "start": round(a), "end": round(b)})
+    ahead = 0
+    if job["status"] == "queued":       # jobs before this one: the running one + earlier in the queue
+        with lock:
+            q = list(queue)
+        ahead = (q.index(jid) if jid in q else 0) + sum(1 for j in list(jobs.values()) if j.get("status") == "processing")
     return jsonify(status=job["status"], stage=job["stage"], pct=job["pct"],
-                   stage_pct=stage_pct, parts=parts,
+                   stage_pct=stage_pct, parts=parts, ahead=ahead,
                    covers=len(job.get("covers") or []) + len(job.get("covers_tt") or [])
                    if job["status"] == "done" else 0,
                    covers_main=len(job.get("covers") or []),

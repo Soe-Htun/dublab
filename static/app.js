@@ -113,9 +113,10 @@ $('#go').addEventListener('click', () => {
   xhr.send(fd);
 });
 
-const JOBKEY = 'dublab_job';
+const JOBKEY = 'dublab_job';     // per tab (sessionStorage): a new tab starts a new job, a refresh keeps this one
+try { localStorage.removeItem(JOBKEY); } catch (e) {}   // the old browser-wide key
 function showProgress(jid) {
-  try { localStorage.setItem(JOBKEY, jid); } catch (e) {}    // a refresh brings this job back
+  try { sessionStorage.setItem(JOBKEY, jid); } catch (e) {}    // a refresh brings this job back
   try { history.replaceState(null, '', '/?job=' + jid); } catch (e) {}   // the address shows this job, not an old one
   ['card-upload', 'card-opts', 'card-review', 'card-result', 'card-error'].forEach((id) => ($('#' + id).hidden = true));
   $('#card-progress').hidden = false;
@@ -147,7 +148,9 @@ function showProgress(jid) {
       if (j.kind === 'fix') document.querySelectorAll('#stages li').forEach((li) => {
         li.hidden = !['fixcheck', 'fixing'].includes(li.dataset.s);
       });
-      $('#stagelabel').textContent = j.label + (j.pct ? ` · ${j.pct}%` : '');
+      $('#stagelabel').textContent = j.status === 'queued' && j.ahead
+        ? `⏳ တန်းစီနေတယ် — ရှေ့က job ${j.ahead} ခု ပြီးရင် အလိုလို စမယ် (ဒီ tab ကို ဖွင့်ထားရုံပဲ)`
+        : j.label + (j.pct ? ` · ${j.pct}%` : '');
       document.querySelectorAll('#stages li').forEach((li) => {
         const s = li.dataset.s;
         li.classList.remove('active', 'done', 'spin');
@@ -380,10 +383,10 @@ $('#resume').addEventListener('click', async () => {
 });
 
 // back to a fresh upload page (not location.reload(): the address may hold ?job=… and reopen it)
-const goHome = () => { try { localStorage.removeItem(JOBKEY); } catch (e) {} location.href = '/'; };
+const goHome = () => { try { sessionStorage.removeItem(JOBKEY); } catch (e) {} location.href = '/'; };
 $('#again').addEventListener('click', goHome);
 $('#homeback').addEventListener('click', goHome);
-$('#retry').addEventListener('click', () => { try { localStorage.removeItem(JOBKEY); } catch (e) {} location.reload(); });
+$('#retry').addEventListener('click', () => { try { sessionStorage.removeItem(JOBKEY); } catch (e) {} location.reload(); });
 
 // ---- reviews ----
 function makeStars(id) {
@@ -685,13 +688,13 @@ $('#titlechk').addEventListener('change', () => { $('#covertitle_in').hidden = $
 // running, waiting for review, or failed (▶️ resume); a finished one is forgotten
 (async () => {
   let jid = null;
-  try { jid = localStorage.getItem(JOBKEY); } catch (e) {}
+  try { jid = sessionStorage.getItem(JOBKEY); } catch (e) {}
   const q = new URLSearchParams(location.search).get('job');    // /?job=<id> opens that job
   if (q) jid = q;
   if (!jid) return;
   try {
     let r = await fetch('/api/jobs/' + jid);
-    if (!r.ok) { localStorage.removeItem(JOBKEY); return; }
+    if (!r.ok) { sessionStorage.removeItem(JOBKEY); return; }
     let j = await r.json();
     // TikTok done but its 📺 YouTube long version still going (or failed): follow that one
     const c = j.status === 'done' && j.yt_child;
@@ -702,7 +705,7 @@ $('#titlechk').addEventListener('change', () => { $('#covertitle_in').hidden = $
     if (j.status === 'processing' || j.status === 'queued') showProgress(jid);
     else if (j.status === 'review') showReview(jid);
     else if (j.status === 'done') {
-      localStorage.removeItem(JOBKEY);
+      sessionStorage.removeItem(JOBKEY);
       if (q) openDone(jid);            // opened by its link (/?job=…): show that result, not an empty page
     }
     else if (j.status === 'failed') showError(j.error || 'အမှားရှိတယ်', j.resumable ? jid : null);
@@ -717,7 +720,7 @@ $('#stopjob').addEventListener('click', async () => {
     message: 'လုပ်ပြီးသမျှ ပျက်သွားမယ်၊ ဆက်လုပ်လို့ မရတော့ဘူး' });
   if (!yes) return;
   let jid = null;
-  try { jid = localStorage.getItem(JOBKEY); localStorage.removeItem(JOBKEY); } catch (e) {}
+  try { jid = sessionStorage.getItem(JOBKEY); sessionStorage.removeItem(JOBKEY); } catch (e) {}
   if (jid) { try { await fetch('/api/jobs/' + jid + '/cancel', { method: 'POST' }); } catch (e) {} }
   location.reload();
 });
