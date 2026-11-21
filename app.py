@@ -24,7 +24,7 @@ from dub import (WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segme
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
                  build_recap_video, make_covers, mux, run, separate_vocals, beat_footage, trim_silence, frames_every, cut_ranges, mosaic_video, edit_video, fiction_notice, synthesize, speech_regions, fit_cues_to_speech, probe_duration, probe_url, separate_music, split_points,
                  split_video, transcribe)
-from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, find_movie_bounds, pick_cover_frames, translate_lines,
+from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, find_movie_bounds, pick_cover_frames, pick_hook, translate_lines,
                     write_cover_scene, write_intro, write_recap, write_title, movie_name,
                     transcribe_burmese, write_posts, find_sensitive, analyze_warning, check_covers)
 
@@ -242,6 +242,48 @@ def _outro_on_parts(job, parts, d, outro, captions, blur, vw, vh, frame=None):
             tmp.unlink(missing_ok=True)
             jlog(job, f"outro on {p.name} failed: {str(e)[:150]}")
     shutil.rmtree(d / "caps_outro", ignore_errors=True)
+
+
+def _hooks_on(job, d, names):
+    """⚡ Every video (and every part) opens with a 4-10 s teaser scene from inside it,
+    picked by Gemini, then plays from the start. The pick is kept per length so
+    the YouTube video and a one-part TikTok get the same moment."""
+    key = os.environ.get("GEMINI_API_KEY")
+    if not key or not job.get("hook"):
+        return
+    from dub import add_hook, hook_span, opens_with_teaser
+    if not job.get("recap"):
+        # the film keeps its own opening: if it already starts with a teaser, don't add one
+        if "src_teaser" not in job:
+            try:
+                job["src_teaser"] = opens_with_teaser(d / ("input" + job["ext"]))
+            except Exception as e:  # noqa: BLE001
+                job["src_teaser"] = False
+                jlog(job, f"teaser check skipped: {str(e)[:120]}")
+        if job["src_teaser"]:
+            jlog(job, "⚡ the video already opens with its own teaser — not adding one")
+            return
+    picks = job.setdefault("_hook_picks", {})
+    for n in names:
+        p = d / n
+        try:
+            dur = probe_duration(p)
+            if dur < 60:                       # too short for a teaser
+                continue
+            k = str(round(dur))
+            if k not in picks:
+                a, b, cnt = dur * 0.12, dur * 0.8, 20
+                i = pick_hook(sample_frames(p, a, b, cnt, width=384), key)
+                step = (b - a) / cnt
+                picks[k] = hook_span(p, a + step * (i + 0.5), dur)     # starts and ends in a pause
+            start, length = picks[k]
+            tmp = p.with_name(p.stem + "_h.mp4")
+            add_hook(p, start, tmp, length)
+            tmp.replace(p)
+            jlog(job, f"⚡ {n}: opens with the {start / 60:.1f}-min scene as a {length:.1f}s teaser")
+        except Exception as e:  # noqa: BLE001 - keep the video without the teaser
+            (p.with_name(p.stem + "_h.mp4")).unlink(missing_ok=True)
+            jlog(job, f"teaser on {n} skipped: {str(e)[:150]}")
 
 
 def _find_blur(job, src, sfx):
@@ -503,7 +545,7 @@ def _queue_youtube_full(parent):
     except OSError:
         pass
     keep = ("ext", "direction", "voice", "model", "outro", "cover", "logo", "name", "telegram", "owner",
-            "captions", "blur", "my_title", "no_title", "url", "segs", "seg_lang", "seg_engine", "lang", "total", "title_mm", "want_posts", "censor", "episode", "film_name")
+            "captions", "blur", "my_title", "no_title", "url", "segs", "seg_lang", "seg_engine", "lang", "total", "title_mm", "want_posts", "censor", "episode", "film_name", "hook")
     child = {k: parent[k] for k in keep if k in parent}
     # a LONG recap (narrated in our own words, ~80% of the film's length) — not a plain
     # dub of the whole film, which would look like a re-upload of someone else's video
@@ -1276,7 +1318,10 @@ def _voice_and_mux(job):
             # under the dialogue are what TikTok / YouTube flag
             jlog(job, "removing the background music (voices kept)…")
             try:
-                voc = separate_vocals(src, d)
+                def mprog(f):
+                    _sp(job, f)
+                    jlog(job, f"removing the music… {int(f * 100)}%")
+                voc = separate_vocals(src, d, mprog)
                 if voc:
                     run(["ffmpeg", "-y", "-v", "error", "-i", str(voc), "-c:a", "aac", "-b:a", "160k", str(d / "orig_voice.m4a")])
                     dub_wav = d / "orig_voice.m4a"
@@ -1452,6 +1497,7 @@ def _voice_and_mux(job):
         if not cuts:
             if orig_outro:                    # 🔊 mode: the dub track had no outro in it
                 _outro_on_parts(job, [out], d, outro, caps, blur, vw, vh, frame)
+            _hooks_on(job, d, [out.name])
             return [out.name]
         job.update(stage="split", pct=97)
         jlog(job, "cutting the parts…")
@@ -1462,6 +1508,7 @@ def _voice_and_mux(job):
         if outro and (d / "outro.mp3").exists():
             # 🔊 mode: the last part needs it too (the dub track had no outro)
             _outro_on_parts(job, parts if job.get("orig_audio") else parts[:-1], d, outro, caps, blur, vw, vh, frame)
+        _hooks_on(job, d, [p.name for p in parts])
         return [p.name for p in parts]
 
     tag = "MOVIE  |  မြန်မာစာတန်း" if job.get("orig_audio") else None
@@ -1627,6 +1674,7 @@ def create_job():
     keep_bg = request.form.get("keep_bg", "0") == "1"
     outro = request.form.get("outro", "1") == "1"
     intro = request.form.get("intro", "0") == "1"      # off unless ticked
+    hook = request.form.get("hook", "1") == "1"        # ⚡ a ~6 s teaser from inside the video first
     youtube = request.form.get("youtube", "0") == "1"  # TikTok 9:16 always; this adds the 16:9 YouTube one
     yt_full = youtube and request.form.get("ytmode") == "full"   # YouTube = long dub (~80%), TikTok = recap
     my_title = re.sub(r"\s+", " ", request.form.get("title") or "").strip()[:60]   # typed by the user
@@ -1723,7 +1771,7 @@ def create_job():
     jobs[jid] = {"status": "queued", "stage": "queue", "pct": 0, "error": "",
                  "dir": d, "ext": ext, "direction": direction, "url": url,
                  "voice": voice, "review": review, "keep_bg": keep_bg, "phase": 1,
-                 "model": model, "outro": outro, "intro": intro, "cover": cover, "logo": logo, "name": name,
+                 "model": model, "outro": outro, "intro": intro, "hook": hook, "cover": cover, "logo": logo, "name": name,
                  "recap": recap,
                  "tg_src": tg_msg,
                  "id": jid, "telegram": send_tg, "owner": _admin_ok(),

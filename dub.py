@@ -1034,37 +1034,73 @@ def _demucs_devices():
     return ["cpu"]
 
 
-def separate_vocals(src_video, job_dir):
+def separate_vocals(src_video, job_dir, progress=None):
     """The original audio with its MUSIC removed — voices only (Demucs), so a
     copyrighted song under the dialogue is not heard any more. None without Demucs."""
-    out = separate_music(src_video, job_dir)
+    out = separate_music(src_video, job_dir, progress=progress)
     if out is None:
         return None
     voc = Path(out).with_name("vocals.wav")
     return voc if voc.exists() else None
 
 
-def separate_music(src_video, job_dir):
+def separate_music(src_video, job_dir, chunk=300.0, progress=None):
     """Return a wav of the original audio with all voices removed
-    (music + sound effects only), or None if Demucs isn't installed."""
+    (music + sound effects only), or None if Demucs isn't installed. The
+    voices-only track is left next to it as vocals.wav.
+    Long audio is done in `chunk`-second pieces: a 37-min film in one go needs
+    ~5 GB of memory, so on an 8 GB Mac the GPU run failed and the CPU one crawled."""
     import sys
+    import shutil as _sh
     if not demucs_available():
         return None
     d = Path(job_dir)
     wav = d / "orig_stereo.wav"
     run(["ffmpeg", "-y", "-v", "error", "-i", str(src_video),
          "-vn", "-ac", "2", "-ar", "44100", str(wav)])
-    err = None
-    for dev in _demucs_devices():
-        try:
-            run([sys.executable, "-m", "demucs", "--two-stems=vocals",
-                 "-n", "htdemucs", "-d", dev, "-o", str(d / "sep"), str(wav)])
-            out = d / "sep" / "htdemucs" / "orig_stereo" / "no_vocals.wav"
-            if out.exists():
-                return out
-        except RuntimeError as e:
-            err = e
-    raise RuntimeError(f"music separation failed: {err}")
+    total = probe_duration(wav)
+    sep = d / "sep"
+    _sh.rmtree(sep, ignore_errors=True)
+    pieces = d / "sep_in"
+    pieces.mkdir(exist_ok=True)
+    n = max(1, int(-(-total // chunk)))
+    names = []
+    for i in range(n):
+        p = pieces / f"c{i:03d}.wav"
+        run(["ffmpeg", "-y", "-v", "error", "-ss", f"{i * chunk:.3f}", "-t", f"{chunk:.3f}", "-i", str(wav),
+             "-c:a", "pcm_s16le", str(p)])
+        names.append(p)
+    devices = _demucs_devices()
+    for i, p in enumerate(names):
+        err = None
+        for dev in list(devices):
+            try:
+                run([sys.executable, "-m", "demucs", "--two-stems=vocals",
+                     "-n", "htdemucs", "-d", dev, "-o", str(sep), str(p)])
+                if (sep / "htdemucs" / p.stem / "no_vocals.wav").exists():
+                    err = None
+                    break
+                err = RuntimeError("no output")
+            except RuntimeError as e:
+                err = e
+            print(f"[demucs] {dev} failed on piece {i + 1}/{n}: {str(err)[-300:]}")
+            if dev != devices[-1]:
+                devices.remove(dev)        # don't try the failing device on every piece
+        if err:
+            raise RuntimeError(f"music separation failed: {err}")
+        if progress:
+            progress((i + 1) / n)
+    out_dir = sep / "htdemucs" / "orig_stereo"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for stem in ("no_vocals", "vocals"):
+        lst = pieces / f"{stem}.txt"
+        lst.write_text("".join(f"file '{(sep / 'htdemucs' / p.stem / (stem + '.wav')).resolve()}'\n" for p in names))
+        run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(lst),
+             "-c:a", "pcm_s16le", str(out_dir / f"{stem}.wav")])
+    for p in names:
+        _sh.rmtree(sep / "htdemucs" / p.stem, ignore_errors=True)
+    _sh.rmtree(pieces, ignore_errors=True)
+    return out_dir / "no_vocals.wav"
 
 
 FRAME_W, FRAME_H = 1080, 1920      # TikTok / Shorts frame for landscape films
@@ -1625,6 +1661,138 @@ def _outro_tail_fast(part, outro_audio, out, caption_png, caption_y):
         run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(lst),
              "-c", "copy", "-movflags", "+faststart", str(out)])
         want = probe_duration(part) + hold
+        got = probe_duration(out)
+        if abs(got - want) > 1.0:
+            raise RuntimeError(f"joined length {got:.1f}s, expected {want:.1f}s")
+    finally:
+        import shutil as _sh
+        _sh.rmtree(tmp, ignore_errors=True)
+
+
+def _tiny_frames(cmd, w=17, h=16):
+    """Run an ffmpeg command that writes w x h gray raw frames to stdout."""
+    p = subprocess.run(cmd, capture_output=True, timeout=600)
+    raw, n = p.stdout, w * h
+    return [raw[i:i + n] for i in range(0, len(raw) - n + 1, n)]
+
+
+def _dhash(px, w=17, h=16):
+    """256-bit difference hash of a 17x16 gray frame, None for flat frames
+    (black, white, a plain title card) that match anything."""
+    mean = sum(px) / len(px)
+    if (sum((v - mean) ** 2 for v in px) / len(px)) ** 0.5 < 10:
+        return None
+    bits = 0
+    for y in range(h):
+        row = px[y * w:(y + 1) * w]
+        for x in range(w - 1):
+            bits = (bits << 1) | (row[x] > row[x + 1])
+    return bits
+
+
+def opens_with_teaser(video, head=25.0, gap=20.0, max_dist=22):
+    """True when the video already opens with a teaser: pictures from its first
+    `head` seconds come again later in it (a highlight shown first, then the
+    story from the start). Compares the opening (4 frames/s) with the keyframes
+    of the rest (fast: only keyframes are decoded)."""
+    total = probe_duration(video)
+    if total < head + gap + 60:
+        return False
+    sc = "scale=17:16:flags=area,format=gray"
+    top = _tiny_frames(["ffmpeg", "-v", "error", "-t", f"{head:.1f}", "-i", str(video),
+                        "-vf", f"fps=4,{sc}", "-f", "rawvideo", "-"])
+    rest = _tiny_frames(["ffmpeg", "-v", "error", "-skip_frame", "nokey", "-ss", f"{head + gap:.1f}",
+                         "-t", f"{total * 0.9 - head - gap:.1f}", "-i", str(video),
+                         "-vf", sc, "-fps_mode", "vfr", "-f", "rawvideo", "-"])
+    th = [(i, hh) for i, f in enumerate(top) if (hh := _dhash(f)) is not None]
+    rh = [(j, hh) for j, f in enumerate(rest) if (hh := _dhash(f)) is not None]
+    secs, places = set(), set()
+    for i, a in th:
+        for j, b in rh:
+            if bin(a ^ b).count("1") <= max_dist:
+                secs.add(i // 4)
+                places.add(j)
+    # a real teaser: several opening moments found again at several later places
+    return len(secs) >= 3 and len(places) >= 2
+
+
+def quiet_points(video, a, b, noise="-32dB", min_len=0.25):
+    """Middles of the pauses (no speech) in video between a and b seconds,
+    as times in the video. [] on error or when it is never quiet."""
+    try:
+        p = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-ss", f"{max(0.0, a):.3f}", "-t", f"{b - a:.3f}",
+                            "-i", str(video), "-vn", "-af", f"silencedetect=n={noise}:d={min_len}", "-f", "null", "-"],
+                           capture_output=True, text=True, timeout=120)
+    except Exception:  # noqa: BLE001
+        return []
+    starts = [float(x) for x in re.findall(r"silence_start: (-?[\d.]+)", p.stderr)]
+    ends = [float(x) for x in re.findall(r"silence_end: (-?[\d.]+)", p.stderr)]
+    off = max(0.0, a)
+    return [off + (s0 + e0) / 2 for s0, e0 in zip(starts, ends)]
+
+
+def hook_span(video, t, dur_total, lo=4.0, hi=10.0, aim=6.5):
+    """(start, length) of a teaser around moment t that starts and ends in a
+    pause, so no sentence is cut in half; about `aim` s, between lo and hi.
+    Falls back to a plain aim-second window."""
+    q = quiet_points(video, t - 6, t + hi + 2)
+    before = [x for x in q if t - 6 <= x <= t - 0.5]
+    start = max(before) if before else t - 2.5
+    after = [x for x in q if start + lo <= x <= start + hi]
+    end = min(after, key=lambda x: abs(x - start - aim)) if after else start + aim
+    start = max(0.0, start)
+    end = min(end, dur_total - 1)
+    return start, max(lo, end - start)
+
+
+def add_hook(video, start, out, dur=6.0, fade=0.35):
+    """Open the video with a short teaser: `dur` seconds from `start` (inside the
+    video, with its voice and captions) play first, fade out, then the video plays
+    from the beginning as usual (the teaser moment comes again in its place).
+    Fast way: encode only the teaser and join it to the untouched video."""
+    try:
+        _hook_fast(video, start, out, dur, fade)
+        return
+    except Exception as e:  # noqa: BLE001 - re-encode the whole video instead
+        print(f"[hook] fast join failed ({str(e)[:200]}); re-encoding")
+    total = probe_duration(video)
+    fo = dur - fade
+    vf = (f"[0:v]trim={start:.3f}:{start + dur:.3f},setpts=PTS-STARTPTS,fade=t=out:st={fo:.3f}:d={fade}[hv];"
+          f"[0:a]atrim={start:.3f}:{start + dur:.3f},asetpts=PTS-STARTPTS,afade=t=out:st={fo:.3f}:d={fade}[ha];"
+          f"[hv][ha][0:v][0:a]concat=n=2:v=1:a=1[v][a]")
+    enc = (["-c:v", "h264_videotoolbox", "-q:v", "65", "-allow_sw", "1"] if _has_encoder("h264_videotoolbox")
+           else ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"])
+    run(["ffmpeg", "-y", "-v", "error", "-i", str(video), "-filter_complex", vf,
+         "-map", "[v]", "-map", "[a]", *enc, "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+         "-t", f"{total + dur:.3f}", "-movflags", "+faststart", str(out)])
+
+
+def _hook_fast(video, start, out, dur, fade):
+    info = _stream_info(video)
+    v, a = info["video"], info["audio"]
+    if v.get("codec_name") != "h264" or a.get("codec_name") != "aac":
+        raise RuntimeError("not h264/aac")
+    w, h, fps = int(v["width"]), int(v["height"]), v["r_frame_rate"]
+    tb = int(v["time_base"].split("/")[1])
+    sr, ch = int(a.get("sample_rate", 44100)), int(a.get("channels", 2))
+    fo = dur - fade
+    tmp = Path(out).with_name(Path(video).stem + "_hook")
+    tmp.mkdir(exist_ok=True)
+    try:
+        lay = "stereo" if ch == 2 else "mono"
+        enc = (["-c:v", "h264_videotoolbox", "-q:v", "65", "-allow_sw", "1"] if _has_encoder("h264_videotoolbox")
+               else ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"])
+        clip = tmp / "hook.mp4"
+        run(["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", str(video), "-t", f"{dur:.3f}",
+             "-vf", f"scale={w}:{h},setsar=1,fade=t=out:st={fo:.3f}:d={fade},format=yuv420p",
+             "-af", f"aformat=sample_rates={sr}:channel_layouts={lay},afade=t=out:st={fo:.3f}:d={fade}",
+             *enc, "-pix_fmt", "yuv420p", "-r", fps, "-c:a", "aac", "-b:a", "128k", "-ar", str(sr), "-ac", str(ch),
+             "-video_track_timescale", str(tb), str(clip)])
+        lst = tmp / "list.txt"
+        lst.write_text(f"file '{clip.resolve()}'\nfile '{Path(video).resolve()}'\n")
+        run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(lst),
+             "-c", "copy", "-movflags", "+faststart", str(out)])
+        want = probe_duration(video) + probe_duration(clip)
         got = probe_duration(out)
         if abs(got - want) > 1.0:
             raise RuntimeError(f"joined length {got:.1f}s, expected {want:.1f}s")

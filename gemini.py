@@ -949,6 +949,29 @@ def pick_cover_frames(jpegs, api_key):
     return hero, others, layout, action, tiktok, focus
 
 
+HOOK_PROMPT = """Frames 0..{last} come (in order) from one video. It will open with a ~6-second teaser taken from
+somewhere inside it, to make TikTok / YouTube viewers stay. Pick the ONE frame where that teaser should be:
+the most gripping moment — a big action beat, a shock or surprise, a tense face-off, a strong emotion, a funny
+moment — that makes people want to see what happens. The MAIN CHARACTER must be in it, clearly visible
+(face seen, not tiny, not from behind): the main character is the person who appears in the most frames —
+viewers must meet the hero in the teaser. If the video is a COMEDY (funny show, sketch, comedy
+film), pick its FUNNIEST moment (the biggest laugh, a silly reaction, a comic fall or a ridiculous situation) —
+in a comedy the laugh is the hook, even over action. Do NOT pick: title cards, credits, logos, black or blurry
+frames, plain talking with nothing happening, blood, gore or nudity, or the story's final ending (no spoilers).
+Among the frames that show the main character, pick the most gripping (or, in a comedy, the funniest) one.
+Answer with JSON only: {{"frame": <number>}}."""
+
+
+def pick_hook(jpegs, api_key):
+    """Index of the frame to build the opening teaser around; raises on failure."""
+    raw = _call(HOOK_PROMPT.format(last=len(jpegs) - 1), api_key, max_tokens=256,
+                images=[(f"Frame {i}:", b) for i, b in enumerate(jpegs)])
+    m = re.search(r'"frame"\s*:\s*(\d+)', raw)
+    if not m or not 0 <= int(m.group(1)) < len(jpegs):
+        raise ValueError("no hook frame picked")
+    return int(m.group(1))
+
+
 MOVIE_BOUNDS_PROMPT = """Frames S0..S{ls} come (in order) from the START of a movie file, and frames E0..E{le}
 (in order) from its END. Find where the STORY itself starts and ends — everything that is not the story is cut off:
 - before it: ads and promos (casino / betting / lottery (2D 3D), apps, shops, channel intros, "subscribe" screens,
