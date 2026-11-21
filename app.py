@@ -22,7 +22,7 @@ from dub import (WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segme
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
-                 build_recap_video, make_covers, mux, run, separate_vocals, beat_footage, trim_silence, frames_every, cut_ranges, mosaic_video, edit_video, fiction_notice, synthesize, speech_regions, fit_cues_to_speech, probe_duration, probe_url, separate_music, split_points,
+                 build_recap_video, make_covers, mux, run, separate_vocals, beat_footage, trim_silence, frames_every, cut_ranges, mosaic_video, edit_video, fiction_notice, synthesize, speech_regions, fit_cues_to_speech, probe_duration, probe_url, separate_music, split_points, YouTubeBlocked,
                  split_video, transcribe)
 from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, find_movie_bounds, pick_cover_frames, pick_hook, translate_lines,
                     write_cover_scene, write_intro, write_recap, write_title, movie_name,
@@ -1723,6 +1723,10 @@ def create_job():
             return jsonify(error="YouTube / TikTok link ပဲ လက်ခံတယ်"), 400
         try:
             title, dur, live = probe_url(url)
+        except YouTubeBlocked:
+            return jsonify(error="YouTube က ဒီ ကွန်ပျူတာကို ခဏ ပိတ်ထားတယ် (ဒေါင်းတာ များလို့ bot စစ်နေတာ) — "
+                                 "Chrome မှာ YouTube ကို sign in ဝင်ထားပါ၊ ဒါမှမဟုတ် ၃၀ မိနစ်–၁ နာရီနေမှ ပြန်စမ်းပါ "
+                                 "(ဗီဒီယိုကို ဒေါင်းပြီး ဖိုင်နဲ့ တင်လည်း ရတယ်)"), 400
         except Exception:  # noqa: BLE001
             return jsonify(error="ဒီ link ကို ဖွင့်မရဘူး — link စစ်ပါ "
                                  "(private/အသက်ကန့်သတ် ဗီဒီယို မရဘူး)"), 400

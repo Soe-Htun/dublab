@@ -1843,11 +1843,42 @@ def _ydl_opts(**extra):
     return {**opts, **extra}
 
 
+class YouTubeBlocked(RuntimeError):
+    """YouTube asks this computer to prove it is not a bot (too many downloads)."""
+
+
+def _bot_check(e):
+    t = str(e)
+    return "confirm you" in t or "not a bot" in t or "429" in t
+
+
+def _ydl_run(url, opts, download):
+    """extract_info; when YouTube says "sign in to confirm you're not a bot" (too many
+    downloads from this IP), try again with the browser's YouTube sign-in cookies
+    (DUBLAB_YT_BROWSER, default chrome)."""
+    import yt_dlp
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            return ydl.extract_info(url, download=download) or {}
+    except Exception as e:  # noqa: BLE001
+        if not _bot_check(e):
+            raise
+        first = e
+    browser = os.environ.get("DUBLAB_YT_BROWSER", "chrome").strip()
+    if browser.lower() in ("", "0", "none", "off"):
+        raise YouTubeBlocked(str(first)[:300])
+    try:
+        with yt_dlp.YoutubeDL({**opts, "cookiesfrombrowser": (browser,)}) as ydl:
+            return ydl.extract_info(url, download=download) or {}
+    except Exception as e:  # noqa: BLE001
+        if _bot_check(e) or "cookie" in str(e).lower():
+            raise YouTubeBlocked(str(e)[:300]) from None
+        raise
+
+
 def probe_url(url):
     """Return (title, duration_seconds, is_live) without downloading."""
-    import yt_dlp
-    with yt_dlp.YoutubeDL(_ydl_opts()) as ydl:
-        info = ydl.extract_info(url, download=False)
+    info = _ydl_run(url, _ydl_opts(), False)
     return (info.get("title") or "?", float(info.get("duration") or 0),
             bool(info.get("is_live")))
 
@@ -1864,8 +1895,7 @@ def download_url(url, job_dir, max_mb):
         merge_output_format="mp4",
         outtmpl=str(Path(job_dir) / "input.%(ext)s"),
         max_filesize=max_mb * 1024 * 1024)
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True) or {}
+    info = _ydl_run(url, opts, True)
     if not out.exists():
         raise RuntimeError("video download failed")
     # the video's own thumbnail: the covers can be made from it (its look, our title)
