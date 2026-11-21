@@ -610,7 +610,10 @@ function partsNote() {
   const yt = $('#ytchk') && $('#ytchk').checked;
   let txt = +sp ? `${sp} မိနစ်ထက် ရှည်ရင် ${sp} မိနစ်စီ ခွဲမယ် — နာမည်-1, နာမည်-2 … နာမည်-End` : 'ဗီဒီယို တစ်ခုတည်း ထွက်မယ်';
   if (+sp && len) {
-    const n = Math.max(1, Math.round(len / (sp * 60)));
+    // same rule as the server: no part under 4 min (merged, or all parts made equal)
+    let n = Math.ceil(len / (sp * 60));
+    if (n > 1 && len - (n - 1) * sp * 60 < 240 && len / (n - 1) <= sp * 60 * 1.3) n -= 1;
+    n = Math.max(1, n);
     txt = n > 1 ? `≈ ${n} ပိုင်း ထွက်မယ် (${sp} မိနစ်စီ) — နာမည်-1 … နာမည်-End` : 'ဗီဒီယို တစ်ခုတည်း ထွက်မယ်';
   }
   if (+sp && yt) txt = '📱 TikTok: ' + txt + ' · 📺 YouTube: တစ်ကားလုံး ၁ ခု';

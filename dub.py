@@ -1516,21 +1516,32 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
     run_progress(_cmd(copy_video=False), length, progress)
 
 
-def split_points(cues, total, minutes, min_tail=60.0, window=90.0):
-    """Cut times about every `minutes`, moved into the nearest pause between
-    captions (within `window` s) so no sentence is cut in half. A last part
-    shorter than `min_tail` s is merged into the one before."""
+def split_points(cues, total, minutes, min_tail=240.0, window=90.0, max_over=1.3):
+    """Cut times for parts of about `minutes`, moved into the nearest pause between
+    captions (within `window` s) so no sentence is cut in half. No part comes out
+    tiny: when an even split would leave a last part under `min_tail` (4 min), it is
+    merged into the one before if that stays under `max_over` x the length (12 min
+    with 10-min parts → one 12-min video); otherwise all parts are made the same
+    length (25 min with 10-min parts → 3 × ~8 min, not 10 + 10 + 5)."""
+    import math
     step = minutes * 60.0
-    if not minutes or total <= step + min_tail:
+    if not minutes or total <= step:
         return []
+    n = math.ceil(total / step)
+    if total - (n - 1) * step < min_tail and n > 1:
+        if total / (n - 1) <= step * max_over:
+            n -= 1                                        # the short tail goes into the part before
+    if n <= 1:
+        return []
+    part = total / n                                      # equal parts
     gaps = [(b, a2) for (_, b, _), (a2, _, _) in zip(cues, cues[1:]) if a2 - b > 0.25]
-    cuts, target = [], step
-    while total - target >= min_tail:
+    cuts = []
+    for k in range(1, n):
+        target = part * k
         near = [g for g in gaps if abs((g[0] + g[1]) / 2 - target) <= window
-                and (g[0] + g[1]) / 2 > (cuts[-1] if cuts else 0) + step / 2]
+                and (g[0] + g[1]) / 2 > (cuts[-1] if cuts else 0) + part / 2]
         t = min(((g[0] + g[1]) / 2 for g in near), key=lambda m: abs(m - target)) if near else target
         cuts.append(round(t, 3))
-        target = t + step
     return cuts
 
 
