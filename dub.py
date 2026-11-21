@@ -1805,6 +1805,42 @@ def _video_width(path):
     return video_size(path)[0]
 
 
+def video_rotation(path):
+    """The display rotation a phone video carries (0, 90, -90, 180): its pixels are
+    stored sideways and players turn them. 0 when there is none."""
+    try:
+        p = run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                 "stream_side_data=rotation:stream_tags=rotate", "-of", "default=nw=1:nk=1", str(path)])
+        for v in p.stdout.split():
+            if v.lstrip("-").replace(".", "").isdigit() and round(float(v)) % 360:
+                return int(round(float(v)))
+    except Exception:  # noqa: BLE001
+        pass
+    return 0
+
+
+def make_upright(path):
+    """A phone video filmed sideways (rotation flag): re-encode it once with the
+    picture really turned and no flag left, so sizes, layouts, captions and the
+    frame all work on the picture as it is seen — otherwise the finished video came
+    out turned on its side (captions running down the left edge). True if changed."""
+    rot = video_rotation(path)
+    if not rot:
+        return False
+    path = Path(path)
+    tmp = path.with_name(path.stem + ".upright" + path.suffix)
+    enc = (["-c:v", "h264_videotoolbox", "-q:v", "65", "-allow_sw", "1"] if _has_encoder("h264_videotoolbox")
+           else ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18"])
+    # ffmpeg turns the frames by the flag when decoding (autorotate); the output gets none
+    run(["ffmpeg", "-y", "-v", "error", "-i", str(path), "-map", "0:v:0", "-map", "0:a?", *enc,
+         "-pix_fmt", "yuv420p", "-c:a", "copy", "-metadata:s:v:0", "rotate=0", "-movflags", "+faststart", str(tmp)])
+    if video_rotation(tmp):
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError("rotation flag still there")
+    tmp.replace(path)
+    return True
+
+
 def video_size(path):
     p = run(["ffprobe", "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=width,height", "-of", "csv=p=0", str(path)])

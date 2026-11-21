@@ -943,6 +943,12 @@ def _transcribe_and_translate(jid, job):
             jlog(job, f"Telegram download error: {str(e)[:300]}")
             raise ValueError("Telegram ကနေ ဒေါင်းမရဘူး — bot ဆီ ပြန် forward လုပ်ပြီး ထပ်စမ်းပါ") from None
     src = d / ("input" + job["ext"])
+    try:                                   # 📱 a phone video filmed sideways: turn its pixels upright
+        from dub import make_upright
+        if make_upright(src):
+            jlog(job, "phone video with a rotation flag — turned upright")
+    except Exception as e:  # noqa: BLE001
+        jlog(job, f"rotation fix skipped: {str(e)[:120]}")
     total = probe_duration(src)
     job["total"] = total
     # re-uploads often open/close with casino, lottery and app ads: keep only the film
