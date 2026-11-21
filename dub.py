@@ -2694,7 +2694,7 @@ def part_suffix(i, n, episode=None):
 
 
 def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, blur=None, parts=1, episode=None,
-                chooser=None, log=None, art=None, hide=None, picks=None):
+                chooser=None, log=None, art=None, hide=None, picks=None, single=False):
     """The film's cover: 4 photos in a 2x2 grid with the title in the middle.
     With `chooser` (Gemini) the first photo is the main character and the rest
     show the main scenes / other characters; otherwise the sharpest frames.
@@ -2730,7 +2730,19 @@ def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, bl
             action = sorted(action, key=lambda t: (t in blink, t in subbed, ugly(t), -sc.get(t, 0.0)))
             others = sorted(others, key=lambda t: (t in blink, t in subbed, ugly(t), -sc.get(t, 0.0)))
             focus = {t: (b[0] + b[2]) / 2 for t, b in boxes.items()}   # crop around the face
-            if portrait:          # TikTok: the main character's face on top, the movie's main action below
+            if single:            # simple: the main character big and clear, plus (usually) one more photo
+                big = lambda t: -((boxes.get(t) or (0, 0, 0, 0))[3] - (boxes.get(t) or (0, 0, 0, 0))[1])
+                clean = lambda ts: [t for t in ts if t not in blink and t not in subbed]
+                pool = clean(hero) or hero or action or others
+                # a clearly visible face (not tiny), eyes open, the nicer photo first
+                pick = sorted(pool[:6], key=lambda t: (good(t) > 0 and big(t) > -0.12, ugly(t), -sc.get(t, 0.0)))[:1]
+                # the 2nd photo: another character with a clear face, else the main action —
+                # only a decent one (a poor 2nd photo is worse than one big photo)
+                second = [t for t in clean(others) + clean(action) if t not in pick and not ugly(t)]
+                second = sorted(second[:6], key=lambda t: (good(t) > 0, -sc.get(t, 0.0)))[:1]
+                pick += second
+                layout = len(pick)
+            elif portrait:        # TikTok: the main character's face on top, the movie's main action below
                 top = (hero or action or others)[:1]   # (one action photo alone often had no face in it)
                 bot = [t for t in action + others + hero if t not in top][:1]
                 pick = top + bot
@@ -2752,7 +2764,7 @@ def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, bl
             if log:
                 log(f"AI cover pick failed ({str(e)[:120]}) — using the sharpest frames")
     if not pick:
-        pick = pick_cover_times(video, start, end, 2 if portrait else 4, samples=36, tmp=out_dir)
+        pick = pick_cover_times(video, start, end, 2 if single or portrait else 4, samples=36, tmp=out_dir)
     if parts <= 1:
         return [render_collage(video, pick, title, out_dir / "cover1.jpg", portrait, logo, blur, hide=hide,
                                focus=focus, suffix=part_suffix(1, 1, episode))]

@@ -24,7 +24,7 @@ from dub import (WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segme
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
                  build_recap_video, make_covers, mux, run, separate_vocals, beat_footage, trim_silence, frames_every, cut_ranges, mosaic_video, edit_video, fiction_notice, synthesize, speech_regions, fit_cues_to_speech, probe_duration, probe_url, separate_music, split_points, YouTubeBlocked,
                  split_video, transcribe)
-from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, find_movie_bounds, pick_cover_frames, pick_hook, translate_lines,
+from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, find_movie_bounds, pick_cover_frames, pick_hook, thumb_is_good, translate_lines,
                     write_cover_scene, write_intro, write_recap, write_title, movie_name,
                     transcribe_burmese, write_posts, find_sensitive, analyze_warning, check_covers)
 
@@ -431,7 +431,7 @@ for _old in JOBS.iterdir():
 
 # what a finished job needs to be shown again (history, after a restart)
 _META_KEYS = ("id", "name", "title_mm", "status", "stage", "pct", "error", "ext", "parts",
-              "part_times", "covers", "covers_tt", "tt", "cover_pick", "created", "owner", "recap", "tg", "url", "files_gone", "yt_child_id", "kind", "out_name", "fix_note", "fix_changed", "fix_appeal", "risk", "title_mm", "film_name", "episode", "orig_audio")
+              "part_times", "covers", "covers_tt", "tt", "cover_pick", "created", "owner", "recap", "tg", "url", "files_gone", "yt_child_id", "kind", "out_name", "fix_note", "fix_changed", "fix_appeal", "risk", "title_mm", "film_name", "episode", "orig_audio", "posts")
 
 
 def _save_meta(job):
@@ -534,7 +534,7 @@ def _queue_youtube_full(parent):
     except OSError:
         pass
     keep = ("ext", "direction", "voice", "model", "outro", "cover", "logo", "name", "telegram", "owner",
-            "captions", "blur", "my_title", "no_title", "url", "segs", "seg_lang", "seg_engine", "lang", "total", "title_mm", "want_posts", "censor", "episode", "film_name", "hook")
+            "captions", "blur", "my_title", "no_title", "url", "segs", "seg_lang", "seg_engine", "lang", "total", "title_mm", "want_posts", "censor", "episode", "film_name", "hook", "cover_src")
     child = {k: parent[k] for k in keep if k in parent}
     # a LONG recap (narrated in our own words, ~80% of the film's length) — not a plain
     # dub of the whole film, which would look like a re-upload of someone else's video
@@ -634,7 +634,9 @@ def _risk_report(job):
     elif ch:
         add("mid", f"Source: {ch} — ရုပ်ရှင် ပိုင်ရှင်က claim လုပ်နိုင်တယ် (YouTube မှာ Private နဲ့ အရင် စစ်ပါ)")
     if job.get("orig_audio"):
-        add("high", "🔊 မူရင်း အသံ mode — မူရင်း အသံ/ပုံရိပ် အတိုင်းမို့ unoriginal / copyright အန္တရာယ် အများဆုံး")
+        add("high", "🔊 မူရင်း အသံ mode — စာတန်း ထည့်ရုံမို့ TikTok က “unoriginal” လို့ သတ်မှတ်နိုင်တယ်: For You restrict + "
+                    "Creator Rewards အပြီးပိတ် ဖြစ်နိုင်တယ် (YouTube မှာလည်း reused content → monetization မရ)။ "
+                    "ပိုက်ဆံရမယ့် account မှာ မတင်ပါနဲ့ — 🎬 Recap ကို သုံးပါ")
     elif not job.get("recap"):
         add("mid", "Recap မဟုတ်ဘဲ ဗီဒီယို အပြည့် dub — reused content လို့ မြင်နိုင်တယ်")
     else:
@@ -686,6 +688,29 @@ def _caption_times(job):
         elif b - a > 0.2:
             merged.append((a, b))
     return merged or None
+
+
+def _use_thumb(job, thumb, src, key):
+    """🖼️ Cover from the uploader's thumbnail, or from the video's own frames?
+    cover_src: "thumb" / "frames" as chosen; "auto" (default) asks Gemini whether the
+    thumbnail shows the main character well (old-film re-uploads often use a random
+    frame of a minor character)."""
+    mode = job.get("cover_src") or "frames"
+    if mode in ("thumb", "frames"):
+        jlog(job, "cover: " + ("the video's thumbnail (chosen)" if mode == "thumb" else "from the video's frames (chosen)"))
+        return mode == "thumb"
+    if not key:
+        return True
+    try:
+        total = job["total"]
+        frames = sample_frames(src, total * 0.08, total * 0.9, 16, width=480)
+        good, why = thumb_is_good(thumb.read_bytes(), frames, key)
+        jlog(job, f"cover: thumbnail {'looks good' if good else 'not used'} ({why})"
+                  + ("" if good else " — making covers from the video's frames (main character)"))
+        return good
+    except Exception as e:  # noqa: BLE001 - the thumbnail then
+        jlog(job, f"thumbnail check skipped: {str(e)[:100]}")
+        return True
 
 
 def _series_thumb(title):
@@ -1441,11 +1466,14 @@ def _voice_and_mux(job):
                     art = None
                     jlog(job, f"AI cover picture failed ({str(e)[:150]}) — using a photo collage")
             thumb = d / "src_thumb.jpg"
+            series = _series_thumb(job["title_mm"]) if job.get("episode") and job.get("title_mm") else None
+            use_series = bool(series and series.exists() and job.get("cover_src") != "frames")
+            if thumb.exists() and not use_series and not _use_thumb(job, thumb, src, key):
+                thumb = d / "no_thumb.jpg"          # → covers from the video's own frames
             # 📚 a series: every episode uses part 1's picture (only the number changes) —
             # the first episode made under a title keeps its picture for the next ones
-            if job.get("episode") and job.get("title_mm"):
-                series = _series_thumb(job["title_mm"])
-                if series.exists():
+            if series:
+                if use_series:
                     thumb = series
                     jlog(job, "series cover: the same picture as the earlier episodes")
                 elif thumb.exists():
@@ -1471,13 +1499,13 @@ def _voice_and_mux(job):
             covers = make_covers(src, job["title_mm"], d, job["total"] * 0.04, job["total"] * 0.9,
                                  portrait=bool(sfx or tt_only), blur=blur, hide=hide, logo=logo_png,
                                  parts=1 if want_tt else nparts, episode=job.get("episode"),   # the YouTube video stays whole
-                                 chooser=chooser, log=lambda m: jlog(job, m), art=art, picks=picks)
+                                 chooser=chooser, log=lambda m: jlog(job, m), art=art, picks=picks, single=True)
             job["covers"] = [c.name for c in covers]
             if want_tt:                  # 9:16 covers for the TikTok version
                 (d / "tt").mkdir(exist_ok=True)
                 tt = make_covers(src, job["title_mm"], d / "tt", job["total"] * 0.04, job["total"] * 0.9,
                                  portrait=True, blur=blur, hide=hide, logo=logo_png, parts=nparts, episode=job.get("episode"),
-                                 chooser=chooser, log=lambda m: jlog(job, m), picks=picks)
+                                 chooser=chooser, log=lambda m: jlog(job, m), picks=picks, single=True)
                 job["covers_tt"] = ["tt/" + c.name for c in tt]
             jlog(job, f"made {len(job['covers']) + len(job.get('covers_tt') or [])} cover image(s)")
             _check_covers(job)
@@ -1690,6 +1718,7 @@ def create_job():
     keep_bg = request.form.get("keep_bg", "0") == "1"
     outro = request.form.get("outro", "1") == "1"
     intro = request.form.get("intro", "0") == "1"      # off unless ticked
+    cover_src = request.form.get("cover_src") if request.form.get("cover_src") in ("auto", "thumb", "frames") else "frames"
     hook = request.form.get("hook", "0") == "1"        # ⚡ a teaser scene from inside the video first (off unless ticked)
     youtube = request.form.get("youtube", "0") == "1"  # TikTok 9:16 always; this adds the 16:9 YouTube one
     yt_full = youtube and request.form.get("ytmode") == "full"   # YouTube = long dub (~80%), TikTok = recap
@@ -1791,7 +1820,7 @@ def create_job():
     jobs[jid] = {"status": "queued", "stage": "queue", "pct": 0, "error": "",
                  "dir": d, "ext": ext, "direction": direction, "url": url,
                  "voice": voice, "review": review, "keep_bg": keep_bg, "phase": 1,
-                 "model": model, "outro": outro, "intro": intro, "hook": hook, "cover": cover, "logo": logo, "name": name,
+                 "model": model, "outro": outro, "intro": intro, "hook": hook, "cover_src": cover_src, "cover": cover, "logo": logo, "name": name,
                  "recap": recap,
                  "tg_src": tg_msg,
                  "id": jid, "telegram": send_tg, "owner": _admin_ok(),
@@ -1851,6 +1880,7 @@ def job_status(jid):
                    error=job["error"], resumable=_resumable(job), orig=bool(job.get("orig_audio")), kind=job.get("kind") or "",
                    fix_note=job.get("fix_note") or "", fix_changed=bool(job.get("fix_changed", True)),
                    fix_appeal=job.get("fix_appeal") or "", risk=job.get("risk") or [],
+                   posts=_posts_view(job) if job["status"] == "done" else None,
                    yt_child=_child_info(job))
 
 
@@ -2387,8 +2417,8 @@ def _start_posts(job):
     """📝 upload texts (TikTok / YouTube / Facebook) written in the background
     while the video renders — no extra waiting."""
     key = os.environ.get("GEMINI_API_KEY")
-    if not key or not job.get("want_posts"):
-        return None
+    if not key:                     # 📝 always written (shown on the result page to copy);
+        return None                 # sent to Telegram only when "want_posts" is ticked
     def run():
         try:
             story = " ".join(u["text"] for u in job.get("utter") or [])
@@ -2406,6 +2436,24 @@ def _start_posts(job):
 
 
 _AI_WORDS = re.compile(r"(?<![A-Za-z])AI(?![A-Za-z])|人工智能|AI短剧|ai movie|ai drama", re.I)
+
+
+def _posts_view(job):
+    """📝 The upload texts for the result page (each with a copy button)."""
+    p = job.get("posts") or {}
+    if not p or job.get("kind") == "fix":
+        return None
+    out = []
+    if p.get("tiktok") and not job.get("yt_only"):
+        out.append({"label": "📱 TikTok / Reels caption", "text": p["tiktok"]})
+    if p.get("youtube_title"):
+        out.append({"label": "📺 YouTube title", "text": p["youtube_title"]})
+    if p.get("youtube_desc"):
+        out.append({"label": "📺 YouTube description", "text": p["youtube_desc"]})
+    if p.get("facebook"):
+        out.append({"label": "📘 Facebook post", "text": p["facebook"]})
+    ai = bool(p.get("ai_film") or _AI_WORDS.search(job.get("name") or ""))
+    return {"items": out, "ai": ai}
 
 
 def _posts_text(job):
@@ -2513,7 +2561,7 @@ def _telegram_send(job):
             tg["pct"] = int((i + 1) * 100 / len(outs))
             tg["sent"] = i + 1
         tg["how"] = "link" if "link" in hows else "file"
-        text = "" if job.get("kind") == "fix" else _posts_text(job)   # 🔧 the explanation stays on the page
+        text = "" if job.get("kind") == "fix" or not job.get("want_posts") else _posts_text(job)   # 🔧 the explanation stays on the page
         if text:
             try:
                 telegram.send_message(chat, text)

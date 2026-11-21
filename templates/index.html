@@ -148,6 +148,7 @@
       <span>🎞️ <b>Recap မလုပ်ဘူး</b> <span class="dim">— ဗီဒီယို အပြည့်အတိုင်း (မြန်မာ AI အသံနဲ့ dub)</span></span>
     </label>
     <div id="fullopts" class="subopts" hidden>
+      <p class="warnnote">⚠️ Recap မပါရင် TikTok / YouTube က <b>“unoriginal / reused content”</b> လို့ သတ်မှတ်နိုင်တယ် — For You restrict၊ Creator Rewards / monetization အပြီးပိတ် ဖြစ်နိုင်တယ်။ ပိုက်ဆံရမယ့် account မှာ 🎬 Recap ကိုပဲ တင်ပါ</p>
       <label class="checkrow">
         <input type="checkbox" id="origchk" checked>
         <span>🔊 <b>မူရင်း အသံ ထားမယ်</b> <span class="dim">— AI အသံ မသုံးဘဲ မြန်မာ စာတန်းပဲ ထည့်မယ် (တရုတ် comedy၊ မြန်မာ ဇာတ်ကား…)</span></span>
@@ -203,6 +204,12 @@
         <input type="text" id="episode_in" inputmode="numeric" maxlength="3" placeholder="—">
         <span class="dim">series ဆိုရင်ပဲ · ဥပမာ 1 → YouTube “- 1” · TikTok “- 1/1, 1/2… 1/End”</span>
       </label>
+      <div class="coversrc">
+        <span>🖼️ Cover ပုံ</span>
+        <label><input type="radio" name="cover_src" value="frames" checked> 👤 အဓိက ဇာတ်ကောင် <span class="dim">(ဗီဒီယိုထဲက မျက်နှာ ရှင်းတဲ့ ပုံ ၁ ပုံ)</span></label>
+        <label><input type="radio" name="cover_src" value="auto"> 🤖 Auto</label>
+        <label><input type="radio" name="cover_src" value="thumb"> မူရင်း thumbnail</label>
+      </div>
     </div>
     <label class="checkrow">
       <input type="checkbox" id="ytchk" checked>
@@ -219,7 +226,7 @@
       <span>⚡ အစမှာ စိတ်ဝင်စားစရာ အခန်း အရင်ပြမယ် <span class="dim">— ဗီဒီယိုထဲက အဓိက ဇာတ်ကောင်ပါတဲ့ အကောင်းဆုံး အခန်း (ဟာသဆို အရယ်ရဆုံး) ကို ရှေ့ဆုံးမှာ ပြပြီးမှ အစကနေ စမယ် · မူရင်းမှာ ပါပြီးသားဆို မရွေးပါနဲ့</span></span>
     </label>
     <label class="checkrow">
-      <input type="checkbox" id="introchk">
+      <input type="checkbox" id="introchk" checked>
       <span>🎙️ အစမှာ ဇာတ်လမ်း မိတ်ဆက်မယ် <span class="dim">— AI က “ဒီနေ့ ဇာတ်လမ်းက…” ရေးပေးမယ်</span></span>
     </label>
     {% if outro %}
@@ -294,6 +301,10 @@
         <svg class="ic-copy" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
         <svg class="ic-ok" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
       </button>
+    </div>
+    <div id="postsbox" class="postsbox" hidden>
+      <div class="postsbox-head"><b>📝 Upload စာ</b> <span class="dim">— copy ကူးပြီး TikTok / YouTube / Facebook မှာ သုံးပါ (ဖိုင်နာမည် မထည့်ပါနဲ့)</span></div>
+      <div id="postsitems"></div>
     </div>
     <video id="resultvideo" controls playsinline></video>
     <div class="speedrow" id="speedrow">

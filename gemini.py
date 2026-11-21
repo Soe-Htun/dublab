@@ -955,6 +955,28 @@ def analyze_warning(message, duration, api_key, shots=None):
             "appeal": str(data.get("appeal") or "").strip()}
 
 
+THUMB_OK_PROMPT = """Image T is the thumbnail the uploader chose for a video. Frames 0..{last} come from the video
+itself, spread over its whole length. Step 1: find the MAIN CHARACTER — the person who appears in the MOST frames.
+List the frame numbers they appear in. Step 2: list the frame numbers where the person shown biggest in T appears.
+Step 3: T is "good" only if T's person IS the main character (they appear in clearly more frames than anyone else)
+and T is a clear, attractive picture (not blurry, not mostly black, not a logo / title / text screen).
+A person who shows up in only one or two frames is a minor character: then T is not good.
+Answer with JSON only: {{"main_frames": [..], "thumb_person_frames": [..], "good": true | false, "why": "<a few words>"}}"""
+
+
+def thumb_is_good(thumb_jpeg, frames, api_key):
+    """(good, why): does the uploader's thumbnail show the main character well?"""
+    imgs = [("Image T:", thumb_jpeg)] + [(f"Frame {i}:", f) for i, f in enumerate(frames)]
+    raw = _call(THUMB_OK_PROMPT.format(last=len(frames) - 1), api_key, max_tokens=1024, images=imgs)
+    m = re.search(r"\{.*\}", raw, re.S)
+    data = json.loads(m.group(0)) if m else {}
+    good = bool(data.get("good", True))
+    mf, tf = data.get("main_frames") or [], data.get("thumb_person_frames") or []
+    if isinstance(mf, list) and isinstance(tf, list) and mf and len(tf) < max(2, len(mf) * 0.5):
+        good = False                      # T's person is seen far less than the lead: a minor character
+    return good, str(data.get("why") or "")[:80]
+
+
 COVER_CHECK_PROMPT = """These are thumbnails (covers) for videos on TikTok / YouTube / Facebook, numbered 0 to {last}.
 For each, list what could get it limited or flagged as a thumbnail: "blood" (blood, gore, wounds), "nudity"
 (bare breasts / genitals / buttocks, sexual pose), "gambling" (betting / casino logos or ads), "weapon_violence"

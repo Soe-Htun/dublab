@@ -76,6 +76,7 @@ $('#go').addEventListener('click', () => {
   fd.append('outro', $('#outrochk') && $('#outrochk').checked ? '1' : '0');
   fd.append('intro', $('#introchk').checked ? '1' : '0');
   fd.append('hook', $('#hookchk') && $('#hookchk').checked ? '1' : '0');
+  { const c = document.querySelector('input[name="cover_src"]:checked'); fd.append('cover_src', c ? c.value : 'auto'); }
   fd.append('youtube', $('#ytchk').checked ? '1' : '0');
   { const m = document.querySelector('input[name="ytmode"]:checked'); fd.append('ytmode', m && $('#recapchk').checked ? m.value : 'recap'); }
   fd.append('show_title', $('#titlechk').checked ? '1' : '0');
@@ -168,6 +169,7 @@ function showProgress(jid) {
         showResult(jid, j.parts); $('#coverbox').hidden = true;   // covers go to Telegram; not shown here
         showFixNote(j);
         showRisk(j);
+        showPosts(j);
         showYtChild(j.yt_child);
       }
       if (j.status === 'failed') { stopAll(); showError(j.error || 'အမှားရှိတယ်', j.resumable ? jid : null); }
@@ -280,6 +282,7 @@ function showYtChild(c) {
 async function openDone(jid) {
   const j = await (await fetch('/api/jobs/' + jid)).json();
   showResult(jid, j.parts); $('#coverbox').hidden = true; showYtChild(null);
+  showFixNote(j); showRisk(j); showPosts(j);
 }
 
 // 🔧 a fix job: its explanation / appeal on the result card; when the video could not be
@@ -311,6 +314,35 @@ function showFixNote(j) {
   $('#resulthead').textContent = noVideo ? '⚠️ ဗီဒီယို ပြင်လို့ မရပါ' : '🔧 ပြင်ပြီးပါပြီ';
   ['#resultvideo', '#speedrow', '#download', '#parts'].forEach((s) => { const e = $(s); if (e && noVideo) e.hidden = true; });
   if (noVideo) { $('#resultvideo').removeAttribute('src'); }
+}
+
+// 📝 upload texts with a copy button each (no more file names as captions)
+const COPY_SVG = '<svg class="ic-copy" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'
+  + '<svg class="ic-ok" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+function showPosts(j) {
+  const box = $('#postsbox'); if (!box) return;
+  const p = j && j.posts;
+  box.hidden = !(p && p.items && p.items.length);
+  if (box.hidden) return;
+  const wrap = $('#postsitems'); wrap.innerHTML = '';
+  const items = p.ai ? p.items.concat([{ label: '🤖 AI ရုပ်ရှင်', text: '', note: 'TikTok မှာ “AI-generated content”၊ YouTube မှာ “Altered or synthetic content → Yes” ကို ဖွင့်ပါ' }]) : p.items;
+  items.forEach((it) => {
+    const d = document.createElement('div'); d.className = 'fixappeal postitem';
+    const h = document.createElement('div'); h.className = 'fixappeal-head'; h.innerHTML = '<b></b>'; h.firstChild.textContent = it.label;
+    d.appendChild(h);
+    const t = document.createElement('p'); t.textContent = it.text || it.note || ''; d.appendChild(t);
+    if (it.text) {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'copybtn'; b.title = 'Copy'; b.innerHTML = COPY_SVG;
+      b.onclick = async () => {
+        try { await navigator.clipboard.writeText(it.text); }
+        catch (e) { const r = document.createRange(); r.selectNodeContents(t); const s = getSelection(); s.removeAllRanges(); s.addRange(r); document.execCommand('copy'); }
+        b.classList.add('done'); b.title = 'Copied!';
+        clearTimeout(b._t); b._t = setTimeout(() => { b.classList.remove('done'); b.title = 'Copy'; }, 2000);
+      };
+      d.appendChild(b);
+    }
+    wrap.appendChild(d);
+  });
 }
 
 // ⚠️ before uploading: what could bring a claim / warning / strike
