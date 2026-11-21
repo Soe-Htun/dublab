@@ -946,7 +946,8 @@ def _transcribe_and_translate(jid, job):
     total = probe_duration(src)
     job["total"] = total
     # re-uploads often open/close with casino, lottery and app ads: keep only the film
-    a, b = (0.0, total) if have_src else _movie_bounds(job, api_key)
+    # (▶️ resume: done already — unless that check failed the first time, e.g. no Gemini)
+    a, b = (0.0, total) if have_src and job.get("bounds_done", True) else _movie_bounds(job, api_key)
     if a > 1.0 or b < total - 1.0:
         try:
             cut = d / ("film" + job["ext"])
@@ -1138,6 +1139,7 @@ def _movie_bounds(job, api_key):
     src = job["dir"] / ("input" + job["ext"])
     total = job["total"]
     if total < 600:                       # a short clip has no ad block worth looking for
+        job["bounds_done"] = True
         return 0.0, total
     try:
         hs, ts = min(480.0, total * 0.15), min(600.0, total * 0.12)   # end credits can run long
@@ -1152,9 +1154,11 @@ def _movie_bounds(job, api_key):
             jlog(job, f"the story starts at {start / 60:.1f} min — skipping the ads / opening credits before it")
         if end < total:
             jlog(job, f"the story ends at {end / 60:.1f} min — skipping the end credits / ads after it")
+        job["bounds_done"] = True
         return start, end
     except Exception as e:  # noqa: BLE001 - use the whole video
         jlog(job, f"film start/end check skipped: {str(e)[:120]}")
+        job["bounds_done"] = False        # ▶️ resume tries it again
         return 0.0, total
 
 

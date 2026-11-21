@@ -2295,6 +2295,26 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
     return _cover_logo_save(img, logo, W, portrait, out_jpg)
 
 
+def _trim_bars(img, dark=28, min_keep=0.4):
+    """Cut the black bars around a picture (an old 4:3 film inside a 16:9
+    thumbnail): rows / columns that are almost all dark at the edges."""
+    import numpy as np
+    a = np.asarray(img.convert("L"), dtype=np.float32)
+    h, w = a.shape
+    rows = (a > dark).mean(axis=1)                   # share of bright pixels per row
+    cols = (a > dark).mean(axis=0)
+    def edges(v):
+        lit = np.where(v > 0.08)[0]                    # a logo in the bar is not the picture
+        return (int(lit[0]), int(lit[-1]) + 1) if len(lit) else (0, len(v))
+    y0, y1 = edges(rows)
+    x0, x1 = edges(cols)
+    if (y1 - y0) < h * min_keep or (x1 - x0) < w * min_keep:
+        return img
+    if y0 < 3 and y1 > h - 3 and x0 < 3 and x1 > w - 3:
+        return img
+    return img.crop((x0 + 2 if x0 else 0, y0 + 2 if y0 else 0, x1 - 2 if x1 < w else w, y1 - 2 if y1 < h else h))
+
+
 def _clean_crop(w0, h0, boxes, faces, aspect):
     """The biggest part of a thumbnail with NONE of its text in it (title, "EP01",
     an "ENG SUB" ribbon…) that still shows the faces: (x0, y0, x1, y1) in pixels, or
@@ -2356,7 +2376,7 @@ def thumb_cover(thumb, title, out_jpg, portrait=False, logo=None, suffix=""):
     and only the picture ABOVE its old title is kept — our gold title goes on a dark
     band under it. Portrait (TikTok): the picture over a blurred, dimmed copy of itself."""
     from PIL import Image, ImageFilter, ImageOps
-    src = Image.open(thumb).convert("RGB")
+    src = _trim_bars(Image.open(thumb).convert("RGB"))
     try:
         import io as _io
         b = _io.BytesIO(); src.save(b, "JPEG", quality=92)
