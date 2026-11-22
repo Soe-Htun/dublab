@@ -1786,7 +1786,7 @@ def create_job():
     cover_src = "frames"       # 🖼️ covers always from the video: the main character (+ one more photo)
     hook = request.form.get("hook", "0") == "1"        # ⚡ a teaser scene from inside the video first (off unless ticked)
     youtube = request.form.get("youtube", "0") == "1"  # TikTok 9:16 always; this adds the 16:9 YouTube one
-    yt_full = youtube and request.form.get("ytmode") == "full"   # YouTube = long dub (~80%), TikTok = recap
+    yt_full = False            # 📺 YouTube = the recap as one video (the 83%+ long version was dropped)
     my_title = re.sub(r"\s+", " ", request.form.get("title") or "").strip()[:60]   # typed by the user
     episode = re.sub(r"\D", "", request.form.get("episode") or "")[:3] or None     # 📚 a series' episode number
     no_title = request.form.get("show_title", "1") != "1"   # unticked: covers / frame without a title
@@ -2620,7 +2620,8 @@ def _telegram_send(job):
                     head = (job.get("title_mm") or "") + part_suffix(same.index(i + 1) + 1, len(same), job.get("episode"))
                     caption = (head.strip() + "\n" + p["tiktok"].strip())[:1000]
             elif p.get("youtube_title") and job.get("kind") != "fix":
-                caption = p["youtube_title"].strip()[:1000]      # 📺 the YouTube title to copy
+                # 📺 the YouTube title, then its description, ready to copy
+                caption = (p["youtube_title"].strip() + "\n\n" + (p.get("youtube_desc") or "").strip()).strip()[:1000]
             def prog(f, i=i):
                 tg["pct"] = int((i + f) * 100 / len(outs))
             hows.append(_send_one(job, chat, path, name, caption, prog, i + 1))

@@ -468,20 +468,25 @@ Beginning of the Burmese narration:
 Write, in natural Burmese (Myanmar script; film names may stay in their original form):
 - "tiktok": a TikTok / Facebook Reels caption: 1–2 short catchy lines that make people want to watch
   (a hook or question, no spoilers of the ending) that plainly says it is a film's story (start with
-  "🎬 ရုပ်ရှင်ဇာတ်လမ်း:" or similar — never word it like real news), then the hashtags. Under 250 characters.
+  "ရုပ်ရှင်ဇာတ်လမ်း:" or similar — never word it like real news), then the hashtags. Under 250 characters.
 - "youtube_title": a YouTube title under 90 characters: the cover title, plus the film's real name in
   brackets ONLY if that name appears in the original video title above — never invent or guess an
   English name. No clickbait lies, no ALL CAPS.
 - "youtube_desc": a YouTube description: 3–4 lines summing up the story's setup (no ending spoilers),
   a line saying it is a Burmese recap / review with our own narration, then the hashtags.
 - "facebook": a Facebook Page post: 2–3 lines, friendly, a question to invite comments, then the hashtags.
-HASHTAGS: only 3–4 short ENGLISH ones about the genre / story (e.g. #drama #fantasy #revenge #korean).
+HASHTAGS: only 2 short ENGLISH ones about the genre / story (e.g. #drama #fantasy #revenge #korean);
+never #movierecap or #fyp.
 The channel's own Burmese hashtags are added after yours — do not write any Burmese hashtag, and never
 #subtitle-type tags (the video is narrated, not subtitled).
 - "ai_film": true if the title, name or story suggests the film itself is AI-generated (AI movie /
   AI drama / AI short film), else false.
 No channel names other than "{channel}". No like/subscribe begging lines.
+NO EMOJIS anywhere (upload pages sometimes turn them into codes like \\ud83d\\udcb0).
 Reply with ONLY a JSON object with exactly these keys."""
+
+
+_EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u200D\u20E3]")
 
 
 def write_posts(title, name, story, api_key, channel="Marco TV"):
@@ -498,13 +503,27 @@ def write_posts(title, name, story, api_key, channel="Marco TV"):
     fixed = fix_script([ln for _, ln in lines], api_key)          # stray Khmer/Thai letters etc.
     for k in keys:
         out[k] = "\n".join(f for (kk, _), f in zip(lines, fixed) if kk == k).strip()
+    for k in keys:                      # no emojis / symbols: some upload pages turn them into codes
+        out[k] = re.sub(r"[ \t]{2,}", " ", _EMOJI.sub("", out[k])).strip()
     tag = "#" + re.sub(r"\W", "", channel)
-    own = {"tiktok": f"{tag} #မြန်မာRecap #myanmarrecap #movierecap #fyp",
-           "youtube_desc": f"{tag} #movierecap #ရုပ်ရှင် #မြန်မာ",
-           "facebook": f"{tag} #movierecap #ရုပ်ရှင်"}
-    for k, tags in own.items():
-        if out[k]:
-            out[k] += " " + tags
+    # at most 5 hashtags in all (TikTok allows only 5 here): ours first, then the best of the AI's genre tags
+    tag = tag.lower()                   # the account's own tag: #marcotv
+    own = {"tiktok": [tag, "#မြန်မာRecap", "#myanmarrecap"],
+           "youtube_desc": [tag, "#မြန်မာRecap", "#myanmarrecap"],
+           "facebook": [tag, "#မြန်မာRecap", "#myanmarrecap"]}
+    for k, mine in own.items():
+        if not out[k]:
+            continue
+        theirs = re.findall(r"#[^\s#]+", out[k])
+        body = re.sub(r"[ \t]{2,}", " ", re.sub(r"#[^\s#]+", "", out[k])).strip()
+        body = "\n".join(ln.rstrip() for ln in body.splitlines() if ln.strip())
+        seen, tags = set(), []
+        for t in mine + [x for x in theirs if x.casefold() not in ("#movierecap", "#fyp")]:
+            if t.casefold() not in seen and len(tags) < 5:
+                seen.add(t.casefold())
+                tags.append(t)
+        tags = [t for t in tags if t.casefold() not in ("#movierecap", "#fyp")][:5]   # not ours / no use
+        out[k] = (body + "\n" + " ".join(tags)).strip()
     return out
 
 
@@ -867,7 +886,8 @@ def fix_script(lines, api_key, proof=True):
     # …and what was left of it after its foreign letters were dropped ("ဗီအသည်", "ဗီအကို")
     lines = [re.sub(r"ဗီအ(?!ိ)", "ဗီဒီယို", t) for t in lines]
     # an ASCII colon typed for the visarga ("ကြာ:လား" → "ကြားလား")
-    lines = [_order_marks(re.sub("(?<=[\u1000-\u109F]):", "\u1038", t)) for t in lines]
+    # (only inside a word: "ရုပ်ရှင်ဇာတ်လမ်း: …" keeps its real colon)
+    lines = [_order_marks(re.sub("(?<=[\u1000-\u109F]):(?=[\u1000-\u109F])", "\u1038", t)) for t in lines]
     if proof and api_key:
         lines = proofread_my(lines, api_key)
     bad = [i for i, t in enumerate(lines) if has_foreign(t)]

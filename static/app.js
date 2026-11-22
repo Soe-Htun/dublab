@@ -78,7 +78,7 @@ $('#go').addEventListener('click', () => {
   fd.append('hook', $('#hookchk') && $('#hookchk').checked ? '1' : '0');
   fd.append('commentary', $('#commentchk') && $('#commentchk').checked ? '1' : '0');
   fd.append('youtube', $('#ytchk').checked ? '1' : '0');
-  { const m = document.querySelector('input[name="ytmode"]:checked'); fd.append('ytmode', m && $('#recapchk').checked ? m.value : 'recap'); }
+  fd.append('ytmode', 'recap');       // 📺 YouTube = the recap as one video (the 83% long version was dropped)
   fd.append('show_title', $('#titlechk').checked ? '1' : '0');
   fd.append('title', ($('#covertitle_in').value || '').trim());
   fd.append('episode', ($('#episode_in').value || '').replace(/\D/g, ''));
@@ -91,7 +91,7 @@ $('#go').addEventListener('click', () => {
   try { localStorage.setItem('dublab_split', split); } catch (e) {}
   fd.append('logo', $('#logochk') && $('#logochk').checked ? '1' : '0');
   fd.append('telegram', !$('#tgrow').hidden && $('#tgchk').checked ? '1' : '0');
-  fd.append('posts', !$('#tgrow').hidden && $('#tgchk').checked && $('#postschk').checked ? '1' : '0');
+  fd.append('posts', '0');            // 📝 captions now go with each video on Telegram (no separate message)
   fd.append('captions', $('#capchk').checked ? '1' : '0');
   fd.append('blur', $('#blurchk').checked ? '1' : '0');
   fd.append('censor', $('#censorchk').checked ? '1' : '0');
@@ -558,7 +558,6 @@ async function tgState() {
   if (st.configured && st.authorized && st.connected) {
     $('#tgpick').hidden = false;
     $('#tgrow').hidden = false;
-    $('#postsopts').hidden = !$('#tgchk').checked;
     $('#tgrow-to').textContent = '→ ' + (st.chat || '') + (st.bot && st.bot.username ? ' (@' + st.bot.username + ')' : '');
   }
 })();
@@ -760,12 +759,11 @@ $('#stopjob').addEventListener('click', async () => {
 });
 
 // 📺 YouTube length choice: only when YouTube is ticked and it is a recap
-function syncYtMode() { $('#ytmode').hidden = !($('#ytchk').checked && $('#recapchk').checked); }
+function syncYtMode() { /* the YouTube length choice was removed */ }
 $('#ytchk').addEventListener('change', syncYtMode);
 syncYtMode();
 
 // 📝 upload texts only make sense when the videos go to Telegram
-$('#tgchk').addEventListener('change', () => { $('#postsopts').hidden = $('#tgrow').hidden || !$('#tgchk').checked; });
 
 // ---- 🔧 fix one flagged part (owner only: it needs the admin key) ----
 (function () {
