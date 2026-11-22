@@ -310,7 +310,7 @@ CHANNEL_RULE = """
 - CHANNEL NAME: this dub is published on the channel "{channel}". Whenever a line names the original creator's channel or brand (e.g. "subscribe to Filmyvia Recaps", "welcome back to X", "follow X for more"), write "{channel}" instead of that name, keeping it in Latin letters exactly as given. Never mention any other channel's name."""
 
 
-def translate_lines(lines, direction, api_key, src_lang_name=None, channel=None, prog=None):
+def translate_lines(lines, direction, api_key, src_lang_name=None, channel=None, prog=None, title=""):
     """lines: [str] -> [translated str], same order.
 
     direction "any2mm" translates from src_lang_name (e.g. "Japanese").
@@ -322,6 +322,14 @@ def translate_lines(lines, direction, api_key, src_lang_name=None, channel=None,
     if channel:
         head, sep, tail = prompt.partition("\n- Output format:")
         prompt = head + CHANNEL_RULE.format(channel=channel) + sep + tail
+    if direction != "mm2en":
+        try:                                # 👤 one fixed list of character names for every chunk
+            cast = write_cast(list(enumerate(lines)), api_key, src_lang_name, title=title)
+            if cast:
+                prompt += ("\n\nCHARACTER NAMES — use exactly these Burmese names for these people in every line "
+                           "(speech recognition may have garbled them in the source):\n" + cast)
+        except Exception:  # noqa: BLE001 - the per-line name rule still applies
+            pass
     def _chunk(start):
         chunk = lines[start:start + CHUNK]
         numbered = "\n".join(f"{i + 1}|||{t}" for i, t in enumerate(chunk))
@@ -680,7 +688,7 @@ def transcribe_burmese(chunks, api_key, log=None):
     return segs
 
 
-def write_cast(lines, api_key, lang=None, max_chars=60000):
+def write_cast(lines, api_key, lang=None, max_chars=60000, title=""):
     """Burmese names for the characters, decided once for the whole film so
     every parallel recap section calls them the same."""
     text = "\n".join(t for _, t in lines)
@@ -689,13 +697,22 @@ def write_cast(lines, api_key, lang=None, max_chars=60000):
         mid = len(text) // 2
         text = text[:third] + "\n…\n" + text[mid - third // 2: mid + third // 2] + "\n…\n" + text[-third:]
     prompt = CAST_PROMPT_MM if _is_burmese(lang) else CAST_PROMPT
-    raw = _call(prompt.format(lang=lang or "original language") + "\n\nTranscript:\n" + text,
+    known = ""
+    if title:
+        # a known drama / film: its characters' real names, not what speech recognition made of
+        # them (Legend of Fei: "သီချင်းဖီး" was Zhou Fei, "လီစheng" Li Sheng)
+        known = (f"\nThe video's own title: {title}\nIf you recognise this film / drama, use its characters' REAL names "
+                 "(from the cast list you know) written in Burmese letters — e.g. The Legend of Fei: Zhou Fei = "
+                 "ကျိုးဖေး, Xie Yun = ရှဲ့ယွင်, Li Sheng = လီရှန်. Speech recognition garbles names: trust the real cast "
+                 "names over the transcript's spelling. Every name fully in Burmese letters, never half Latin.\n")
+    raw = _call(prompt.format(lang=lang or "original language") + known + "\n\nTranscript:\n" + text,
                 api_key, max_tokens=2000)
     rows = [r.strip(" -*") for r in raw.strip().splitlines() if "=" in r]
     return "\n".join(rows[:12])
 
 
-def write_recap(lines, minutes, api_key, lang=None, channel=None, min_minutes=0, log=None, prog=None, slack=5):
+def write_recap(lines, minutes, api_key, lang=None, channel=None, min_minutes=0, log=None, prog=None, slack=5,
+                title=""):
     """lines: [(start_seconds, text)] of the whole video. Returns beats
     [{"from": i, "to": j, "say": burmese}] in order (i/j index into lines).
     Long targets are written in parallel sections of ~4 minutes.
@@ -708,7 +725,7 @@ def write_recap(lines, minutes, api_key, lang=None, channel=None, min_minutes=0,
     extra = ("Leave out any channel names and channel promotion of the original video; "
              "no greetings, no like/subscribe/follow lines (those are added separately).")
     try:
-        cast = write_cast(lines, api_key, lang)
+        cast = write_cast(lines, api_key, lang, title=title)
     except Exception as e:  # noqa: BLE001 - the per-section name rule still applies
         cast = ""
         if log:
@@ -786,14 +803,22 @@ def write_recap(lines, minutes, api_key, lang=None, channel=None, min_minutes=0,
 _FOREIGN = re.compile("[^\u0000-\u024F\u1000-\u109F\uA9E0-\uA9FF\uAA60-\uAA7F"
                       "\u2000-\u206F\u20A0-\u20CF\u2100-\u214F]")
 
-FIX_PROMPT = """These Burmese lines wrongly contain characters from other scripts (e.g. Thai, Chinese, Hindi,
+SCRIPT_FIX_PROMPT = """These Burmese lines wrongly contain characters from other scripts (e.g. Thai, Chinese, Hindi,
 Punjabi, Kannada, Telugu, Sinhala, Hebrew).
 Rewrite each line in correct Burmese (Myanmar script) only, keeping the meaning and style.
-Names may stay in Latin letters. Output exactly one line per input as "N|||line". Nothing else."""
+Names are written in Burmese letters too (never half Latin, half Burmese like "လီစheng" — write "လီချန်" etc.).
+Also fix wrong or garbled Burmese words so the line makes sense.
+Output exactly one line per input as "N|||line". Nothing else."""
+
+
+_LATIN_IN_MY = re.compile("[\u1000-\u109F][a-z]|[a-z][\u1000-\u109F]")
 
 
 def has_foreign(text):
-    return bool(_FOREIGN.search(text or ""))
+    return bool(_FOREIGN.search(text or "") or _LATIN_IN_MY.search(text or ""))
+
+
+_PIPES = re.compile(r"\s*\|[\d|\s]*\|?\s*")
 
 
 # letters Gemini sometimes writes in place of their Burmese look-alikes
@@ -813,7 +838,7 @@ _ORPHAN = re.compile(r"(^|(?<=\s))[\u102B-\u103E]+")     # marks left at the sta
 _GARBLED = (("비디오", "ဗီဒီယို"), ("디오", "ဒီယို"), ("လူထခံရ", "အထင်သေးခံရ"))
 # a vowel sign written BEFORE its consonant ("ပါေယာင်": e-vowel typed visually, as old
 # Zawgyi-style input does): Unicode keeps the consonant first — "ပါယောင်"
-_E_BEFORE = re.compile("([\u102B-\u103E])\u1031([\u1000-\u102A])")
+_E_BEFORE = re.compile("([\u102B-\u1030\u1032-\u103A])\u1031([\u1000-\u102A])")   # not after a medial: "တွေက" is right
 
 
 # Unicode storage order of the marks on one Burmese consonant (UTN #11): medials
@@ -872,8 +897,8 @@ def proofread_my(lines, api_key, batch=60):
             for got in ex.map(one, chunks):
                 for i, new in got.items():
                     old = lines[i]
-                    if new and new != old and difflib.SequenceMatcher(None, old, new).ratio() >= 0.75 \
-                            and not has_foreign(new):
+                    if new and new != old and "|" not in new and difflib.SequenceMatcher(None, old, new).ratio() >= 0.75 \
+                            and not _FOREIGN.search(new):
                         out[i] = _order_marks(new)
     except Exception:  # noqa: BLE001 - keep the lines as they were
         pass
@@ -881,7 +906,7 @@ def proofread_my(lines, api_key, batch=60):
 
 
 def fix_script(lines, api_key, proof=True):
-    lines = [(t or "").translate(_LOOKALIKE) for t in lines]
+    lines = [_PIPES.sub(" ", (t or "")).strip().translate(_LOOKALIKE) for t in lines]   # "။|1|1|" leftovers
     for bad, good in _GARBLED:
         lines = [t.replace(bad, good) for t in lines]
     lines = [_E_BEFORE.sub(lambda m: m.group(1) + m.group(2) + "\u1031", t) for t in lines]
@@ -897,7 +922,7 @@ def fix_script(lines, api_key, proof=True):
         return lines
     out = list(lines)
     try:
-        raw = _call(FIX_PROMPT + "\n\n" + "\n".join(f"{k + 1}|||{lines[i]}" for k, i in enumerate(bad)),
+        raw = _call(SCRIPT_FIX_PROMPT + "\n\n" + "\n".join(f"{k + 1}|||{lines[i]}" for k, i in enumerate(bad)),
                     api_key)
         for line in raw.strip().split("\n"):
             m = re.match(r"(\d+)\|\|\|(.+)", line.strip())

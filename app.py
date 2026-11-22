@@ -244,7 +244,7 @@ def _outro_on_parts(job, parts, d, outro, captions, blur, vw, vh, frame=None):
     shutil.rmtree(d / "caps_outro", ignore_errors=True)
 
 
-def _hooks_on(job, d, names, cues=None):
+def _hooks_on(job, d, names, cues=None, window=None):
     """⚡ Every video (and every part) opens with a 4-10 s teaser scene from inside it,
     picked by Gemini, then plays from the start. The pick is kept per length so
     the YouTube video and a one-part TikTok get the same moment."""
@@ -261,11 +261,17 @@ def _hooks_on(job, d, names, cues=None):
             if dur < 60:                       # too short for a teaser
                 continue
             k = str(round(dur))
+            if idx == 0 and "first" in picks and not window:
+                k = "first"                    # TikTok part 1 = the YouTube video's teaser
             if k not in picks:
-                a, b, cnt = dur * 0.12, dur * 0.8, 20
+                lo_, hi_ = window or (0.0, dur)
+                hi_ = min(hi_, dur)
+                a, b, cnt = lo_ + (hi_ - lo_) * 0.12, lo_ + (hi_ - lo_) * 0.8, 20
                 i = pick_hook(sample_frames(p, a, b, cnt, width=384), key)
                 step = (b - a) / cnt
                 picks[k] = hook_span(p, a + step * (i + 0.5), dur, cues=pc)   # starts/ends with a caption line
+                if window:
+                    picks["first"] = picks[k]
             start, length = picks[k]
             tmp = p.with_name(p.stem + "_h.mp4")
             add_hook(p, start, tmp, length)
@@ -1189,7 +1195,7 @@ def _translate(job, utter, direction, lang, api_key):
     try:
         texts = translate_lines([u["text"] for u in utter], direction, api_key,
                                 LANG_NAMES.get(lang, lang), _settings["channel_name"] or None,
-                                prog=lambda f: _sp(job, f))
+                                prog=lambda f: _sp(job, f), title=job.get("name") or "")
     except RateLimited as e:
         raise ValueError("Gemini ဘာသာပြန် quota ဒီနေ့အတွက် ကုန်သွားပြီ — မနက်ဖြန် ပြန်စမ်းပါ"
                          if e.daily else
@@ -1246,7 +1252,7 @@ def _write_recap(job, utter, lang, api_key):
                             LANG_NAMES.get(lang, lang), _settings["channel_name"] or None,
                             min_minutes=job["recap"], log=lambda m: jlog(job, m),
                             slack=0 if job.get("recap_strict") else 5,
-                            prog=lambda f: _sp(job, f))
+                            prog=lambda f: _sp(job, f), title=job.get("name") or "")
     except RateLimited as e:
         raise ValueError("Gemini quota ဒီနေ့အတွက် ကုန်သွားပြီ — မနက်ဖြန် ပြန်စမ်းပါ" if e.daily else
                          "Gemini က ခဏ ပိတ်ထားတယ် — ၁–၂ မိနစ်နေရင် 🔁 ပြန်စမ်းပါ") from None
@@ -1593,6 +1599,8 @@ def _voice_and_mux(job):
             jlog(job, f"cover skipped: {e}")
     intro_img = d / job["covers"][0] if lead and job.get("covers") else None
 
+    tt_cuts = list(cuts)                    # TikTok's cut points (the YouTube video stays whole)
+
     def _render(frame, name, caps, cuts):
         """mux, then split into parts and give each part the outro; returns file names."""
         out = d / f"{name}.mp4"
@@ -1605,7 +1613,9 @@ def _voice_and_mux(job):
         if not cuts:
             if orig_outro:                    # 🔊 mode: the dub track had no outro in it
                 _outro_on_parts(job, [out], d, outro, caps, blur, vw, vh, frame)
-            _hooks_on(job, d, [out.name], [[(c[0], c[1]) for c in cues]])
+            # the whole (YouTube) video opens with the SAME teaser as TikTok part 1: picked inside part 1
+            _hooks_on(job, d, [out.name], [[(c[0], c[1]) for c in cues]],
+                      window=(0.0, tt_cuts[0] if tt_cuts else 10.0 ** 9))
             return [out.name]
         job.update(stage="split", pct=97)
         jlog(job, "cutting the parts…")
