@@ -57,7 +57,7 @@ _settings = {"max_minutes": int(os.environ.get("DUBLAB_MAX_MINUTES") or 30),
              # spoken at the end of every dub (in the chosen voice); "" = off
              "outro": (os.environ.get("DUBLAB_OUTRO") or "").strip()[:OUTRO_MAX],
              # the owner's channel: replaces other channels' names in the dub
-             "channel_name": (os.environ.get("DUBLAB_CHANNEL_NAME") or "Marco Recap").strip()[:CHANNEL_MAX],
+             "channel_name": (os.environ.get("DUBLAB_CHANNEL_NAME") or "Marco TV").strip()[:CHANNEL_MAX],
              "logo_position": "top-right",
              "logo_size": 12,   # % of the video width
              # Burmese captions: text size (% of video height); blur band that
@@ -2488,7 +2488,7 @@ def _start_posts(job):
         try:
             story = " ".join(u["text"] for u in job.get("utter") or [])
             job["posts"] = write_posts(job.get("title_mm") or "", job.get("name") or "", story, key,
-                                       _settings.get("channel_name") or "Marco Recap")
+                                       _settings.get("channel_name") or "Marco TV")
             if job.get("episode") and job["posts"].get("youtube_title"):     # 📚 "Title - 3"
                 job["posts"]["youtube_title"] = job["posts"]["youtube_title"].rstrip() + f" - {job['episode']}"
             (job["dir"] / "posts.txt").write_text(_posts_text(job), encoding="utf-8")
@@ -2612,6 +2612,15 @@ def _telegram_send(job):
             tag = ("📱 TikTok" if which == "covers_tt" else "📺 YouTube") if job.get("tt") else "🎬"
             same = [x for x in range(1, len(outs) + 1) if _out_kind(job, x)[0] == which]   # this kind's files
             caption = f"{tag} {name[:-4]}" + (f"  ({same.index(i + 1) + 1}/{len(same)})" if len(same) > 1 else "")
+            p = job.get("posts") or {}
+            if which == "covers_tt" or not job.get("tt"):
+                if p.get("tiktok") and job.get("kind") != "fix":
+                    # 📱 the TikTok caption itself, ready to copy on the phone: "Title - 1/3" + text + tags
+                    from dub import part_suffix
+                    head = (job.get("title_mm") or "") + part_suffix(same.index(i + 1) + 1, len(same), job.get("episode"))
+                    caption = (head.strip() + "\n" + p["tiktok"].strip())[:1000]
+            elif p.get("youtube_title") and job.get("kind") != "fix":
+                caption = p["youtube_title"].strip()[:1000]      # 📺 the YouTube title to copy
             def prog(f, i=i):
                 tg["pct"] = int((i + f) * 100 / len(outs))
             hows.append(_send_one(job, chat, path, name, caption, prog, i + 1))

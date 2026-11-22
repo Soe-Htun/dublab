@@ -484,7 +484,7 @@ No channel names other than "{channel}". No like/subscribe begging lines.
 Reply with ONLY a JSON object with exactly these keys."""
 
 
-def write_posts(title, name, story, api_key, channel="Marco Recap"):
+def write_posts(title, name, story, api_key, channel="Marco TV"):
     """Upload texts for TikTok / YouTube / Facebook in one call:
     {tiktok, youtube_title, youtube_desc, facebook, ai_film}."""
     raw = _call(POSTS_PROMPT.format(channel=channel, title=title or "-", name=name or "-",
@@ -499,7 +499,7 @@ def write_posts(title, name, story, api_key, channel="Marco Recap"):
     for k in keys:
         out[k] = "\n".join(f for (kk, _), f in zip(lines, fixed) if kk == k).strip()
     tag = "#" + re.sub(r"\W", "", channel)
-    own = {"tiktok": f"{tag} #movierecap #ရုပ်ရှင် #မြန်မာ #fyp",
+    own = {"tiktok": f"{tag} #မြန်မာRecap #myanmarrecap #movierecap #fyp",
            "youtube_desc": f"{tag} #movierecap #ရုပ်ရှင် #မြန်မာ",
            "facebook": f"{tag} #movierecap #ရုပ်ရှင်"}
     for k, tags in own.items():
