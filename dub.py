@@ -898,14 +898,38 @@ _MY_BREAK = re.compile(r"(?<!\u1039)(?=[\u1000-\u102A\u103F\u104C-\u104F]"
                        r"(?![\u102B-\u1038\u103B-\u103E]*[\u103A\u1039]))")   # not "ည့်": a killed consonant
 
 
+_NON_MY = re.compile(r"[^\u1000-\u109F\uAA60-\uAA7F\uA9E0-\uA9FF]+")
+
+
 def _split_wide(draw, word, font, max_w):
-    """Break one over-wide word at Burmese syllable starts (or characters)."""
-    parts = [p for p in _MY_BREAK.split(word) if p] or list(word)
+    """Break one over-wide word at Burmese syllable starts — never inside an English
+    word or a number ("important" stays whole, it moves to the next line) and never
+    between a consonant and its marks (ေ ် ့ ျ… stay with their syllable)."""
+    parts = []
+    pos = 0
+    for m in _NON_MY.finditer(word):                     # Latin / digits / punctuation: one piece
+        if m.start() > pos:
+            parts += [p for p in _MY_BREAK.split(word[pos:m.start()]) if p]
+        if parts and not re.match(r"[A-Za-z0-9]", m.group(0)):
+            parts[-1] += m.group(0)                      # "…တယ်။" / "…," stays on its line
+        else:
+            parts.append(m.group(0))
+        pos = m.end()
+    if pos < len(word):
+        parts += [p for p in _MY_BREAK.split(word[pos:]) if p]
+    parts = parts or [word]
     for k in range(len(parts) - 2, -1, -1):     # a lone "အ" is a prefix: keep it with what follows
         if parts[k] == "အ":
             parts[k:k + 2] = [parts[k] + parts[k + 1]]
-    if len(parts) == 1:
-        parts = list(word)
+    # a piece starting with a mark (ေ ် ့ ာ …) belongs to the one before
+    k = 1
+    while k < len(parts):
+        if re.match("[\u102B-\u103E\u1056-\u1059\u105E-\u1060\u1062-\u1064\u1067-\u106D\u1071-\u1074\u1082-\u108D]", parts[k]):
+            parts[k - 1:k + 1] = [parts[k - 1] + parts[k]]
+        else:
+            k += 1
+    if len(parts) == 1 and _tlen(draw, word, font) > max_w and not re.search("[\u1000-\u109F]", word):
+        parts = list(word)                      # one huge English word: no other way
     out, cur = [], ""
     for p in parts:
         if cur and _tlen(draw, cur + p, font) > max_w:

@@ -810,7 +810,7 @@ _ORPHAN = re.compile(r"(^|(?<=\s))[\u102B-\u103E]+")     # marks left at the sta
 
 # whole words Gemini sometimes writes in Korean inside Burmese ("ဗီ디오" for ဗီဒီယို):
 # stripping the foreign letters left "ဗီ"
-_GARBLED = (("비디오", "ဗီဒီယို"), ("디오", "ဒီယို"))
+_GARBLED = (("비디오", "ဗီဒီယို"), ("디오", "ဒီယို"), ("လူထခံရ", "အထင်သေးခံရ"))
 # a vowel sign written BEFORE its consonant ("ပါေယာင်": e-vowel typed visually, as old
 # Zawgyi-style input does): Unicode keeps the consonant first — "ပါယောင်"
 _E_BEFORE = re.compile("([\u102B-\u103E])\u1031([\u1000-\u102A])")
@@ -840,7 +840,9 @@ SPELL_PROMPT = """You are a careful Burmese (Myanmar Unicode) proofreader. Below
 narration / subtitles. Fix SPELLING ONLY — wrong or missing medials (ျ ြ ွ ှ), tone marks (့ း ်), vowel
 signs, wrong look-alike letters (ဥ/ဉ, ဝ/၀, ရ/ယ, ပ/ဗ, ည/ဉ) and run-together or broken words. Common words to
 get exactly right: ဗျာ, ဗျ, ရှင့်, ရှင်, ကွာ, ကြားလား, ကြွားသည်, အမှား, အမုန်း, မှန်တယ်, လှလိုက်တာ, ကျွန်တော်,
-ကျွန်မ, ငြိမ်း, ချစ်တယ်, ပြောတယ်, ဖြစ်တယ်, သွားမယ်, ရှိတယ်, မျက်နှာ, ကြောက်တယ်, ငွေ, ရွာ, လျှော့.
+ကျွန်မ, ငြိမ်း, ချစ်တယ်, ပြောတယ်, ဖြစ်တယ်, သွားမယ်, ရှိတယ်, မျက်နှာ, ကြောက်တယ်, ငွေ, ရွာ, လျှော့,
+အထင်သေးခံရတဲ့ / အနှိမ်ခံရတဲ့ (a word with missing letters like "လူထခံရတဲ့" is wrong: write the real word).
+A line that does not make sense because letters or a syllable are missing: restore the intended word.
 Do NOT change the meaning, the words chosen, names, or the style; do not translate; do not add or remove
 sentences. A line that is already correct is copied unchanged.
 Answer with every line, in the same format: number|||line"""
