@@ -244,7 +244,7 @@ def _outro_on_parts(job, parts, d, outro, captions, blur, vw, vh, frame=None):
     shutil.rmtree(d / "caps_outro", ignore_errors=True)
 
 
-def _hooks_on(job, d, names):
+def _hooks_on(job, d, names, cues=None):
     """⚡ Every video (and every part) opens with a 4-10 s teaser scene from inside it,
     picked by Gemini, then plays from the start. The pick is kept per length so
     the YouTube video and a one-part TikTok get the same moment."""
@@ -253,10 +253,11 @@ def _hooks_on(job, d, names):
         return
     from dub import add_hook, hook_span
     picks = job.setdefault("_hook_picks", {})
-    for n in names:
+    for idx, n in enumerate(names):
         p = d / n
         try:
             dur = probe_duration(p)
+            pc = (cues or [])[idx] if cues and idx < len(cues) else None
             if dur < 60:                       # too short for a teaser
                 continue
             k = str(round(dur))
@@ -264,7 +265,7 @@ def _hooks_on(job, d, names):
                 a, b, cnt = dur * 0.12, dur * 0.8, 20
                 i = pick_hook(sample_frames(p, a, b, cnt, width=384), key)
                 step = (b - a) / cnt
-                picks[k] = hook_span(p, a + step * (i + 0.5), dur)     # starts and ends in a pause
+                picks[k] = hook_span(p, a + step * (i + 0.5), dur, cues=pc)   # starts/ends with a caption line
             start, length = picks[k]
             tmp = p.with_name(p.stem + "_h.mp4")
             add_hook(p, start, tmp, length)
@@ -1604,7 +1605,7 @@ def _voice_and_mux(job):
         if not cuts:
             if orig_outro:                    # 🔊 mode: the dub track had no outro in it
                 _outro_on_parts(job, [out], d, outro, caps, blur, vw, vh, frame)
-            _hooks_on(job, d, [out.name])
+            _hooks_on(job, d, [out.name], [[(c[0], c[1]) for c in cues]])
             return [out.name]
         job.update(stage="split", pct=97)
         jlog(job, "cutting the parts…")
@@ -1615,7 +1616,9 @@ def _voice_and_mux(job):
         if outro and (d / "outro.mp3").exists():
             # 🔊 mode: the last part needs it too (the dub track had no outro)
             _outro_on_parts(job, parts if job.get("orig_audio") else parts[:-1], d, outro, caps, blur, vw, vh, frame)
-        _hooks_on(job, d, [p.name for p in parts])
+        bounds = [0.0, *cuts, 10 ** 9]                    # each part's own caption lines, on its own clock
+        pcs = [[(c[0] - a, c[1] - a) for c in cues if a <= c[0] < b] for a, b in zip(bounds, bounds[1:])]
+        _hooks_on(job, d, [p.name for p in parts], pcs)
         return [p.name for p in parts]
 
     tag = "MOVIE  |  မြန်မာစာတန်း" if job.get("orig_audio") else None

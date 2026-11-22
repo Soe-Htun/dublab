@@ -1778,10 +1778,24 @@ def quiet_points(video, a, b, noise="-32dB", min_len=0.25):
     return [off + (s0 + e0) / 2 for s0, e0 in zip(starts, ends)]
 
 
-def hook_span(video, t, dur_total, lo=4.0, hi=10.0, aim=6.5):
+def hook_span(video, t, dur_total, lo=4.0, hi=10.0, aim=6.5, cues=None):
     """(start, length) of a teaser around moment t that starts and ends in a
     pause, so no sentence is cut in half; about `aim` s, between lo and hi.
+    cues: the captions [(start, end)] on this video — then the teaser starts where a
+    caption line STARTS and ends where one ends (a pause inside a long narrated line
+    began the teaser mid-sentence: "ဆိုတဲ့ …" without the name before it).
     Falls back to a plain aim-second window."""
+    if cues:
+        starts = [a for a, b in cues if t - 12 <= a <= t + 1 and a >= 0]
+        if starts:
+            st = max(starts)
+            ends = [b for a, b in cues if st + lo <= b <= st + hi + 4]
+            if ends:
+                en = min(ends, key=lambda x: abs(x - st - aim))
+            else:                                       # one long line: cut at its first pause
+                q = [x for x in quiet_points(video, st + lo, st + hi + 2) if st + lo <= x <= st + hi + 2]
+                en = q[0] if q else st + aim
+            return st, max(lo, min(en, dur_total - 1) - st)
     q = quiet_points(video, t - 6, t + hi + 2)
     before = [x for x in q if t - 6 <= x <= t - 0.5]
     start = max(before) if before else t - 2.5
