@@ -364,6 +364,37 @@ Rules:
 - Output only the hook text, nothing else."""
 
 
+COMMENT_PROMPT = """You are the narrator of a Burmese movie channel. The film plays with its own story; at a
+few quiet moments you add ONE short spoken remark in natural SPOKEN Burmese (စကားပြောဘာသာ), like a friend
+watching along: explain what is really going on or why a character acts that way, point out a clue or a
+cultural detail, react, or make people curious about what comes next.
+Rules for every remark:
+- at most {{max}} Burmese characters (it must fit the pause) — one sentence, never two
+- never reveal the ending or later twists; no greetings, no channel names, no "like/follow"
+- Myanmar script only; no emojis, no quotes
+Below, each pause shows the lines just before it and just after it (already in Burmese).
+Answer with JSON only: {{"remarks": ["<remark for pause 1>", "<remark for pause 2>", ...]}} — one per pause, in order.
+
+{pauses}"""
+
+
+def write_comments(pauses, api_key):
+    """🎙️ pauses: [{"before": [lines], "after": [lines], "max": chars}] → one remark per pause
+    ("" where nothing good fits)."""
+    blocks = []
+    for k, p in enumerate(pauses, 1):
+        blocks.append(f"Pause {k} (at most {p['max']} characters):\n  before: " + " / ".join(p["before"])
+                      + "\n  after: " + " / ".join(p["after"]))
+    raw = _call(COMMENT_PROMPT.replace("{{max}}", "the number given").replace("{{", "{").replace("}}", "}")
+                .replace("{pauses}", "\n\n".join(blocks)), api_key, max_tokens=4096)
+    m = re.search(r"\{.*\}", raw, re.S)
+    data = json.loads(re.sub(r",\s*([}\]])", r"\1", m.group(0))) if m else {}
+    got = [str(x or "").strip() for x in data.get("remarks") or []]
+    got = (got + [""] * len(pauses))[:len(pauses)]
+    fixed = fix_script(got, api_key)                 # spelling pass too ("ဘာတွကြေံ" → "ဘာတွေ ကြံ")
+    return [t[:p["max"] + 10] for t, p in zip(fixed, pauses)]
+
+
 def write_intro(lines, api_key, max_chars=6000):
     """A story hook spoken before the video starts, from the translated lines."""
     text, used = [], 0

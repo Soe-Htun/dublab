@@ -22,11 +22,11 @@ from dub import (WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segme
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
-                 build_recap_video, make_covers, mux, run, separate_vocals, beat_footage, trim_silence, frames_every, cut_ranges, mosaic_video, edit_video, fiction_notice, synthesize, speech_regions, fit_cues_to_speech, probe_duration, probe_url, separate_music, split_points, YouTubeBlocked,
+                 build_recap_video, make_covers, mux, run, separate_vocals, beat_footage, trim_silence, frames_every, cut_ranges, mosaic_video, edit_video, fiction_notice, synthesize, speech_regions, fit_cues_to_speech, probe_duration, probe_url, separate_music, split_points, YouTubeBlocked, line_genders, mix_comments, NARRATOR_VOICE,
                  split_video, transcribe)
 from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, find_movie_bounds, pick_cover_frames, pick_hook, thumb_is_good, translate_lines,
                     write_cover_scene, write_intro, write_recap, write_title, movie_name,
-                    transcribe_burmese, write_posts, find_sensitive, analyze_warning, check_covers)
+                    transcribe_burmese, write_posts, find_sensitive, analyze_warning, check_covers, write_comments)
 
 # Gemini TTS key rotation.
 # GEMINI_TTS_API_KEYS is comma-separated; falls back to the single GEMINI_API_KEY.
@@ -1078,6 +1078,7 @@ def _transcribe_and_translate(jid, job):
             g, f0 = "female", 0.0
             jlog(job, f"voice detection error: {e}")
         job["voice"] = g
+        job["voice_auto"] = True               # 👥 each line gets its speaker's voice (male / female)
         jlog(job, f"auto voice: {g} (speaker pitch ≈ {f0:.0f} Hz)")
 
     if job.get("recap"):
@@ -1094,6 +1095,8 @@ def _transcribe_and_translate(jid, job):
         except Exception as e:  # noqa: BLE001 - the dub works without it
             job["intro_text"] = ""
             jlog(job, f"intro skipped: {e}")
+    if job.get("commentary") and not job.get("recap") and "comments" not in job:
+        _write_comments(job, api_key)
     if job.get("cover") and job.get("no_title"):
         job["title_mm"] = ""
         jlog(job, "no title on the cover / TikTok frame (unticked)")
@@ -1142,6 +1145,28 @@ def _ends_with_channel_promo(utter, total):
     tail_from = max(0.0, total - max(60.0, total * 0.1))
     return any(name in (u.get("text") or "").casefold()
                for u in utter if u["end"] >= tail_from)
+
+
+def _write_comments(job, api_key):
+    """🎙️ Narrator remarks for a no-recap video: one in the longest quiet pause of every
+    ~2½ minutes, written by Gemini to fit that pause. Our own telling on top of the film."""
+    from dub import comment_gaps
+    utter = job.get("utter") or []
+    job["comments"] = []
+    try:
+        gaps = comment_gaps(utter, job.get("total") or 0)
+        if not gaps:
+            jlog(job, "🎙️ no quiet pauses long enough for narrator remarks")
+            return
+        pauses = [{"before": [u["text"] for u in utter[max(0, i - 2):i + 1]],
+                   "after": [u["text"] for u in utter[i + 1:i + 3]],
+                   "max": max(12, int((b - a) * TTS_CPS * 0.85))} for a, b, i in gaps]
+        texts = write_comments(pauses, api_key)
+        job["comments"] = [{"start": round(a, 3), "end": round(b, 3), "text": t}
+                           for (a, b, _), t in zip(gaps, texts) if t]
+        jlog(job, f"🎙️ {len(job['comments'])} narrator remarks written (one every ~2½ min, in the pauses)")
+    except Exception as e:  # noqa: BLE001 - the video works without them
+        jlog(job, f"narrator remarks skipped: {str(e)[:150]}")
 
 
 def _translate(job, utter, direction, lang, api_key):
@@ -1373,11 +1398,47 @@ def _voice_and_mux(job):
         except Exception as e:  # noqa: BLE001 - whisper's own times then
             jlog(job, f"caption timing check skipped: {str(e)[:120]}")
         lead = 0.0
+        if job.get("comments"):               # 🎙️ the narrator over the quiet pauses (film sound turned down)
+            clips = []
+            for k, c in enumerate(job["comments"]):
+                p = d / f"cm{k}.mp3"
+                try:
+                    if not (p.exists() and p.stat().st_size > 0):
+                        synthesize(c["text"], NARRATOR_VOICE, p)
+                    if probe_duration(p) <= (c["end"] - c["start"]) * 1.2:
+                        clips.append((p, c["start"]))
+                        cues.append((c["start"], c["start"] + probe_duration(p), c["text"]))
+                except Exception as e:  # noqa: BLE001
+                    jlog(job, f"remark {k + 1} skipped: {str(e)[:100]}")
+            if clips:
+                dub_wav = mix_comments(dub_wav, clips, d / "orig_mix.m4a")
+                cues.sort()
+                jlog(job, f"🎙️ {len(clips)} narrator remarks mixed in")
         if outro:
             synthesize(outro, voice_name, d / "outro.mp3")
         _sp(job, 1)
     else:
-        dub_wav, cues, lead = build_dub_track(utter, voice_name, d, job["total"], tts_prog,
+        lines = utter
+        if not job.get("recap"):
+            if job.get("voice_auto") and not any(u.get("voice") for u in utter):
+                try:                              # 👥 a woman's line in the female voice, a man's in the male
+                    wav = d / "audio.wav"
+                    if not wav.exists():
+                        extract_audio(src, wav)
+                    gs = line_genders(wav, utter)
+                    for u, g in zip(utter, gs):
+                        if g:
+                            u["voice"] = VOICES[job["direction"]][g]
+                    nm = sum(1 for g in gs if g == "male")
+                    nf = sum(1 for g in gs if g == "female")
+                    jlog(job, f"👥 voices by speaker: {nm} lines male, {nf} female, {len(gs) - nm - nf} main voice")
+                except Exception as e:  # noqa: BLE001 - one voice then
+                    jlog(job, f"per-speaker voices skipped: {str(e)[:120]}")
+            if job.get("comments"):               # 🎙️ narrator remarks in the pauses, a third voice
+                lines = sorted(utter + [{**c, "voice": NARRATOR_VOICE, "comment": True} for c in job["comments"]],
+                               key=lambda u: u["start"])
+                jlog(job, f"🎙️ {len(job['comments'])} narrator remarks added")
+        dub_wav, cues, lead = build_dub_track(lines, voice_name, d, job["total"], tts_prog,
                                               outro or None, intro or None)
     total = job["total"] + lead                 # the held first frame makes it longer
     write_srt(cues, d / "captions.srt")          # always offered as a download
@@ -1721,6 +1782,7 @@ def create_job():
     keep_bg = request.form.get("keep_bg", "0") == "1"
     outro = request.form.get("outro", "1") == "1"
     intro = request.form.get("intro", "0") == "1"      # off unless ticked
+    commentary = request.form.get("commentary", "1") == "1"   # 🎙️ narrator remarks (no-recap videos)
     cover_src = "frames"       # 🖼️ covers always from the video: the main character (+ one more photo)
     hook = request.form.get("hook", "0") == "1"        # ⚡ a teaser scene from inside the video first (off unless ticked)
     youtube = request.form.get("youtube", "0") == "1"  # TikTok 9:16 always; this adds the 16:9 YouTube one
@@ -1823,7 +1885,7 @@ def create_job():
     jobs[jid] = {"status": "queued", "stage": "queue", "pct": 0, "error": "",
                  "dir": d, "ext": ext, "direction": direction, "url": url,
                  "voice": voice, "review": review, "keep_bg": keep_bg, "phase": 1,
-                 "model": model, "outro": outro, "intro": intro, "hook": hook or bool(recap), "cover_src": cover_src, "cover": cover, "logo": logo, "name": name,
+                 "model": model, "outro": outro, "intro": intro, "hook": hook or bool(recap), "cover_src": cover_src, "commentary": commentary and not recap, "cover": cover, "logo": logo, "name": name,
                  "recap": recap,
                  "tg_src": tg_msg,
                  "id": jid, "telegram": send_tg, "owner": _admin_ok(),

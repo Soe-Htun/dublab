@@ -79,7 +79,12 @@ from gemini_tts import configure as _tts_configure
 from gemini_tts import synthesize as _gemini_tts
 
 # Edge-TTS voice name -> Gemini prebuilt voice (male/female pairs)
-GEMINI_VOICE_FOR = {    "my-MM-NilarNeural": "Aoede",    # female Burmese
+# 🎙️ the narrator of the commentary breaks: a third voice, apart from the characters'
+# (Gemini TTS "Puck"; Edge has only two Burmese voices, so there it falls back to Thiha)
+NARRATOR_VOICE = "my-MM-ThihaNeural#narrator"
+
+GEMINI_VOICE_FOR = {    "my-MM-ThihaNeural#narrator": "Puck",   # narrator
+    "my-MM-NilarNeural": "Aoede",    # female Burmese
     "my-MM-ThihaNeural": "Charon",   # male Burmese
     "en-US-AvaNeural": "Aoede",      # female English
     "en-US-AndrewNeural": "Charon",  # male English
@@ -390,6 +395,69 @@ def detect_gender(wav, segs, max_speech=120.0):
     return ("male" if f0 < 165 else "female"), f0
 
 
+def line_genders(wav, utterances, min_frames=12):
+    """👥 Who speaks each line, by voice pitch: "male" / "female" per utterance, None
+    when too little clear voice (the line then keeps the main voice). A woman's line
+    gets the female Burmese voice, a man's the male one — not one voice for everybody."""
+    out = []
+    for u in utterances:
+        try:
+            g, f0 = detect_gender(wav, [u], max_speech=12.0)
+            out.append(g if f0 else None)
+        except Exception:  # noqa: BLE001
+            out.append(None)
+    # one odd line inside a run of the other gender is usually a pitch mistake: smooth it
+    for i in range(1, len(out) - 1):
+        if out[i] and out[i - 1] and out[i - 1] == out[i + 1] != out[i]:
+            gap = utterances[i]["start"] - utterances[i - 1]["end"]
+            if gap < 0.4 and utterances[i]["end"] - utterances[i]["start"] < 1.5:
+                out[i] = out[i - 1]
+    return out
+
+
+def comment_gaps(utterances, total, every=150.0, min_gap=3.5, first=45.0):
+    """🎙️ Where the narrator can speak without talking over anyone: the longest pause
+    between lines in each `every`-second stretch (at least `min_gap` s long).
+    Returns [(start, end, index of the line before)]."""
+    gaps = []
+    for i in range(len(utterances) - 1):
+        a, b = utterances[i]["end"] + 0.25, utterances[i + 1]["start"] - 0.25
+        if b - a >= min_gap and a >= first:
+            gaps.append((a, b, i))
+    out, t = [], first
+    while t < total - 30:
+        win = [g for g in gaps if t <= g[0] < t + every]
+        if win:
+            out.append(max(win, key=lambda g: g[1] - g[0]))
+        t += every
+    return out
+
+
+def mix_comments(base_audio, clips, out, duck=0.25):
+    """Mix narrator clips [(path, start)] over a sound track, the track turned down
+    to `duck` while each one speaks (0.15 s fades). Returns out."""
+    if not clips:
+        return base_audio
+    ins = ["-i", str(base_audio)]
+    for p, _ in clips:
+        ins += ["-i", str(p)]
+    wins = []
+    for p, st in clips:
+        d = probe_duration(p)
+        wins.append(f"between(t,{st - 0.15:.3f},{st + d + 0.15:.3f})")
+    fc = [f"[0:a]aformat=sample_rates=44100:channel_layouts=stereo,"
+          f"volume='if({'+'.join(wins)},{duck},1)':eval=frame[b]"]
+    labels = ["[b]"]
+    for k, (_, st) in enumerate(clips, 1):
+        ms = int(st * 1000)
+        fc.append(f"[{k}:a]aformat=sample_rates=44100:channel_layouts=stereo,adelay={ms}|{ms},volume=1.6[c{k}]")
+        labels.append(f"[c{k}]")
+    fc.append("".join(labels) + f"amix=inputs={len(labels)}:duration=first:normalize=0[a]")
+    run(["ffmpeg", "-y", "-v", "error", *ins, "-filter_complex", ";".join(fc), "-map", "[a]",
+         "-c:a", "aac", "-b:a", "160k", str(out)])
+    return out
+
+
 def merge_segments(segs, max_gap=0.6, max_len=10.0):
     """Merge close whisper segments into speakable utterances."""
     merged = []
@@ -411,6 +479,7 @@ _edge_urls = None   # [current, other] — the working endpoint moves to the fro
 
 
 def _synth_edge(text, voice, out_path):
+    voice = voice.split("#")[0]          # "…#narrator": Edge has no third Burmese voice
     import asyncio
     import edge_tts
     import edge_tts.communicate as _comm
@@ -603,7 +672,7 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=N
     def _tts(i):
         out = tmpdir / f"u{i}.mp3"
         if not utterances[i].get("audio") and not (out.exists() and out.stat().st_size > 0):
-            synthesize(utterances[i]["text"], voice, out)      # (▶️ resume keeps voiced lines)
+            synthesize(utterances[i]["text"], utterances[i].get("voice") or voice, out)   # (▶️ resume keeps voiced lines)
         with done_lock:
             done[0] += 1
             if progress:
