@@ -1169,28 +1169,39 @@ def find_movie_bounds(start_jpegs, end_jpegs, api_key):
 # ---- find the burned-in captions to blur ----
 CAPTION_BAND_PROMPT = """These frames come from one video. Some videos have subtitles burned into the picture
 (e.g. English or Chinese text lines, usually near the bottom). Look at ALL frames together.
-If there is burned-in subtitle text, give the vertical area that covers it in every frame where it appears,
-on a 0-1000 scale of the frame height measured from the TOP (0 = top edge, 1000 = bottom edge).
-Cover the whole text including its outline/shadow. Subtitles are often TWO lines in some frames and one line in
-others: "top" must be the top of the HIGHEST line seen in ANY frame (the upper line of a two-line subtitle), and
-"bottom" the bottom of the LOWEST line in any frame.
+Re-uploads often have TWO different subtitle tracks stacked: the original (e.g. one Chinese line) and, below or
+above it, a translation the uploader added (e.g. English / Filipino / Vietnamese, often two lines). List each
+track as its own block. For every block give the vertical area that covers it in every frame where it appears,
+on a 0-1000 scale of the frame height measured from the TOP (0 = top edge, 1000 = bottom edge), covering the
+whole text with its outline/shadow; when a track is two lines in some frames and one in others, "top" is the top
+of its HIGHEST line seen in any frame.
 Ignore logos, watermarks, channel names in corners, and text that is part of the scene (signs, posters).
-Answer with JSON only: {"subtitles": true, "top": <number>, "bottom": <number>} or {"subtitles": false}"""
+Answer with JSON only:
+{"subtitles": true, "blocks": [{"top": <n>, "bottom": <n>, "lang": "<language>", "lines": <1 or 2>}, ...]}
+(blocks from top to bottom) or {"subtitles": false}"""
 
 
 def find_caption_band(jpegs, api_key):
-    """Returns (top, bottom) as fractions of the frame height, or None when
-    the video has no burned-in subtitles. Raises on API trouble."""
+    """Returns the subtitle blocks [{top, bottom, lines, lang}] (fractions of the frame
+    height, top to bottom), or None when the video has no burned-in subtitles."""
     raw = _call(CAPTION_BAND_PROMPT, api_key, max_tokens=256,
                 images=[(f"Frame {i}:", b) for i, b in enumerate(jpegs)])
     m = re.search(r"\{.*\}", raw, re.S)
     data = json.loads(m.group(0)) if m else {}
     if not data.get("subtitles"):
         return None
-    top, bot = float(data["top"]) / 1000, float(data["bottom"]) / 1000   # Gemini's native 0-1000 scale
-    if not 0 <= top < bot <= 1 or bot - top > 0.4:
-        raise ValueError(f"odd subtitle area {top:.2f}-{bot:.2f}")
-    return top, bot
+    blocks = []
+    for bl in data.get("blocks") or ([data] if "top" in data else []):
+        try:
+            t, b = float(bl["top"]) / 1000, float(bl["bottom"]) / 1000   # Gemini's native 0-1000 scale
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 0 <= t < b <= 1 and b - t <= 0.4:
+            blocks.append({"top": t, "bottom": b, "lines": int(bl.get("lines") or 0), "lang": str(bl.get("lang") or "")})
+    if not blocks:
+        raise ValueError("odd subtitle area")
+    blocks.sort(key=lambda x: x["top"])
+    return blocks
 
 
 LOGO_PROMPT = """These frames come from one video. Find the LOGOS that sit at the SAME place in at least two frames

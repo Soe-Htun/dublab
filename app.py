@@ -284,18 +284,31 @@ def _find_blur(job, src, sfx):
         if not key:
             raise RuntimeError("no GEMINI_API_KEY")
         total = job["total"]
-        band = find_caption_band(sample_frames(src, total * 0.05, total * 0.95, 10), key)
-        if band is None:
+        blocks = find_caption_band(sample_frames(src, total * 0.05, total * 0.95, 10), key)
+        if blocks is None:
             jlog(job, "no burned-in captions found — nothing to blur")
             return None
-        top, bot = band
-        # generous margin: a two-line subtitle reaches higher than the
-        # sampled frames may show, and outlines/shadows spread a little
-        # the model reads the top of a one-line subtitle; a two-line one starts
-        # ~6-8% higher (Jaat: said 84-86%, really 78%)
-        top, bot = max(0.0, top - 0.085), min(1.0, bot + 0.02)
-        if bot - top < 0.16:                             # at least two lines' worth
-            top = max(0.0, bot - 0.16)
+        if len(blocks) >= 2:
+            # two subtitle tracks stacked (e.g. Chinese + English): blur only ONE of them —
+            # the smaller one (less of the picture hidden; the lower one when about the same);
+            # our Burmese captions go on it. Blurring both took ~35% of the picture.
+            k = min(range(len(blocks)), key=lambda i: (round((blocks[i]["bottom"] - blocks[i]["top"]) / 0.03), -i))
+            pick = blocks[k]
+            lo = blocks[k - 1]["bottom"] + 0.005 if k > 0 else 0.0          # never into the track above…
+            hi = blocks[k + 1]["top"] - 0.005 if k + 1 < len(blocks) else 1.0   # …or below
+            top = max(pick["top"] - 0.015, lo)
+            bot = min(pick["bottom"] + 0.02, hi)
+            jlog(job, f"{len(blocks)} subtitle tracks ({', '.join(b['lang'] or '?' for b in blocks)}) — "
+                      f"blurring only one: {pick['lang'] or '?'} ({pick['lines'] or '?'} line(s))")
+        else:
+            top, bot = blocks[0]["top"], blocks[0]["bottom"]
+            # generous margin: a two-line subtitle reaches higher than the
+            # sampled frames may show, and outlines/shadows spread a little
+            # the model reads the top of a one-line subtitle; a two-line one starts
+            # ~6-8% higher (Jaat: said 84-86%, really 78%)
+            top, bot = max(0.0, top - (0.03 if blocks[0]["lines"] == 2 else 0.085)), min(1.0, bot + 0.02)
+            if bot - top < 0.16:                             # at least two lines' worth
+                top = max(0.0, bot - 0.16)
         # a film between bars (a portrait upload): the band is measured on the whole
         # frame, but must stay inside the picture and not cover most of it
         try:
