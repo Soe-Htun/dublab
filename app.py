@@ -46,7 +46,7 @@ SETTINGS_FILE = BASE / "settings.json"
 MAX_MINUTES_LIMIT = 180
 OUTRO_MAX = 200   # chars
 AI_COVER = (os.environ.get("DUBLAB_AI_COVER") or "0") == "1"   # AI-drawn cover (needs a paid Gemini key); off = photo collage
-SPLIT_CHOICES = (0, 5, 10, 15, 20)
+SPLIT_CHOICES = (0, 3, 5, 10, 15, 20)
 OWNER_MAX_MINUTES = int(os.environ.get("DUBLAB_OWNER_MAX_MINUTES") or 240)   # owner: 4 h   # minutes per part; 0 = one video
 CHANNEL_MAX = 60
 # channel logo burned into the video corner (uploaded on the admin page)
@@ -991,12 +991,15 @@ def _transcribe_and_translate(jid, job):
             jlog(job, f"cutting the ads off failed: {str(e)[:150]}")
     job["have_src"] = True
     if job.get("recap") and job.get("recap_auto") and not job.get("yt_child"):
-        # 🤖 at least 55% of the film's story (ads and credits already cut off), aiming ~60%
-        import math
-        job["recap"] = max(1, math.ceil(total * 0.55 / 60))
-        job["recap_aim"] = 0.60 / 0.55
-        job["recap_strict"] = True                  # really at least 55% (rewritten when short)
-        jlog(job, f"🤖 auto length: a recap of at least {job['recap']} min (55%+ of the {total / 60:.0f}-min film, aiming ~60%)")
+        # 🤖 a real recap, not most of the film: ~30% of its story (ads and credits already cut
+        # off), 2–25 min. Short parts keep TikTok viewers to the end, and less of the film's
+        # footage is reused (more of the video is our own telling). 55% made a 2-hour film a
+        # 66-minute "recap".
+        job["recap"] = max(2, min(25, round(total * 0.28 / 60)))
+        job["recap_aim"] = 1.15
+        job["recap_strict"] = False
+        jlog(job, f"🤖 auto length: a recap of ~{job['recap']}–{round(job['recap'] * 1.15)} min "
+                  f"(about 30% of the {total / 60:.0f}-min film, at most 25 min)")
     elif job.get("recap") and not job.get("yt_child") and job["recap"] * RECAP_AIM * 60 >= total * 0.85:
         # the chosen length is about as long as the video itself: still a recap (narrated
         # all the way through — a plain dub left every scene without dialogue silent),
@@ -1820,7 +1823,7 @@ def create_job():
     jobs[jid] = {"status": "queued", "stage": "queue", "pct": 0, "error": "",
                  "dir": d, "ext": ext, "direction": direction, "url": url,
                  "voice": voice, "review": review, "keep_bg": keep_bg, "phase": 1,
-                 "model": model, "outro": outro, "intro": intro, "hook": hook, "cover_src": cover_src, "cover": cover, "logo": logo, "name": name,
+                 "model": model, "outro": outro, "intro": intro, "hook": hook or bool(recap), "cover_src": cover_src, "cover": cover, "logo": logo, "name": name,
                  "recap": recap,
                  "tg_src": tg_msg,
                  "id": jid, "telegram": send_tg, "owner": _admin_ok(),

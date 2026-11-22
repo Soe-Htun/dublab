@@ -640,14 +640,14 @@ $('#tgpickbtn').addEventListener('click', loadTgVideos);
 // 🎬 recap version (checkbox → length) and how many parts that makes
 let srcDur = 0;          // seconds of the chosen video, when known
 function partsNote() {
-  const sp = +split, rc = $('#recapchk').checked ? (recapLen === 'auto' ? srcDur * 0.6 / 60 : +recapLen * 1.25) : 0;
+  const sp = +split, rc = $('#recapchk').checked ? (recapLen === 'auto' ? Math.max(2, Math.min(25, srcDur * 0.28 / 60)) * 1.1 : +recapLen * 1.25) : 0;
   const len = rc ? rc * 60 : srcDur;              // finished video length (s)
   const yt = $('#ytchk') && $('#ytchk').checked;
   let txt = +sp ? `${sp} မိနစ်ထက် ရှည်ရင် ${sp} မိနစ်စီ ခွဲမယ် — နာမည်-1, နာမည်-2 … နာမည်-End` : 'ဗီဒီယို တစ်ခုတည်း ထွက်မယ်';
   if (+sp && len) {
     // same rule as the server: no part under 4 min (merged, or all parts made equal)
     let n = Math.ceil(len / (sp * 60));
-    if (n > 1 && len - (n - 1) * sp * 60 < 240 && len / (n - 1) <= sp * 60 * 1.3) n -= 1;
+    if (n > 1 && len - (n - 1) * sp * 60 < Math.min(240, sp * 30) && len / (n - 1) <= sp * 60 * 1.3) n -= 1;
     n = Math.max(1, n);
     txt = n > 1 ? `≈ ${n} ပိုင်း ထွက်မယ် (${sp} မိနစ်စီ) — နာမည်-1 … နာမည်-End` : 'ဗီဒီယို တစ်ခုတည်း ထွက်မယ်';
   }
@@ -661,10 +661,10 @@ function setRecapLen(v) {
   if (!b) { v = 'auto'; b = document.querySelector('#recapgrid .opt[data-recap="auto"]'); }   // old saved choice
   recapLen = v;
   document.querySelectorAll('#recapgrid .opt').forEach((x) => x.classList.toggle('selected', x === b));
-  if (v === 'auto') {                  // 🤖 at least 55% of the film's story, aiming ~60%
-    const m = srcDur ? Math.round(srcDur * 0.55 / 60) : 0;
-    $('#recapnote').textContent = '🤖 ဇာတ်ကား အရှည်ရဲ့ အနည်းဆုံး 55% (~60%) recap ထုတ်မယ်' +
-      (m ? ` — မူရင်း ${Math.round(srcDur / 60)} မိနစ်ဆို ~${m}–${Math.round(srcDur * 0.6 / 60)} မိနစ်` : '');
+  if (v === 'auto') {                  // 🤖 ~30% of the film's story, 2–25 min
+    const m = srcDur ? Math.max(2, Math.min(25, Math.round(srcDur * 0.28 / 60))) : 0;
+    $('#recapnote').textContent = '🤖 Recap အရှည်ကို AI က ဆုံးဖြတ်မယ် — ဇာတ်ကားရဲ့ ~30% (အများဆုံး 25 မိနစ်)' +
+      (m ? ` · မူရင်း ${Math.round(srcDur / 60)} မိနစ်ဆို ~${m}–${Math.round(m * 1.15)} မိနစ်` : '');
     partsNote();
     return;
   }
@@ -708,7 +708,7 @@ document.querySelectorAll('#recapgrid .opt').forEach((b) => b.addEventListener('
 }));
 try {
   $('#recapchk').checked = true;     // recap is the default every time; untick for a full dub
-  recapLen = localStorage.getItem('dublab_recap_len') || 'auto';
+  recapLen = 'auto';                   // the length is always decided automatically now
 } catch (e) { /* ignore */ }
 syncRecap(); syncOrig();
 

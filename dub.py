@@ -1563,6 +1563,7 @@ def split_points(cues, total, minutes, min_tail=240.0, window=90.0, max_over=1.3
     step = minutes * 60.0
     if not minutes or total <= step:
         return []
+    min_tail = min(min_tail, step * 0.5)                  # 3-min parts: a tail under 1.5 min is merged
     n = math.ceil(total / step)
     if total - (n - 1) * step < min_tail and n > 1:
         if total / (n - 1) <= step * max_over:
@@ -2067,7 +2068,7 @@ def render_cover(video, t, title, out_jpg, portrait=False, logo=None, blur=None)
     return Path(out_jpg)
 
 
-def _grab(video, t, w, h, hide=None, blur=None, cx=0.5):
+def _grab(video, t, w, h, hide=None, blur=None, cx=0.5, face=None, fy=0.42):
     """Frame at t, black letterbox bars trimmed, scaled and centre-cropped
     to w x h (PIL RGB). hide: [(x0, y0, x1, y1)] fractions blurred first (old logos)."""
     from PIL import Image, ImageOps
@@ -2078,6 +2079,10 @@ def _grab(video, t, w, h, hide=None, blur=None, cx=0.5):
     if r.returncode or not r.stdout:
         raise RuntimeError("frame grab failed")
     img = Image.open(io.BytesIO(r.stdout)).convert("RGB")
+    fpx = None        # the face box in pixels (moved along with every crop below)
+    if face:
+        Wo, Ho = img.size
+        fpx = [face[0] * Wo, face[1] * Ho, face[2] * Wo, face[3] * Ho]
     if hide:          # old logos erased like ffmpeg's delogo: filled in from the box edges
         a = np.asarray(img, dtype=np.float32).copy()
         H0, W0 = a.shape[:2]
@@ -2113,6 +2118,22 @@ def _grab(video, t, w, h, hide=None, blur=None, cx=0.5):
         W1 = img.size[0]
         img = img.crop((cols[0], rows[0], cols[-1] + 1, rows[-1] + 1))
         cx = (cx * W1 - cols[0]) / max(1, cols[-1] + 1 - cols[0])   # the face, in the trimmed frame
+        if fpx:
+            fpx = [fpx[0] - cols[0], fpx[1] - rows[0], fpx[2] - cols[0], fpx[3] - rows[0]]
+    if fpx and fpx[3] > fpx[1] and fpx[1] < img.size[1]:
+        # 👤 frame the face: a window of the panel's shape around it, the face about a third
+        # of its height and at `fy` down it — clear of the soft edge where two photos blend
+        # (a face up in that edge came out as half a face)
+        W0, H0 = img.size
+        fh = fpx[3] - fpx[1]
+        hw = min(H0, max(fh / 0.34, h / 2.6, 120.0))
+        ww = hw * w / h
+        if ww > W0:
+            ww, hw = W0, W0 * h / w
+        fcx, fcy = (fpx[0] + fpx[2]) / 2, (fpx[1] + fpx[3]) / 2
+        x0 = min(max(fcx - ww / 2, 0), W0 - ww)
+        y0 = min(max(fcy - fy * hw, 0), H0 - hw)
+        return img.crop((int(x0), int(y0), int(x0 + ww), int(y0 + hw))).resize((w, h), Image.LANCZOS)
     # scale to cover w x h, then cut the window so the person (cx = their x across
     # the frame, 0-1) sits in its middle. (ImageOps.fit's "centering" is not that:
     # 0.15 meant "15% of the spare width", which slid the face off the side.)
@@ -2133,9 +2154,9 @@ def _layout(n, W, H, portrait):
         return [(0, 0, W, H)]
     if n == 2:
         g = 6
-        if portrait:              # TikTok: two big photos, top and bottom halves (cropped
-            h2 = (H - g) // 2     # around the face found by Apple Vision, so it isn't cut)
-            return [(0, 0, W, h2), (0, h2 + g, W, H - h2 - g)]
+        if portrait:              # TikTok: two photos stacked, the title UNDER them (in the middle it
+            h1 = int(H * 0.39)    # covered the lower photo's eyes); each crop around its face
+            return [(0, 0, W, h1), (0, h1 + g, W, int(H * 0.39))]
         w2 = (W - g) // 2
         return [(0, 0, w2, H), (w2 + g, 0, W - w2 - g, H)]
     if n == 4 and not portrait:   # poster style: the main character big on the left,
@@ -2259,7 +2280,7 @@ def _poster(video, times, W, H, hide, blur, focus):
 
 
 def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur=None, suffix="", hide=None,
-                   focus=None):
+                   focus=None, faces=None):
     """3–5 frames in panels with a big gold Burmese title across the bottom."""
     from PIL import Image, ImageEnhance, ImageFilter
     W, H = TT_COVER if portrait else (1280, 720)
@@ -2292,7 +2313,9 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
         tp = max(0, y - ov) if y > 12 else 0
         r = min(W, x1 + ov) if x1 < W else W
         b = min(H, y1 + ov) if y1 < H else H
-        fr = _grab(video, t, r - l, b - tp, hide, blur, (focus or {}).get(t, 0.5))   # cropped around the person
+        # cropped around the person; a lower photo keeps its face below the blend with the one above
+        fr = _grab(video, t, r - l, b - tp, hide, blur, (focus or {}).get(t, 0.5),
+                   face=(faces or {}).get(t), fy=0.6 if tp > 0 else 0.42)
         fr = ImageEnhance.Color(ImageEnhance.Contrast(fr).enhance(1.15)).enhance(1.2)
         ax = np.ones(r - l, dtype=np.float32)
         ay = np.ones(b - tp, dtype=np.float32)
@@ -2313,7 +2336,7 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
     # warm dark band behind the title: across the middle (between photos), or in
     # the lower part when a single photo fills the cover (the face is higher up)
     # landscape: along the bottom (faces sit in the upper part of the photos)
-    cy = int(H * 0.74) if n == 1 else (H // 2 if portrait else int(H * 0.78))   # landscape: ~20% above the bottom
+    cy = int(H * 0.74) if n == 1 else (int(H * 0.885) if portrait else int(H * 0.78))   # under the photos
     band_h = int(H * (0.26 if portrait else 0.4))
     band_y = min(cy - band_h // 2, H - band_h)
     grad = Image.new("L", (1, band_h))
@@ -2704,7 +2727,7 @@ def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, bl
         names = ["cover1.jpg"] if parts <= 1 else [f"cover{i}.jpg" for i in range(1, parts + 1)]
         return [render_art_cover(art, title, out_dir / n, portrait, logo,
                                  part_suffix(i, parts, episode)) for i, n in enumerate(names, 1)]
-    pick, focus = None, {}
+    pick, focus, boxes = None, {}, {}
     if chooser:
         try:
             # the YouTube and the TikTok covers use the SAME photos (one choice, made once):
@@ -2738,8 +2761,11 @@ def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, bl
                 pick = sorted(pool[:6], key=lambda t: (good(t) > 0 and big(t) > -0.12, ugly(t), -sc.get(t, 0.0)))[:1]
                 # the 2nd photo: another character with a clear face, else the main action —
                 # only a decent one (a poor 2nd photo is worse than one big photo)
-                second = [t for t in clean(others) + clean(action) if t not in pick and not ugly(t)]
-                second = sorted(second[:6], key=lambda t: (good(t) > 0, -sc.get(t, 0.0)))[:1]
+                # it must show a face (Apple Vision) of a fair size — not a back, a hand or a crowd
+                faced = lambda t: bool(boxes.get(t)) and (boxes[t][3] - boxes[t][1]) >= 0.12
+                second = [t for t in clean(others) + clean(action) + clean(hero[1:])
+                          if t not in pick and not ugly(t) and faced(t)]
+                second = sorted(second[:8], key=lambda t: (good(t) > 0, -sc.get(t, 0.0)))[:1]
                 pick += second
                 layout = len(pick)
             elif portrait:        # TikTok: the main character's face on top, the movie's main action below
@@ -2767,9 +2793,10 @@ def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, bl
         pick = pick_cover_times(video, start, end, 2 if single or portrait else 4, samples=36, tmp=out_dir)
     if parts <= 1:
         return [render_collage(video, pick, title, out_dir / "cover1.jpg", portrait, logo, blur, hide=hide,
-                               focus=focus, suffix=part_suffix(1, 1, episode))]
+                               focus=focus, suffix=part_suffix(1, 1, episode), faces=boxes if single else None)]
     return [render_collage(video, pick, title, out_dir / f"cover{i}.jpg", portrait, logo, blur,
-                           suffix=part_suffix(i, parts, episode), hide=hide, focus=focus) for i in range(1, parts + 1)]
+                           suffix=part_suffix(i, parts, episode), hide=hide, focus=focus,
+                           faces=boxes if single else None) for i in range(1, parts + 1)]
 
 
 # ---- recap version: cut the scenes that go with each narration beat ----
