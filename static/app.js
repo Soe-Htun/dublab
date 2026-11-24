@@ -85,9 +85,9 @@ $('#go').addEventListener('click', () => {
   fd.append('episode', ($('#episode_in').value || '').replace(/\D/g, ''));
   fd.append('cover', '1');            // every video gets a cover
   fd.append('split', split);
-  const orig = $('#fullchk').checked && $('#origchk').checked;
+  const orig = $('#fullchk').checked;   // 🎞️ no recap = original sound + Burmese captions
   fd.append('orig_audio', orig ? '1' : '0');
-  fd.append('no_music', orig && $('#nomusicchk').checked ? '1' : '0');
+  fd.append('no_music', orig ? '1' : '0');   // 🎵 background music always taken out
   fd.append('recap', $('#recapchk').checked && !orig ? recapLen : '0');
   fd.append('game', $('#gamechk') && $('#gamechk').checked ? '1' : '0');
   fd.append('game_cut', $('#gamecutchk') && $('#gamecutchk').checked ? '1' : '0');
@@ -137,7 +137,7 @@ function showProgress(jid) {
   const isRecap = $('#recapchk').checked;
   if (rc) rc.hidden = !isRecap;
   const vo = document.querySelector('#stages li[data-s="voice"]');
-  if (vo) vo.hidden = $('#fullchk').checked && $('#origchk').checked;   // 🔊 original sound: no voicing
+  if (vo) vo.hidden = $('#fullchk').checked;   // 🔊 original sound: no voicing
   const mu = document.querySelector('#stages li[data-s="music"]');
   if (mu) mu.hidden = true;           // no background-music step any more
   const order = ['fixcheck', 'fixing', 'download', 'audio', 'transcribe', 'translate', 'review', 'music', 'voice', 'recap', 'mux', 'split'];
@@ -685,13 +685,11 @@ function setRecapLen(v) {
 function syncOrig() {
   const full = $('#fullchk').checked;
   $('#fullopts').hidden = !full;
-  const on = full && $('#origchk').checked;
-  $('#nomusicrow').hidden = !on;           // 🎵 only with the original sound
+  const on = full;
   if ($('#origwarn')) $('#origwarn').hidden = !on;   // ⚠️ the "unoriginal" warning: subtitles-only style
   $('#voicegrid').hidden = on;
   $('#voicehead').hidden = on;
 }
-$('#origchk').addEventListener('change', syncOrig);
 
 function syncRecap() {
   const on = $('#recapchk').checked;
