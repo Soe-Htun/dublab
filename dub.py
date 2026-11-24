@@ -424,6 +424,8 @@ def comment_gaps(utterances, total, every=150.0, min_gap=3.5, first=45.0):
         a, b = utterances[i]["end"] + 0.25, utterances[i + 1]["start"] - 0.25
         if b - a >= min_gap and a >= first:
             gaps.append((a, b, i))
+    if every <= 0:                       # 🗣️ every pause (character-voice: talk all the way like a recap)
+        return gaps
     out, t = [], first
     while t < total - 30:
         win = [g for g in gaps if t <= g[0] < t + every]
@@ -2203,17 +2205,17 @@ def _grab(video, t, w, h, hide=None, blur=None, cx=0.5, face=None, fy=0.42):
         a = np.asarray(img, dtype=np.float32).copy()
         H0, W0 = a.shape[:2]
         for x0, y0, x1, y1 in hide:
-            l, t = max(1, int(W0 * x0)), max(1, int(H0 * y0))
+            l, tp = max(1, int(W0 * x0)), max(1, int(H0 * y0))
             r, b = min(W0 - 2, int(W0 * x1)), min(H0 - 2, int(H0 * y1))
-            if r - l < 3 or b - t < 3:
+            if r - l < 3 or b - tp < 3:
                 continue
-            top, bot = a[t - 1, l:r + 1], a[b + 1, l:r + 1]          # edge rows / columns
-            lef, rig = a[t:b + 1, l - 1], a[t:b + 1, r + 1]
-            fy = np.linspace(0, 1, b - t + 1)[:, None, None]
+            top, bot = a[tp - 1, l:r + 1], a[b + 1, l:r + 1]          # edge rows / columns
+            lef, rig = a[tp:b + 1, l - 1], a[tp:b + 1, r + 1]
+            ky = np.linspace(0, 1, b - tp + 1)[:, None, None]      # (not `fy`: that's the face's place)
             fx = np.linspace(0, 1, r - l + 1)[None, :, None]
-            vert = top[None] * (1 - fy) + bot[None] * fy
+            vert = top[None] * (1 - ky) + bot[None] * ky
             horz = lef[:, None] * (1 - fx) + rig[:, None] * fx
-            a[t:b + 1, l:r + 1] = (vert + horz) / 2
+            a[tp:b + 1, l:r + 1] = (vert + horz) / 2
         img = Image.fromarray(a.clip(0, 255).astype(np.uint8))
     if blur:          # the old captions: cut the band off (it sits at the bottom) — a photo
         b0, bh = float(blur["bottom"]), float(blur["height"])          # looks better without
@@ -2975,6 +2977,30 @@ def speech_spans(utterances, pad=1.0, join=3.0):
         else:
             spans.append([a, b])
     return [tuple(x) for x in spans]
+
+
+def char_spans(utterances, keep_gap=10.0, tail=7.0, pad=1.0):
+    """🗣️ Character-voice cut, recap-like: a pause up to `keep_gap` s stays (the narrator
+    says what happens there); of a longer silent stretch only its first `tail` s stay
+    (the moment it starts), the rest is cut — no minute-long scenes without a voice."""
+    spans = []
+    for u in sorted(utterances, key=lambda u: u["start"]):
+        a, b = max(0.0, u["start"] - pad), u["end"] + pad
+        if spans and a - spans[-1][1] <= keep_gap:
+            spans[-1][1] = max(spans[-1][1], b)
+        else:
+            if spans:
+                spans[-1][1] += tail        # a bit of the silent scene, then jump on
+            spans.append([a, b])
+    if spans:
+        spans[-1][1] += tail
+    out = []
+    for a, b in spans:                       # the tail must not run into the next span
+        if out and a <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return [tuple(x) for x in out]
 
 
 def footage(start, dur, spans, min_piece=1.5):

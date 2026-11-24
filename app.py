@@ -17,7 +17,7 @@ import telegram
 
 from dub import (WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segments, configure_tts, frame_layout, render_frames,
                  frame_caption_y,
-                 footage, speech_spans, trim_copy, picture_area,
+                 footage, speech_spans, char_spans, trim_copy, picture_area,
                  add_outro_tail, caption_y, normalize_logo, render_captions, sample_frames, video_size, write_srt,
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
@@ -1195,8 +1195,8 @@ def _transcribe_and_translate(jid, job):
         except Exception as e:  # noqa: BLE001 - the dub works without it
             job["intro_text"] = ""
             jlog(job, f"intro skipped: {e}")
-    if job.get("commentary") and not job.get("recap") and "comments" not in job:
-        _write_comments(job, api_key)
+    if job.get("commentary") and not job.get("recap") and "comments" not in job and not job.get("char_voice"):
+        _write_comments(job, api_key)        # (character-voice: after the cut, with pictures — see _voice_and_mux)
     if job.get("cover") and job.get("no_title"):
         job["title_mm"] = ""
         jlog(job, "no title on the cover / TikTok frame (unticked)")
@@ -1247,24 +1247,44 @@ def _ends_with_channel_promo(utter, total):
                for u in utter if u["end"] >= tail_from)
 
 
-def _write_comments(job, api_key):
+def _write_comments(job, api_key, utter=None, video=None):
     """🎙️ Narrator remarks for a no-recap video: one in the longest quiet pause of every
-    ~2½ minutes, written by Gemini to fit that pause. Our own telling on top of the film."""
+    ~2½ minutes, written by Gemini to fit that pause. Our own telling on top of the film.
+    🗣️ Character-voice (utter / video of the cut film given): EVERY pause of 3 s or more,
+    Gemini seeing a picture of it — the voice goes on all the way, like a recap."""
     from dub import comment_gaps
-    utter = job.get("utter") or []
+    every_pause = utter is not None
+    utter = utter if every_pause else (job.get("utter") or [])
+    utter = [u for u in utter if (u.get("text") or "").strip()]
     job["comments"] = []
     try:
-        gaps = comment_gaps(utter, job.get("total") or 0, every=60.0 if job.get("char_voice") else 150.0)
+        if every_pause:
+            gaps = comment_gaps(utter, job.get("total") or 0, every=0, min_gap=3.0, first=2.0)
+        else:
+            gaps = comment_gaps(utter, job.get("total") or 0, every=150.0)
         if not gaps:
             jlog(job, "🎙️ no quiet pauses long enough for narrator remarks")
             return
         pauses = [{"before": [u["text"] for u in utter[max(0, i - 2):i + 1]],
                    "after": [u["text"] for u in utter[i + 1:i + 3]],
                    "max": max(12, int((b - a) * TTS_CPS * 0.85))} for a, b, i in gaps]
+        if every_pause and video:
+            from concurrent.futures import ThreadPoolExecutor
+            from dub import sample_frames
+            with ThreadPoolExecutor(8) as ex:
+                pics = list(ex.map(lambda g: (sample_frames(video, g[0], g[1], count=1, width=384) or [None])[0],
+                                   gaps))
+            for p, j in zip(pauses, pics):
+                p["jpeg"] = j
         texts = write_comments(pauses, api_key, describe=bool(job.get("char_voice")))
         job["comments"] = [{"start": round(a, 3), "end": round(b, 3), "text": t}
                            for (a, b, _), t in zip(gaps, texts) if t]
-        jlog(job, f"🎙️ {len(job['comments'])} narrator remarks written (one every ~2½ min, in the pauses)")
+        if every_pause:
+            job["comments_cut"] = True           # already on the cut film's timeline
+            jlog(job, f"🎙️ {len(job['comments'])} narrator lines written for the scenes without talk "
+                      f"(of {len(gaps)} pauses)")
+        else:
+            jlog(job, f"🎙️ {len(job['comments'])} narrator remarks written (one every ~2½ min, in the pauses)")
     except Exception as e:  # noqa: BLE001 - the video works without them
         jlog(job, f"narrator remarks skipped: {str(e)[:150]}")
 
@@ -1400,14 +1420,18 @@ def _condense(job, src, utter):
     at least 60% of the film remains."""
     char = bool(job.get("char_voice"))
     # 🗣️ character-voice style: tighter — songs, dances, long silent stretches go (about 80-90% stays)
-    spans = speech_spans(utter, pad=1.2, join=5.0) if char else speech_spans(utter, pad=1.5, join=8.0)
+    if char:     # 🗣️ recap-like: pauses ≤10 s stay (narrated), long silent stretches cut to their start
+        spans = char_spans([u for u in utter if (u.get("text") or "").strip()])
+    else:
+        spans = speech_spans(utter, pad=1.5, join=8.0)
     kept = sum(b - a for a, b in spans)
     total = job["total"]
-    if not spans or kept < total * (0.5 if char else 0.6) or kept > total * 0.97:
+    if not spans or kept < total * (0.25 if char else 0.6) or kept > total * 0.97:
         jlog(job, "keeping the whole film (little to leave out)")
         return src, utter
     job.update(stage="recap", pct=55)
-    jlog(job, f"leaving out music-only parts: {total / 60:.0f} → {kept / 60:.0f} min ({kept * 100 / total:.0f}%)")
+    jlog(job, (f"🗣️ cutting long scenes without talk (like a recap)" if char else "leaving out music-only parts")
+         + f": {total / 60:.0f} → {kept / 60:.0f} min ({kept * 100 / total:.0f}%)")
     out = job["dir"] / "condensed.mp4"
     def prog(i, n):
         job.update(pct=55 + int(5 * i / max(n, 1)))
@@ -1423,7 +1447,7 @@ def _condense(job, src, utter):
             if a <= u["start"] < b:
                 moved.append({**u, "start": t0 + u["start"] - a, "end": t0 + min(u["end"], b) - a})
                 break
-    if job.get("comments"):              # 🎙️ silent-scene remarks follow their scene (or go with it)
+    if job.get("comments") and not job.get("comments_cut"):   # 🎙️ remarks follow their scene (or go with it)
         cm = []
         for c in job["comments"]:
             for a, b, t0 in starts:
@@ -1454,6 +1478,8 @@ def _voice_and_mux(job):
                       "(pip install demucs)")
     if job.get("condense") or job.get("char_voice"):   # leave out long music-only stretches (dances, songs, intros)
         src, utter = _condense(job, src, utter)
+    if job.get("char_voice") and job.get("commentary") and not job.get("comments_cut"):
+        _write_comments(job, os.environ.get("GEMINI_API_KEY"), utter, src)   # 🗣️ talk all the way
     if not job.get("recap") and not job.get("orig_audio"):
         job.update(stage="voice", pct=60)
         jlog(job, f"synthesizing {len(utter)} utterances ({voice_name})…")

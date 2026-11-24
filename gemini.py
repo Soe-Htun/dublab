@@ -434,19 +434,40 @@ Answer with JSON only: {{"remarks": ["<remark for pause 1>", "<remark for pause 
 {pauses}"""
 
 
-def write_comments(pauses, api_key, describe=False):
-    """🎙️ pauses: [{"before": [lines], "after": [lines], "max": chars}] → one remark per pause
-    ("" where nothing good fits)."""
+def write_comments(pauses, api_key, describe=False, batch=25):
+    """🎙️ pauses: [{"before": [lines], "after": [lines], "max": chars, "jpeg": frame or None}]
+    → one remark per pause ("" where nothing good fits). With a frame, the remark says
+    what is seen there (the scene has no talk). Sent `batch` pauses at a time."""
+    if len(pauses) > batch:
+        out = []
+        for i in range(0, len(pauses), batch):
+            try:
+                out += write_comments(pauses[i:i + batch], api_key, describe, batch)
+            except Exception:  # noqa: BLE001 - that batch stays quiet
+                out += [""] * len(pauses[i:i + batch])
+        return out
+    images = [(f"Pause {k} picture:", p["jpeg"]) for k, p in enumerate(pauses, 1) if p.get("jpeg")]
     blocks = []
     for k, p in enumerate(pauses, 1):
-        blocks.append(f"Pause {k} (at most {p['max']} characters):\n  before: " + " / ".join(p["before"])
+        size = (f"about {int(p['max'] * 0.8)} characters, at most {p['max']}" if describe
+                else f"at most {p['max']} characters")
+        blocks.append(f"Pause {k} ({size}):\n  before: " + " / ".join(p["before"])
                       + "\n  after: " + " / ".join(p["after"]))
     base = COMMENT_PROMPT
     if describe:          # 🗣️ character-voice mode: the pause is a scene without talk — say what happens
         base = base.replace("like a friend\nwatching along: explain what is really going on or why a character acts that way, point out a clue or a\ncultural detail, react, or make people curious about what comes next.",
                             "like a recap\nnarrator: say briefly what is happening in this silent moment (e.g. \"မီးဖိုချောင်ထဲမှာ အခန်းလျှို့ဝှက် တစ်ခု\nတွေ့သွားတယ်\") or what it means for the story.")
+        base = base.replace("at a\nfew quiet moments", "in EVERY\nquiet moment")
+        base = base.replace("one sentence, never two",
+                            "fill most of it (at least about two thirds) — one or two sentences, so the voice "
+                            "goes on through the whole quiet moment")
+        if images:
+            base += ("\n\nEach pause has a picture from that moment: say what the picture shows happening "
+                     "(who does what, where), tied to the story — like a movie-recap narrator. "
+                     "Never describe the picture itself (no \"ပုံထဲမှာ\").")
     raw = _call(base.replace("{{max}}", "the number given").replace("{{", "{").replace("}}", "}")
-                .replace("{pauses}", "\n\n".join(blocks)), api_key, max_tokens=4096)
+                .replace("{pauses}", "\n\n".join(blocks)), api_key, max_tokens=4096,
+                images=images or None)
     m = re.search(r"\{.*\}", raw, re.S)
     data = json.loads(re.sub(r",\s*([}\]])", r"\1", m.group(0))) if m else {}
     got = [str(x or "").strip() for x in data.get("remarks") or []]
