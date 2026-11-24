@@ -26,7 +26,7 @@ from dub import (WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segme
                  split_video, transcribe)
 from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, find_movie_bounds, pick_cover_frames, pick_hook, thumb_is_good, translate_lines,
                     write_cover_scene, write_intro, write_recap, write_title, movie_name,
-                    transcribe_burmese, write_posts, find_sensitive, analyze_warning, check_covers, write_comments, game_highlights)
+                    transcribe_burmese, write_cast, write_posts, find_sensitive, analyze_warning, check_covers, write_comments, game_highlights)
 
 # Gemini TTS key rotation.
 # GEMINI_TTS_API_KEYS is comma-separated; falls back to the single GEMINI_API_KEY.
@@ -1212,7 +1212,8 @@ def _transcribe_and_translate(jid, job):
         except Exception as e:  # noqa: BLE001 - the dub works without it
             job["intro_text"] = ""
             jlog(job, f"intro skipped: {e}")
-    if job.get("commentary") and not job.get("recap") and "comments" not in job and not job.get("char_voice"):
+    if job.get("commentary") and not job.get("recap") and "comments" not in job and not job.get("char_voice") \
+            and not job.get("orig_audio"):
         _write_comments(job, api_key)        # (character-voice: after the cut, with pictures — see _voice_and_mux)
     if job.get("cover") and job.get("no_title"):
         job["title_mm"] = ""
@@ -1273,14 +1274,44 @@ def _write_comments(job, api_key, utter=None, video=None):
     every_pause = utter is not None
     utter = utter if every_pause else (job.get("utter") or [])
     utter = [u for u in utter if (u.get("text") or "").strip()]
-    if every_pause:      # the Burmese voice ends sooner than the original line: the quiet after it counts too
+    if every_pause and job.get("char_voice"):   # the Burmese voice ends sooner than the line: the quiet after it counts
         utter = [{**u, "end": min(u["end"], u["start"] + len(u["text"]) / TTS_CPS + 0.4)} for u in utter]
     job["comments"] = []
     try:
         if every_pause:
-            gaps = comment_gaps(utter, job.get("total") or 0, every=0, min_gap=3.0, first=2.0)
+            gaps = comment_gaps(utter, job.get("total") or 0, every=0,
+                                min_gap=4.0 if job.get("orig_audio") else 3.0, first=2.0)
         else:
             gaps = comment_gaps(utter, job.get("total") or 0, every=150.0)
+        if every_pause and job.get("orig_audio") and video and gaps:
+            # 🔊 the actors' own voices play: a pause is only where the SOUND is quiet too
+            # (whisper misses lines — the narrator must not talk over them)
+            try:
+                wav = job["dir"] / ("audio_cut.wav" if Path(video).name == "condensed.mp4" else "audio.wav")
+                if not wav.exists():
+                    extract_audio(video, wav)
+                talk = speech_regions(wav)
+                free = []
+                for a, b, i in gaps:
+                    best, t = None, a
+                    for x, y in [r for r in talk if r[1] > a and r[0] < b] + [(b, b)]:
+                        if x - t >= 4.0 and (not best or x - t > best[1] - best[0]):
+                            best = (t, x)
+                        t = max(t, y)
+                    if best:
+                        free.append((best[0] + 0.2, best[1] - 0.2, i))
+                gaps = free
+            except Exception as e:  # noqa: BLE001 - the transcript's pauses then
+                jlog(job, f"quiet check skipped: {str(e)[:100]}")
+        if every_pause:
+            # ⚔️ a long scene without talk (a fight, a chase…): a line every ~10 s, each from its own
+            # picture — the narrator follows the action instead of one remark and then silence
+            split = []
+            for a, b, i in gaps:
+                n = max(1, int((b - a + 1.5) // 11.5))
+                w = (b - a - 1.5 * (n - 1)) / n
+                split += [(a + k * (w + 1.5), a + k * (w + 1.5) + w, i) for k in range(n)]
+            gaps = split
         if not gaps:
             jlog(job, "🎙️ no quiet pauses long enough for narrator remarks")
             return
@@ -1295,7 +1326,17 @@ def _write_comments(job, api_key, utter=None, video=None):
                                    gaps))
             for p, j in zip(pauses, pics):
                 p["jpeg"] = j
-        texts = write_comments(pauses, api_key, describe=bool(job.get("char_voice")))
+        cast = job.get("cast_mm")
+        if every_pause and cast is None:     # 👤 names for "X နဲ့ Y ချနေကြပါပြီ" (who is fighting whom)
+            try:
+                cast = write_cast(list(enumerate(u["text"] for u in utter)), api_key, None,
+                                  title=job.get("name") or "")
+            except Exception as e:  # noqa: BLE001 - roles then
+                cast = ""
+                jlog(job, f"character list skipped: {str(e)[:100]}")
+            job["cast_mm"] = cast
+        texts = write_comments(pauses, api_key, describe=bool(job.get("char_voice") or every_pause),
+                               cast=cast or "")
         job["comments"] = [{"start": round(a, 3), "end": round(b, 3), "text": t}
                            for (a, b, _), t in zip(gaps, texts) if t]
         if every_pause:
@@ -1450,8 +1491,9 @@ def _condense(job, src, utter):
         except Exception as e:  # noqa: BLE001 - the transcript alone then
             jlog(job, f"speech check skipped: {str(e)[:100]}")
         spans = keep_most(talk, job["total"], keep=0.85)
-    elif char:   # 🗣️ recap-like: pauses ≤10 s stay (narrated), long silent stretches cut to their start
-        spans = char_spans([u for u in utter if (u.get("text") or "").strip()])
+    elif char:   # 🎬 recap: the longest stretches without talk go until ~80% is left — fights and action
+        # mostly stay (King Kong, war films…), the narrator talks through them every ~10 s
+        spans = keep_most([u for u in utter if (u.get("text") or "").strip()], job["total"], keep=0.80)
     else:
         spans = speech_spans(utter, pad=1.5, join=8.0)
     kept = sum(b - a for a, b in spans)
@@ -1509,7 +1551,7 @@ def _voice_and_mux(job):
                       "(pip install demucs)")
     if job.get("condense") or job.get("char_voice") or job.get("orig_audio"):   # long stretches without talk go
         src, utter = _condense(job, src, utter)
-    if job.get("char_voice") and job.get("commentary") and not job.get("comments_cut"):
+    if (job.get("char_voice") or job.get("orig_audio")) and job.get("commentary") and not job.get("comments_cut"):
         _write_comments(job, os.environ.get("GEMINI_API_KEY"), utter, src)   # 🗣️ talk all the way
     if not job.get("recap") and not job.get("orig_audio"):
         job.update(stage="voice", pct=60)

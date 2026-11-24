@@ -435,7 +435,7 @@ Answer with JSON only: {{"remarks": ["<remark for pause 1>", "<remark for pause 
 {pauses}"""
 
 
-def write_comments(pauses, api_key, describe=False, batch=25):
+def write_comments(pauses, api_key, describe=False, batch=25, cast=""):
     """🎙️ pauses: [{"before": [lines], "after": [lines], "max": chars, "jpeg": frame or None}]
     → one remark per pause ("" where nothing good fits). With a frame, the remark says
     what is seen there (the scene has no talk). Sent `batch` pauses at a time."""
@@ -443,7 +443,7 @@ def write_comments(pauses, api_key, describe=False, batch=25):
         out = []
         for i in range(0, len(pauses), batch):
             try:
-                out += write_comments(pauses[i:i + batch], api_key, describe, batch)
+                out += write_comments(pauses[i:i + batch], api_key, describe, batch, cast)
             except Exception:  # noqa: BLE001 - that batch stays quiet
                 out += [""] * len(pauses[i:i + batch])
         return out
@@ -465,7 +465,16 @@ def write_comments(pauses, api_key, describe=False, batch=25):
         if images:
             base += ("\n\nEach pause has a picture from that moment: say what the picture shows happening "
                      "(who does what, where), tied to the story — like a movie-recap narrator. "
-                     "Never describe the picture itself (no \"ပုံထဲမှာ\").")
+                     "Never describe the picture itself (no \"ပုံထဲမှာ\"). Pauses in a row with the same before/after "
+                     "lines are ONE long scene without talk (a fight, a chase, a journey): tell it as it unfolds — "
+                     "each remark goes on from the previous one (what happens next, who is winning, the danger), "
+                     "never repeating it.")
+        if cast:
+            base += ("\n\nTHE CHARACTERS (Burmese names — use them): \n" + cast + "\nSay WHO does what by NAME, "
+                     "like a recap narrator: \"ရှဲ့ယွင်နဲ့ ဓားသမားကြီး ချနေကြပါပြီ၊ ရှဲ့ယွင်က ဓားနဲ့ ခုတ်လိုက်တယ်\", "
+                     "\"ကျိုးဖေးက လွတ်အောင် ပြေးနေပေမဲ့ လူဆိုးတွေ နောက်က လိုက်လာတယ်\". Recognise them in the picture "
+                     "from the lines around the pause; someone unknown is \"လူဆိုးတွေ\", \"ဓားသမားကြီး\"… — never "
+                     "\"လူတစ်ယောက်\" when the name is known.")
     raw = _call(base.replace("{{max}}", "the number given").replace("{{", "{").replace("}}", "}")
                 .replace("{pauses}", "\n\n".join(blocks)), api_key, max_tokens=4096,
                 images=images or None)
