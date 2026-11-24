@@ -2319,7 +2319,11 @@ def _gold_title(img, title, box_w, center_x, center_y, max_lines, size, suffix="
         lines = _wrap(d, title, font, box_w)
         if suffix:          # the part number stays on the last line ("… - 2")
             lines[-1] += suffix
-        if (len(lines) <= max_lines and _tlen(d, lines[-1], font) <= box_w) or size < 40:
+        fits = len(lines) <= max_lines and _tlen(d, lines[-1], font) <= box_w
+        if fits:     # two big lines were taller than a third of the cover: past the bottom, over the faces
+            ink = [_tbbox(d, (0, k * int(size * 1.5)), ln, font) for k, ln in enumerate(lines)]
+            fits = max(b[3] for b in ink) - min(b[1] for b in ink) <= img.size[1] * 0.3
+        if fits or size < 40:
             break
         size = int(size * 0.9)
     line_h = int(size * 1.5)
