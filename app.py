@@ -1080,11 +1080,18 @@ def _transcribe_and_translate(jid, job):
         raise ValueError("အသံထဲမှာ စကားပြောသံ မတွေ့ဘူး")
     if direction == "auto2mm":
         jlog(job, f"detected language: {lang}")
-        if lang == "my" and not job.get("recap") and not job.get("orig_audio"):
+        if lang == "my" and not job.get("recap") and not job.get("orig_audio") and not job.get("char_voice"):
             raise ValueError("ဒီဗီဒီယိုက မြန်မာလို ပြောထားပြီးသားပါ — မြန်မာ ရုပ်ရှင်ဆို "
                              "🎬 Recap ကို ရွေးပါ (AI အသံနဲ့ ဇာတ်ကြောင်းပြော recap လုပ်ပေးမယ်)")
         if lang == "my" and job.get("orig_audio"):
             jlog(job, "Burmese film — its own sound stays; captions are what is said")
+        elif lang == "my" and job.get("char_voice"):
+            # a Burmese film keeps its actors' own voices: original sound + Burmese captions, and our
+            # narrator explains the quiet scenes (the film's sound turned down meanwhile)
+            job["char_voice"] = False
+            job["orig_audio"] = True
+            job["commentary"] = True
+            jlog(job, "Burmese film — the actors' own voices stay; captions + 🎙️ narrator remarks in the quiet scenes")
         elif lang == "my":
             jlog(job, "Burmese film — writing a Burmese recap (no translation; the original voices are dropped)")
         direction = {"zh": "zh2mm", "en": "en2mm"}.get(lang, "any2mm")
@@ -1924,7 +1931,7 @@ def create_job():
     jobs[jid] = {"status": "queued", "stage": "queue", "pct": 0, "error": "",
                  "dir": d, "ext": ext, "direction": direction, "url": url,
                  "voice": voice, "review": review, "keep_bg": keep_bg, "phase": 1,
-                 "model": model, "outro": outro, "intro": intro, "hook": hook or bool(recap) or char_voice, "cover_src": cover_src, "commentary": char_voice and not recap and not orig_audio,
+                 "model": model, "outro": outro, "intro": intro, "hook": hook or bool(recap) or char_voice, "cover_src": cover_src, "commentary": (char_voice or orig_audio) and not recap,   # 🎙️ our own narration in the quiet scenes
                  "char_voice": char_voice and not recap and not orig_audio, "cover": cover, "logo": logo, "name": name,
                  "recap": recap,
                  "tg_src": tg_msg,

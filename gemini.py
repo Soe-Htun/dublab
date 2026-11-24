@@ -333,6 +333,10 @@ def translate_lines(lines, direction, api_key, src_lang_name=None, channel=None,
     if short:
         head, sep, tail = prompt.partition("\n- Output format:")
         prompt = head + SHORT_RULE + sep + tail
+        if (src_lang_name or "").lower().startswith("burmese"):   # a Burmese film: retell, don't translate
+            prompt += ("\n\nThe source lines are ALREADY Burmese (from speech recognition, may contain mistakes): "
+                       "do not translate — RETELL each line in your own shorter spoken Burmese words as described, "
+                       "never copying the original sentence.")
     if direction != "mm2en":
         try:                                # 👤 one fixed list of character names for every chunk
             cast = write_cast(list(enumerate(lines)), api_key, src_lang_name, title=title)
