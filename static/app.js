@@ -89,6 +89,11 @@ $('#go').addEventListener('click', () => {
   fd.append('orig_audio', orig ? '1' : '0');
   fd.append('no_music', orig && $('#nomusicchk').checked ? '1' : '0');
   fd.append('recap', $('#recapchk').checked && !orig ? recapLen : '0');
+  fd.append('game', $('#gamechk') && $('#gamechk').checked ? '1' : '0');
+  fd.append('game_cut', $('#gamecutchk') && $('#gamecutchk').checked ? '1' : '0');
+  fd.append('game_slow', $('#gameslowchk') && $('#gameslowchk').checked ? '1' : '0');
+  fd.append('game_music', $('#gamemusicchk') && $('#gamemusicchk').checked ? '1' : '0');
+  fd.append('game_hero', ($('#gamehero_in') && $('#gamehero_in').value || '').trim());
   try { localStorage.setItem('dublab_split', split); } catch (e) {}
   fd.append('logo', $('#logochk') && $('#logochk').checked ? '1' : '0');
   fd.append('telegram', !$('#tgrow').hidden && $('#tgchk').checked ? '1' : '0');
@@ -696,8 +701,9 @@ function syncRecap() {
   setRecapLen(recapLen);
 }
 // recap / no recap are radios: either one changing re-syncs everything
-['#recapchk', '#fullchk'].forEach((id) => $(id).addEventListener('change', () => {
+['#recapchk', '#fullchk', '#gamechk'].forEach((id) => $(id).addEventListener('change', () => {
   syncRecap(); syncOrig(); try { syncYtMode(); partsNote(); } catch (e) { /* not ready */ }
+  if ($('#gameopts')) $('#gameopts').hidden = !$('#gamechk').checked;
   // 🖼️ title: on for a recap, off for the plain video (can still be changed by hand)
   $('#titlechk').checked = $('#recapchk').checked;
   $('#covertitle_in').hidden = !$('#titlechk').checked; $('#eprow').hidden = !$('#titlechk').checked;

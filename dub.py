@@ -3049,6 +3049,137 @@ def beat_footage(start, end, need, spans, max_slow=1.35):
     return [(start, whole, whole * max_slow), (end, need - whole * max_slow)]   # then carry on past it
 
 
+def game_moments(video, win=0.5):
+    """🎮 The action in a gameplay video, from its sound: fights, skills, kills and the
+    announcer ("Double Kill!", "Savage!") are the loudest stretches. Returns
+    [(time, loudness)] of the peaks, loudest first."""
+    import numpy as np
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        wav = Path(tmp) / "a.wav"
+        run(["ffmpeg", "-y", "-v", "error", "-i", str(video), "-vn", "-ac", "1", "-ar", "8000", str(wav)])
+        import wave
+        with wave.open(str(wav), "rb") as w:
+            a = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
+    n = int(8000 * win)
+    k = len(a) // n
+    if k < 4:
+        return []
+    rms = np.sqrt((a[:k * n].reshape(k, n) ** 2).mean(axis=1) + 1e-9)
+    db = 20 * np.log10(rms)
+    smooth = np.convolve(db, np.ones(3) / 3, mode="same")
+    thr = max(np.percentile(smooth, 75), smooth.mean() + 0.6 * smooth.std())
+    peaks = []
+    for i in range(1, k - 1):
+        if smooth[i] >= thr and smooth[i] >= smooth[i - 1] and smooth[i] >= smooth[i + 1]:
+            peaks.append(((i + 0.5) * win, float(smooth[i])))
+    # one peak per 3 s (the loudest)
+    peaks.sort(key=lambda x: -x[1])
+    kept = []
+    for t, v in peaks:
+        if all(abs(t - u) >= 3.0 for u, _ in kept):
+            kept.append((t, v))
+    return kept
+
+
+def game_edit(src, out, music=None, cut=True, slowmo=True, logo=None, logo_size=0.12, game_vol=0.35, log=None,
+              moments=None, min_len=62.0):
+    """🎮 Edit a gameplay highlight: keep the action (quiet walking around is cut), the 3
+    biggest moments replayed in slow motion with a punch-in zoom, optional background
+    music over the game's own (turned-down) sound, the logo. Returns the edited length."""
+    import shutil as _sh
+    src, out = Path(src), Path(out)
+    total = probe_duration(src)
+    # moments: [(time, score)] from the AI looking at the screen (kills, team fights…), best first;
+    # else the loudest stretches of the game's sound
+    peaks = moments if moments else game_moments(src)
+
+    def keep_spans(pad_a, pad_b, pts):
+        spans = sorted((max(0.0, t - pad_a), min(total, t + pad_b)) for t, _ in pts)
+        merged = []
+        for a, b in spans:
+            if merged and a - merged[-1][1] < 2.5:
+                merged[-1][1] = max(merged[-1][1], b)
+            else:
+                merged.append([a, b])
+        return merged
+
+    # the stretches to keep: the build-up before each moment and a little after it — at least
+    # `min_len` s in all (TikTok counts 1 min+ videos): wider margins, then more moments, else all
+    merged = [[0.0, total]]
+    if cut and peaks and total > min_len + 10:
+        for pa, pb in ((5.0, 3.0), (7.0, 4.0), (10.0, 6.0), (14.0, 8.0)):
+            m = keep_spans(pa, pb, peaks)
+            if sum(b - a for a, b in m) >= min_len:
+                merged = m
+                break
+    big = sorted(sorted(peaks, key=lambda x: -x[1])[:3]) if slowmo else []
+    # clips in order: normal pieces, and the big moments as an extra slow-motion replay right after
+    clips = []
+    for a, b in merged:
+        clips.append(("n", a, b))
+        for t, _ in big:
+            if a <= t <= b:
+                clips.append(("s", max(a, t - 1.2), min(b, t + 0.8)))
+    if log:
+        kept = sum(b - a for _, a, b in clips if _ == "n")
+        log(f"🎮 keeping {kept:.0f}s of {total:.0f}s (the action), {len(big)} slow-motion replay(s)")
+    tmp = out.with_name(out.stem + "_clips")
+    tmp.mkdir(exist_ok=True)
+    w, h = video_size(src)
+    hw = _has_encoder("h264_videotoolbox")
+    enc = (["-c:v", "h264_videotoolbox", "-q:v", "62", "-allow_sw", "1"] if hw
+           else ["-c:v", "libx264", "-preset", "veryfast", "-crf", "19"])
+    has_a = has_audio_stream(src)
+    parts = []
+    try:
+        for i, (kind, a, b) in enumerate(clips):
+            p = tmp / f"c{i:04d}.mp4"
+            ins = ["-ss", f"{a:.3f}", "-t", f"{b - a:.3f}", "-i", str(src)]
+            if not has_a:
+                ins += ["-f", "lavfi", "-t", f"{(b - a) * (2 if kind == 's' else 1):.3f}",
+                        "-i", "anullsrc=r=44100:cl=stereo"]
+            if kind == "s":       # slow motion (half speed) with a 15% punch-in zoom
+                vf = (f"setpts=2.0*PTS,scale={int(w * 1.15) // 2 * 2}:{int(h * 1.15) // 2 * 2},"
+                      f"crop={w}:{h},fps=30,format=yuv420p")
+                af = "atempo=0.5"
+            else:
+                vf, af = f"scale={w}:{h},fps=30,format=yuv420p", "anull"
+            amap = ["-map", "0:a:0", "-af", af + ",aresample=44100,aformat=channel_layouts=stereo"] if has_a else ["-map", "1:a:0"]
+            run(["ffmpeg", "-y", "-v", "error", *ins, "-map", "0:v:0", "-vf", vf, *amap, *enc,
+                 "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2", "-video_track_timescale", "90000",
+                 "-shortest", str(p)])
+            parts.append(p)
+        lst = tmp / "list.txt"
+        lst.write_text("".join(f"file '{p.name}'\n" for p in parts))
+        joined = tmp / "joined.mp4"
+        run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(joined)])
+        length = probe_duration(joined)
+        ins = ["-i", str(joined)]
+        fc = []
+        if music:
+            ins += ["-stream_loop", "-1", "-i", str(music)]
+            fo = max(0.0, length - 2.5)
+            fc.append(f"[0:a]volume={game_vol}[g];[1:a]volume=0.75,afade=t=in:d=1.5,afade=t=out:st={fo:.2f}:d=2.5[m];"
+                      f"[g][m]amix=inputs=2:duration=first:normalize=0[a]")
+        vmap = "0:v:0"
+        if logo and Path(logo).exists():
+            ins += ["-i", str(logo)]
+            li = 2 if music else 1
+            fc.append(f"[{li}:v]scale={max(60, int(w * logo_size))}:-1[lg];[0:v][lg]overlay=W-w-W*0.025:H*0.03[v]")
+            vmap = "[v]"
+        cmd = ["ffmpeg", "-y", "-v", "error", *ins]
+        if fc:
+            cmd += ["-filter_complex", ";".join(fc)]
+        cmd += ["-map", vmap, "-map", "[a]" if music else "0:a:0"]
+        cmd += enc if vmap == "[v]" else ["-c:v", "copy"]
+        cmd += ["-c:a", "aac", "-b:a", "192k", "-t", f"{length:.3f}", "-movflags", "+faststart", str(out)]
+        run(cmd)
+        return length
+    finally:
+        _sh.rmtree(tmp, ignore_errors=True)
+
+
 def trim_silence(path):
     """Cut the silence a TTS clip starts and ends with (some voices add a second or
     more): no long quiet moments between recap beats, and the voice starts on cue."""

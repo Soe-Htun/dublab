@@ -26,7 +26,7 @@ from dub import (WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segme
                  split_video, transcribe)
 from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, find_movie_bounds, pick_cover_frames, pick_hook, thumb_is_good, translate_lines,
                     write_cover_scene, write_intro, write_recap, write_title, movie_name,
-                    transcribe_burmese, write_posts, find_sensitive, analyze_warning, check_covers, write_comments)
+                    transcribe_burmese, write_posts, find_sensitive, analyze_warning, check_covers, write_comments, game_highlights)
 
 # Gemini TTS key rotation.
 # GEMINI_TTS_API_KEYS is comma-separated; falls back to the single GEMINI_API_KEY.
@@ -582,6 +582,8 @@ def process_job(jid):
     try:
         if job.get("kind") == "fix":
             _fix_job(job)
+        elif job.get("kind") == "game":
+            _game_job(job)
         elif job.get("phase") == 2:
             _voice_and_mux(job)
         else:
@@ -852,6 +854,77 @@ def _fix_job(job):
         _save_meta(job)
         jlog(job, "done (explanation only) ✅")
         return
+    if job.get("telegram"):
+        job["tg"] = {"state": "sending", "error": "", "pct": 0}
+    job.update(status="done", stage="done", pct=100)
+    _save_meta(job)
+    jlog(job, "done ✅")
+    if job.get("telegram"):
+        threading.Thread(target=_telegram_send, args=(job,), daemon=True).start()
+
+
+MUSIC_DIR = BASE / "music"          # 🎮 royalty-free / licensed tracks for game highlights (mp3 / m4a / wav)
+
+
+def _game_job(job):
+    """🎮 A gameplay highlight (the player's own video): background music mixed in, the
+    game's own sound kept but turned down, the channel logo on it. No captions, no voice."""
+    import random
+    d = job["dir"]
+    src = d / ("input" + job["ext"])
+    if job.get("url") and not src.exists():
+        job.update(stage="download", pct=2)
+        jlog(job, "downloading video from link…")
+        download_url(job["url"], d, max_mb())
+    if job.get("tg_src") and not src.exists():
+        job.update(stage="download", pct=2)
+        jlog(job, "downloading video from Telegram…")
+        telegram.download_video(_settings.get("telegram_chat_id"), job["tg_src"], src, lambda f: None)
+    track = None
+    if job.get("game_music", True):
+        tracks = [p for p in MUSIC_DIR.glob("*") if p.suffix.lower() in (".mp3", ".m4a", ".wav", ".aac", ".ogg")]
+        if not tracks:
+            raise ValueError("music folder ထဲမှာ သီချင်း မရှိသေးဘူး — copyright မရှိတဲ့ (royalty-free) သီချင်းတွေကို "
+                             f"{MUSIC_DIR} ထဲ ထည့်ပါ (ဒါမှမဟုတ် 🎵 ကို ဖြုတ်ပါ)")
+        track = random.choice(tracks)
+    job["total"] = probe_duration(src)
+    job.update(stage="mux", pct=40)
+    jlog(job, "🎮 game highlight" + (f": music “{track.stem}”, game sound at 35%" if track else ": no music, game sound as it is"))
+    from dub import game_edit, frames_every
+    logo = LOGO_FILE if job.get("logo") and LOGO_FILE.exists() else None
+    moments = None
+    key = os.environ.get("GEMINI_API_KEY")
+    if key and job.get("game_cut", True):
+        # 👀 the AI watches the match (a frame every 2 s): the player's kills, team fights (even when the
+        # player dies in them), Lord / Turtle, outplays — far better than going by loudness alone
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+            job.update(stage="recap", pct=15)
+            jlog(job, "🎮 AI is watching the match for kills and team fights…")
+            step = 2.0
+            times, frames = frames_every(src, job["total"], step, width=512)
+            good = [(t, f) for t, f in zip(times, frames) if f]
+            batches = [good[i:i + 40] for i in range(0, len(good), 40)]
+            hero = job.get("game_hero") or ""
+            done = [0]
+
+            def look(batch):
+                hits = game_highlights([f for _, f in batch], step, key, hero)
+                done[0] += 1
+                _sp(job, done[0] / len(batches))
+                return [(batch[n][0], sc + (0.5 if kind == "kill" else 0)) for n, kind, sc in hits]
+            with ThreadPoolExecutor(4) as ex:
+                found = [h for part in ex.map(look, batches) for h in part]
+            if found:
+                moments = sorted(found, key=lambda x: -x[1])
+                kills = sum(1 for _, sc in found if sc % 1)
+                jlog(job, f"🎮 {len(found)} moments worth keeping ({kills} with the player's kill)")
+        except Exception as e:  # noqa: BLE001 - the game's sound then
+            jlog(job, f"AI match check skipped ({str(e)[:120]}) — going by the game's sound")
+    job["total"] = game_edit(src, d / "dubbed.mp4", track, cut=job.get("game_cut", True),
+                             slowmo=job.get("game_slow", True), logo=logo, logo_size=_settings["logo_size"] / 100,
+                             game_vol=0.35 if track else 1.0, log=lambda m: jlog(job, m), moments=moments)
+    src.unlink(missing_ok=True)
     if job.get("telegram"):
         job["tg"] = {"state": "sending", "error": "", "pct": 0}
     job.update(status="done", stage="done", pct=100)
@@ -1932,7 +2005,12 @@ def create_job():
                  "dir": d, "ext": ext, "direction": direction, "url": url,
                  "voice": voice, "review": review, "keep_bg": keep_bg, "phase": 1,
                  "model": model, "outro": outro, "intro": intro, "hook": hook or bool(recap) or char_voice, "cover_src": cover_src, "commentary": (char_voice or orig_audio) and not recap,   # 🎙️ our own narration in the quiet scenes
-                 "char_voice": char_voice and not recap and not orig_audio, "cover": cover, "logo": logo, "name": name,
+                 "char_voice": char_voice and not recap and not orig_audio,
+                 **({"kind": "game", "recap": 0, "split": 0, "game_music": request.form.get("game_music", "1") == "1",
+                     "game_cut": request.form.get("game_cut", "1") == "1",
+                     "game_slow": request.form.get("game_slow", "1") == "1",
+                     "game_hero": re.sub(r"[^\w .'-]", "", request.form.get("game_hero") or "")[:30]}
+                    if request.form.get("game") == "1" else {}), "cover": cover, "logo": logo, "name": name,
                  "recap": recap,
                  "tg_src": tg_msg,
                  "id": jid, "telegram": send_tg, "owner": _admin_ok(),

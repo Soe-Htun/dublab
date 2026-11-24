@@ -387,6 +387,39 @@ Rules:
 - Output only the hook text, nothing else."""
 
 
+GAME_PROMPT = """The numbered frames (0 to {last}) come from a Mobile Legends: Bang Bang match the player recorded, one
+every {step:.0f} seconds. The camera follows the PLAYER's own hero{hero}. Edit it like a popular MLBB highlight video:
+mark the frames worth keeping.
+- "kill": the PLAYER gets a kill — a kill banner in the middle of the screen ("You have slain an enemy", "Double
+  Kill", "Triple Kill", "Maniac", "Savage", "Shut Down", "Legendary", "Killing Spree", "First Blood") or the kill feed
+  shows the player's hero killing someone;
+- "teamfight": several heroes of both teams fighting around the player (skills flying, many health bars) — keep it
+  even when the player dies in it;
+- "objective": Lord / Turtle fight or steal, a turret / base destroyed, the Victory / Defeat screen;
+- "outplay": a clever escape, a big combo or a close-health survival by the player.
+Do NOT mark: walking, farming jungle minions alone, the shop, waiting to respawn, a grey death screen with no fight.
+"score": 1 = ok, 2 = good, 3 = the best moments (multi-kills like Triple/Maniac/Savage, a Lord steal, a 1v3 win).
+Answer with JSON only: {{"hits": [{{"frame": n, "kind": "kill"|"teamfight"|"objective"|"outplay", "score": 1|2|3}}]}}"""
+
+
+def game_highlights(frames, step, api_key, hero=""):
+    """🎮 frames: JPEGs one every `step` s of a gameplay video → [(frame number, kind, score)]."""
+    items = [(f"Frame {i}:", f) for i, f in enumerate(frames)]
+    raw = _call(GAME_PROMPT.format(last=len(frames) - 1, step=step,
+                                   hero=f" ({hero})" if hero else ""), api_key, max_tokens=4096, images=items)
+    m = re.search(r"\{.*\}", raw, re.S)
+    data = json.loads(re.sub(r",\s*([}\]])", r"\1", m.group(0))) if m else {}
+    out = []
+    for h in data.get("hits") or []:
+        try:
+            n, sc = int(h.get("frame")), int(h.get("score") or 1)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= n < len(frames):
+            out.append((n, str(h.get("kind") or "teamfight"), max(1, min(3, sc))))
+    return out
+
+
 COMMENT_PROMPT = """You are the narrator of a Burmese movie channel. The film plays with its own story; at a
 few quiet moments you add ONE short spoken remark in natural SPOKEN Burmese (စကားပြောဘာသာ), like a friend
 watching along: explain what is really going on or why a character acts that way, point out a clue or a

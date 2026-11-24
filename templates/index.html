@@ -162,6 +162,20 @@
         <span>🎵 <b>နောက်ခံ music ဖယ်မယ်</b> <span class="dim">— စကားပြောသံပဲ ထားမယ် (copyright သီချင်း မပါအောင်) · အချိန် နည်းနည်း ပိုကြာမယ်</span></span>
       </label>
     </div>
+    <label class="checkrow recaprow">
+      <input type="radio" name="mode" id="gamechk" value="game">
+      <span>🎮 <b>Game highlight</b> <span class="dim">— ကိုယ်တိုင် ကစားထားတဲ့ ဗီဒီယို (MLBB…) ကို edit လုပ်မယ် · စာတန်း၊ AI အသံ မပါ</span></span>
+    </label>
+    <div id="gameopts" class="subopts" hidden>
+      <label class="checkrow"><span>🦸 <b>ကိုယ်သုံးတဲ့ hero</b></span>
+        <input type="text" id="gamehero_in" class="titlein" maxlength="30" placeholder="ဥပမာ Ling, Fanny (မထည့်လည်း ရ)"></label>
+      <label class="checkrow"><input type="checkbox" id="gamecutchk" checked>
+        <span>✂️ <b>တိုက်ပွဲ အခန်းတွေပဲ ချန်မယ်</b> <span class="dim">— AI က screen ကြည့်ပြီး ကိုယ့် kill၊ team fight (သေသွားရင်လည်း)၊ Lord/Turtle၊ outplay တွေ ချန်ပြီး လမ်းလျှောက်၊ farm၊ respawn စောင့်တာတွေ ဖြတ်မယ် · အနည်းဆုံး ၁ မိနစ်</span></span></label>
+      <label class="checkrow"><input type="checkbox" id="gameslowchk" checked>
+        <span>🐢 <b>Slow motion replay</b> <span class="dim">— အကြီးဆုံး ၃ ခန်း (kill / savage…) ကို zoom နဲ့ နှေးနှေး ပြန်ပြမယ်</span></span></label>
+      <label class="checkrow"><input type="checkbox" id="gamemusicchk">
+        <span>🎵 <b>နောက်ခံ သီချင်း</b> <span class="dim">— dublab/music folder ထဲက royalty-free သီချင်း · game အသံ 35% လျှော့မယ်</span></span></label>
+    </div>
     <h2>၄ · ✂️ အပိုင်းခွဲမယ်</h2>
     <div class="optgrid chips" id="splitgrid">
       <button class="opt selected" data-split="0"><span class="opt-label">မခွဲဘူး</span></button>
