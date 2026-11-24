@@ -312,10 +312,10 @@ CHANNEL_RULE = """
 
 SHORT_RULE = """
 - STYLE (most important): this is NOT a stiff literal dub. Speak each line AS THE CHARACTER, in first person, natural
-  casual spoken Burmese ("ငါ မင်းကို ချစ်တယ်" / "ငါ မင်းကို မချစ်နိုင်ဘူး"). Paraphrase freely so it sounds natural,
-  but KEEP THE FULL MEANING and about the same length as the original line — the Burmese voice must fill the time the
-  character speaks (a gap with no voice makes viewers skip). NEVER drop a line and never leave one empty: even a
-  short "嗯" / "Yes" becomes "အင်း" / "ဟုတ်ကဲ့". Never narrate ("he says…"), never add speaker names.
+  casual spoken Burmese ("ငါ မင်းကို ချစ်တယ်" / "ငါ မင်းကို မချစ်နိုင်ဘူး"), SHORTER and simpler than the original
+  (about two-thirds of a word-for-word translation) so viewers follow easily — keep the meaning that matters for
+  the story, drop filler and repeats. But NEVER drop a line and never leave one empty: even a short "嗯" / "Yes"
+  becomes "အင်း" / "ဟုတ်ကဲ့". Never narrate ("he says…"), never add speaker names.
   Every line must still make sense with the lines before and after it."""
 
 

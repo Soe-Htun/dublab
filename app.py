@@ -1158,6 +1158,12 @@ def _transcribe_and_translate(jid, job):
                              "🎬 Recap ကို ရွေးပါ (AI အသံနဲ့ ဇာတ်ကြောင်းပြော recap လုပ်ပေးမယ်)")
         if lang == "my" and job.get("orig_audio"):
             jlog(job, "Burmese film — its own sound stays; captions are what is said")
+        elif lang == "my" and job.get("scene_recap"):
+            # a Burmese film: no dubbing its own language — the narrated recap instead
+            job.update(char_voice=False, scene_recap=False, commentary=False,
+                       recap=max(2, min(25, round((job.get("total") or 0) * 0.28 / 60)))
+                       if job.get("scene_auto") else job.get("scene_min") or 20)
+            jlog(job, "Burmese film — a narrated recap instead (its own language isn't dubbed)")
         elif lang == "my" and job.get("char_voice"):
             # a Burmese film keeps its actors' own voices: original sound + Burmese captions, and our
             # narrator explains the quiet scenes (the film's sound turned down meanwhile)
@@ -1426,8 +1432,7 @@ def _condense(job, src, utter):
     credits) cut out, and the lines moved onto the new timeline. Kept as long as
     at least 60% of the film remains."""
     char = bool(job.get("char_voice"))
-    # 🗣️ character-voice style: tighter — songs, dances, long silent stretches go (about 80-90% stays)
-    if char:     # 🗣️ recap-like: pauses ≤10 s stay (narrated), long silent stretches cut to their start
+    if char:   # 🗣️ recap-like: pauses ≤10 s stay (narrated), long silent stretches cut to their start
         spans = char_spans([u for u in utter if (u.get("text") or "").strip()])
     else:
         spans = speech_spans(utter, pad=1.5, join=8.0)
@@ -1437,7 +1442,8 @@ def _condense(job, src, utter):
         jlog(job, "keeping the whole film (little to leave out)")
         return src, utter
     job.update(stage="recap", pct=55)
-    jlog(job, (f"🗣️ cutting long scenes without talk (like a recap)" if char else "leaving out music-only parts")
+    jlog(job, ("🎬 recap: cutting the opening, ending, dances and long scenes without talk" if char
+               else "leaving out music-only parts")
          + f": {total / 60:.0f} → {kept / 60:.0f} min ({kept * 100 / total:.0f}%)")
     out = job["dir"] / "condensed.mp4"
     def prog(i, n):
@@ -1579,7 +1585,7 @@ def _voice_and_mux(job):
                 except Exception as e:  # noqa: BLE001 - one voice then
                     jlog(job, f"per-speaker voices skipped: {str(e)[:120]}")
             if job.get("comments"):               # 🎙️ narrator remarks in the pauses, a third voice
-                nv = voice_name if job.get("char_voice") else NARRATOR_VOICE   # 🗣️ one voice for everything
+                nv = voice_name if job.get("char_voice") and not job.get("scene_recap") else NARRATOR_VOICE
                 lines = sorted(utter + [{**c, "voice": nv, "comment": True} for c in job["comments"]],
                                key=lambda u: u["start"])
                 jlog(job, f"🎙️ {len(job['comments'])} narrator remarks added")
@@ -1969,6 +1975,13 @@ def create_job():
     recap = recap if recap in RECAP_CHOICES else 0
     if orig_audio:
         recap = 0                        # nothing is narrated: the film plays as it is
+    # 🎬 recap = the film's own scenes (~80%: opening, ending, dances and silent stretches cut), the
+    # characters' lines dubbed short in one AI voice, a narrator in the scenes without talk —
+    # not a narrator retelling the whole film
+    scene_recap = bool(recap) and request.form.get("recap_style", "scenes") == "scenes"
+    scene_min = recap
+    if scene_recap:
+        char_voice, recap = True, 0
     # no length limit: any video is accepted (long films are split into parts)
     max_sec = float("inf")
     too_long = "ဗီဒီယို ရှည်လွန်းတယ်"
@@ -2039,6 +2052,7 @@ def create_job():
                  "voice": voice, "review": review, "keep_bg": keep_bg, "phase": 1,
                  "model": model, "outro": outro, "intro": intro, "hook": hook or bool(recap) or char_voice, "cover_src": cover_src, "commentary": (char_voice or orig_audio) and not recap,   # 🎙️ our own narration in the quiet scenes
                  "char_voice": char_voice and not recap and not orig_audio,
+                 "scene_recap": scene_recap, "scene_min": scene_min, "scene_auto": scene_recap and recap_auto,
                  **({"kind": "game", "recap": 0, "split": 0, "game_music": request.form.get("game_music", "1") == "1",
                      "game_cut": request.form.get("game_cut", "1") == "1",
                      "game_slow": request.form.get("game_slow", "1") == "1",
@@ -2856,7 +2870,7 @@ def _ready_title(job):
         return None
     ep = job.get("episode")
     film = (job.get("film_name") or "").strip()
-    tag = _MODE_TAG["recap" if job.get("recap") else "orig" if job.get("orig_audio") else "dub"]
+    tag = _MODE_TAG["recap" if job.get("recap") or job.get("scene_recap") else "orig" if job.get("orig_audio") else "dub"]
     out = title + (f" - {ep}" if ep else "")          # the same as on the cover: "Title - 1"
     if film and film.casefold() not in title.casefold():
         out += f" | {film}"

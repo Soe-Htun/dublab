@@ -77,7 +77,7 @@ $('#go').addEventListener('click', () => {
   fd.append('intro', $('#introchk').checked ? '1' : '0');
   fd.append('hook', $('#hookchk') && $('#hookchk').checked ? '1' : '0');
   fd.append('commentary', '1');       // 🎙️ silent scenes explained: part of the character-voice style
-  fd.append('fullstyle', $('#fullchk').checked && $('#charchk') && $('#charchk').checked ? 'char' : '');
+  fd.append('fullstyle', '');          // 🗣️ the character-voice style is the 🎬 recap now
   fd.append('youtube', $('#ytchk').checked ? '1' : '0');
   fd.append('ytmode', 'recap');       // 📺 YouTube = the recap as one video (the 83% long version was dropped)
   fd.append('show_title', $('#titlechk').checked ? '1' : '0');
@@ -646,7 +646,7 @@ $('#tgpickbtn').addEventListener('click', loadTgVideos);
 // 🎬 recap version (checkbox → length) and how many parts that makes
 let srcDur = 0;          // seconds of the chosen video, when known
 function partsNote() {
-  const sp = +split, rc = $('#recapchk').checked ? (recapLen === 'auto' ? Math.max(2, Math.min(25, srcDur * 0.28 / 60)) * 1.1 : +recapLen * 1.25) : 0;
+  const sp = +split, rc = $('#recapchk').checked ? srcDur * 0.8 / 60 : 0;   // 🎬 recap ≈ 80% of the film
   const len = rc ? rc * 60 : srcDur;              // finished video length (s)
   const yt = $('#ytchk') && $('#ytchk').checked;
   let txt = +sp ? `${sp} မိနစ်ထက် ရှည်ရင် ${sp} မိနစ်စီ ခွဲမယ် — နာမည်-1, နာမည်-2 … နာမည်-End` : 'ဗီဒီယို တစ်ခုတည်း ထွက်မယ်';
@@ -692,7 +692,6 @@ function syncOrig() {
   $('#voicehead').hidden = on;
 }
 $('#origchk').addEventListener('change', syncOrig);
-$('#charchk').addEventListener('change', syncOrig);
 
 function syncRecap() {
   const on = $('#recapchk').checked;
