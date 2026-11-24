@@ -3083,7 +3083,7 @@ def game_moments(video, win=0.5):
 
 
 def game_edit(src, out, music=None, cut=True, slowmo=True, logo=None, logo_size=0.12, game_vol=0.35, log=None,
-              moments=None, min_len=62.0):
+              moments=None, min_len=62.0, target=None):
     """🎮 Edit a gameplay highlight: keep the action (quiet walking around is cut), the 3
     biggest moments replayed in slow motion with a punch-in zoom, optional background
     music over the game's own (turned-down) sound, the logo. Returns the edited length."""
@@ -3108,8 +3108,17 @@ def game_edit(src, out, music=None, cut=True, slowmo=True, logo=None, logo_size=
     # `min_len` s in all (TikTok counts 1 min+ videos): wider margins, then more moments, else all
     merged = [[0.0, total]]
     if cut and peaks and total > min_len + 10:
+        # a highlight, not the whole match: the best moments first, added until about `target` s
+        # (1.5-3 min; a 20-min match became 10 min when every team fight was kept)
+        goal = target or max(min_len, min(180.0, total * 0.15))
+        best = sorted(peaks, key=lambda x: -x[1])
         for pa, pb in ((5.0, 3.0), (7.0, 4.0), (10.0, 6.0), (14.0, 8.0)):
-            m = keep_spans(pa, pb, peaks)
+            chosen, m = [], []
+            for pt in best:
+                chosen.append(pt)
+                m = keep_spans(pa, pb, chosen)
+                if sum(b - a for a, b in m) >= goal:
+                    break
             if sum(b - a for a, b in m) >= min_len:
                 merged = m
                 break
