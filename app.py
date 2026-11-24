@@ -1169,7 +1169,12 @@ def _transcribe_and_translate(jid, job):
             jlog(job, "Burmese film — writing a Burmese recap (no translation; the original voices are dropped)")
         direction = {"zh": "zh2mm", "en": "en2mm"}.get(lang, "any2mm")
     # 🔊 captions only: short lines that follow the speech (a dub needs longer, speakable ones)
-    utter = merge_segments(segs, max_gap=0.3, max_len=5.0) if job.get("orig_audio") else merge_segments(segs)
+    if job.get("orig_audio"):
+        utter = merge_segments(segs, max_gap=0.3, max_len=5.0)
+    elif job.get("char_voice"):          # 🗣️ line by line: each voice line sits on its own speech
+        utter = merge_segments(segs, max_gap=0.4, max_len=6.0)
+    else:
+        utter = merge_segments(segs)
     jlog(job, f"transcribed {len(segs)} segments → {len(utter)} utterances")
     if job["voice"] == "auto":
         try:
@@ -1256,6 +1261,8 @@ def _write_comments(job, api_key, utter=None, video=None):
     every_pause = utter is not None
     utter = utter if every_pause else (job.get("utter") or [])
     utter = [u for u in utter if (u.get("text") or "").strip()]
+    if every_pause:      # the Burmese voice ends sooner than the original line: the quiet after it counts too
+        utter = [{**u, "end": min(u["end"], u["start"] + len(u["text"]) / TTS_CPS + 0.4)} for u in utter]
     job["comments"] = []
     try:
         if every_pause:
