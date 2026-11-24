@@ -17,7 +17,7 @@ import telegram
 
 from dub import (WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segments, configure_tts, frame_layout, render_frames,
                  frame_caption_y,
-                 footage, speech_spans, char_spans, trim_copy, picture_area,
+                 footage, speech_spans, char_spans, keep_most, trim_copy, picture_area,
                  add_outro_tail, caption_y, normalize_logo, render_captions, sample_frames, video_size, write_srt,
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
@@ -1438,7 +1438,19 @@ def _condense(job, src, utter):
     credits) cut out, and the lines moved onto the new timeline. Kept as long as
     at least 60% of the film remains."""
     char = bool(job.get("char_voice"))
-    if char:   # 🗣️ recap-like: pauses ≤10 s stay (narrated), long silent stretches cut to their start
+    orig = bool(job.get("orig_audio"))
+    if orig:     # 🎞️ no recap, the film's own voices: songs, dances and long silent scenes go (~85% stays).
+        # The talking comes from the sound itself too (whisper misses lines; a cut must never take real talk)
+        talk = [{"start": u["start"], "end": u["end"]} for u in utter]
+        try:
+            wav = job["dir"] / "audio.wav"
+            if not wav.exists():
+                extract_audio(src, wav)
+            talk += [{"start": a, "end": b} for a, b in speech_regions(wav) if b - a >= 0.6]
+        except Exception as e:  # noqa: BLE001 - the transcript alone then
+            jlog(job, f"speech check skipped: {str(e)[:100]}")
+        spans = keep_most(talk, job["total"], keep=0.85)
+    elif char:   # 🗣️ recap-like: pauses ≤10 s stay (narrated), long silent stretches cut to their start
         spans = char_spans([u for u in utter if (u.get("text") or "").strip()])
     else:
         spans = speech_spans(utter, pad=1.5, join=8.0)
@@ -1449,7 +1461,7 @@ def _condense(job, src, utter):
         return src, utter
     job.update(stage="recap", pct=55)
     jlog(job, ("🎬 recap: cutting the opening, ending, dances and long scenes without talk" if char
-               else "leaving out music-only parts")
+               else "🎞️ cutting songs, dances and long scenes without talk" if orig else "leaving out music-only parts")
          + f": {total / 60:.0f} → {kept / 60:.0f} min ({kept * 100 / total:.0f}%)")
     out = job["dir"] / "condensed.mp4"
     def prog(i, n):
@@ -1495,7 +1507,7 @@ def _voice_and_mux(job):
         else:
             jlog(job, "demucs not installed — background music skipped "
                       "(pip install demucs)")
-    if job.get("condense") or job.get("char_voice"):   # leave out long music-only stretches (dances, songs, intros)
+    if job.get("condense") or job.get("char_voice") or job.get("orig_audio"):   # long stretches without talk go
         src, utter = _condense(job, src, utter)
     if job.get("char_voice") and job.get("commentary") and not job.get("comments_cut"):
         _write_comments(job, os.environ.get("GEMINI_API_KEY"), utter, src)   # 🗣️ talk all the way
@@ -1547,7 +1559,7 @@ def _voice_and_mux(job):
             run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-vn", "-map", "0:a:0", "-c:a", "copy", str(dub_wav)])
         cues = [(u["start"], u["end"], u["text"]) for u in utter if (u.get("text") or "").strip()]
         try:                                       # captions only while someone is talking
-            wav = d / "audio.wav"
+            wav = d / ("audio_cut.wav" if src.name == "condensed.mp4" else "audio.wav")   # (the cut film's sound)
             if not wav.exists():
                 extract_audio(src, wav)
             cues = fit_cues_to_speech(cues, speech_regions(wav))

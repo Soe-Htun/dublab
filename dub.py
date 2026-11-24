@@ -3003,6 +3003,43 @@ def char_spans(utterances, keep_gap=10.0, tail=7.0, pad=1.0):
     return [tuple(x) for x in out]
 
 
+def keep_most(talk, total, keep=0.85, min_gap=12.0, tail=6.0, head=1.0):
+    """🎞️ No-recap cut: only the LONGEST stretches without talk (songs, dances, long silent
+    scenes) go — longest first, each keeping its first `tail` s — until about `keep` of the
+    film is left. Short pauses and most action scenes stay. [(start, end)] to keep."""
+    talk = sorted((max(0.0, u["start"]), min(total, u["end"])) for u in talk)
+    merged = []
+    for a, b in talk:
+        if merged and a <= merged[-1][1] + 0.5:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    gaps, prev = [], 0.0
+    for a, b in merged + [[total, total]]:
+        if a - prev >= min_gap:
+            gaps.append((prev, a))
+        prev = max(prev, b)
+    budget = total * (1 - keep)
+    cuts = []
+    for a, b in sorted(gaps, key=lambda g: g[0] - g[1]):          # longest first
+        if budget <= 0:
+            break
+        c0, c1 = a + tail, b - head
+        if c1 - c0 < 3:
+            continue
+        cut = min(c1 - c0, (b - a) * 0.75, budget + 2)     # a long fight keeps a quarter of itself
+        cuts.append((c0, c0 + cut))
+        budget -= cut
+    keep_spans, t = [], 0.0
+    for c0, c1 in sorted(cuts):
+        if c0 > t:
+            keep_spans.append((t, c0))
+        t = c1
+    if t < total:
+        keep_spans.append((t, total))
+    return keep_spans
+
+
 def footage(start, dur, spans, min_piece=1.5):
     """[(start, length)] adding up to dur, taken from talking stretches from
     `start` on: a recap beat longer than its scene skips the music-only part
