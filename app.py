@@ -266,9 +266,15 @@ def _hooks_on(job, d, names, cues=None, window=None):
             if k not in picks:
                 lo_, hi_ = window or (0.0, dur)
                 hi_ = min(hi_, dur)
-                a, b, cnt = lo_ + (hi_ - lo_) * 0.12, lo_ + (hi_ - lo_) * 0.8, 20
-                i = pick_hook(sample_frames(p, a, b, cnt, width=384), key)
+                a, b, cnt = lo_ + (hi_ - lo_) * 0.12, lo_ + (hi_ - lo_) * 0.8, 40
                 step = (b - a) / cnt
+                # 🗣️ what is SAID at each picture too: the teaser plays with its voice — a gripping
+                # line (a threat, a shock, a confession) makes the hook, not just a nice picture
+                said = []
+                for f in range(cnt):
+                    t = a + step * (f + 0.5)
+                    said.append(" / ".join(str(c[2]) for c in (pc or []) if len(c) > 2 and t - 3 <= c[0] <= t + 6)[:160])
+                i = pick_hook(sample_frames(p, a, b, cnt, width=320), key, said)
                 picks[k] = hook_span(p, a + step * (i + 0.5), dur, cues=pc)   # starts/ends with a caption line
                 if window:
                     picks["first"] = picks[k]
@@ -1745,7 +1751,7 @@ def _voice_and_mux(job):
             if orig_outro:                    # 🔊 mode: the dub track had no outro in it
                 _outro_on_parts(job, [out], d, outro, caps, blur, vw, vh, frame)
             # the whole (YouTube) video opens with the SAME teaser as TikTok part 1: picked inside part 1
-            _hooks_on(job, d, [out.name], [[(c[0], c[1]) for c in cues]],
+            _hooks_on(job, d, [out.name], [[(c[0], c[1], c[2]) for c in cues]],
                       window=(0.0, tt_cuts[0] if tt_cuts else 10.0 ** 9))
             return [out.name]
         job.update(stage="split", pct=97)
@@ -1758,7 +1764,7 @@ def _voice_and_mux(job):
             # 🔊 mode: the last part needs it too (the dub track had no outro)
             _outro_on_parts(job, parts if job.get("orig_audio") else parts[:-1], d, outro, caps, blur, vw, vh, frame)
         bounds = [0.0, *cuts, 10 ** 9]                    # each part's own caption lines, on its own clock
-        pcs = [[(c[0] - a, c[1] - a) for c in cues if a <= c[0] < b] for a, b in zip(bounds, bounds[1:])]
+        pcs = [[(c[0] - a, c[1] - a, c[2]) for c in cues if a <= c[0] < b] for a, b in zip(bounds, bounds[1:])]
         _hooks_on(job, d, [p.name for p in parts], pcs)
         return [p.name for p in parts]
 

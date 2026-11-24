@@ -1797,10 +1797,10 @@ def hook_span(video, t, dur_total, lo=4.0, hi=10.0, aim=6.5, cues=None):
     began the teaser mid-sentence: "ဆိုတဲ့ …" without the name before it).
     Falls back to a plain aim-second window."""
     if cues:
-        starts = [a for a, b in cues if t - 12 <= a <= t + 1 and a >= 0]
+        starts = [c[0] for c in cues if t - 12 <= c[0] <= t + 1 and c[0] >= 0]
         if starts:
             st = max(starts)
-            ends = [b for a, b in cues if st + lo <= b <= st + hi + 4]
+            ends = [c[1] for c in cues if st + lo <= c[1] <= st + hi + 4]
             if ends:
                 en = min(ends, key=lambda x: abs(x - st - aim))
             else:                                       # one long line: cut at its first pause

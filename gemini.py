@@ -1235,10 +1235,27 @@ Among the frames that show the main character, pick the most gripping (or, in a 
 Answer with JSON only: {{"frame": <number>}}."""
 
 
-def pick_hook(jpegs, api_key):
-    """Index of the frame to build the opening teaser around; raises on failure."""
-    raw = _call(HOOK_PROMPT.format(last=len(jpegs) - 1), api_key, max_tokens=256,
-                images=[(f"Frame {i}:", b) for i, b in enumerate(jpegs)])
+HOOK_SAID = """
+Under each frame is what is SAID there (the Burmese voice the teaser will play with). The teaser works by
+picture AND words together: prefer a moment whose line grabs attention on its own — a threat, a shocking
+reveal, a confession, a desperate cry, a fierce argument, a mysterious question, a big laugh — WITH the main
+character and something happening on screen. Avoid ordinary chat ("ဟုတ်ကဲ့", greetings, instructions) and
+frames with nothing said and nothing happening. Think like a TikTok editor: would a stranger stop scrolling?"""
+
+
+def pick_hook(jpegs, api_key, said=None):
+    """Index of the frame to build the opening teaser around; raises on failure.
+    said: the line(s) spoken at each frame ("" for none)."""
+    if said:
+        items = []
+        for i, b in enumerate(jpegs):
+            line = said[i] if i < len(said) else ""
+            items.append((f"Frame {i}" + (f" — said: {line}" if line else " — (nothing said)") + ":", b))
+        prompt = HOOK_PROMPT.replace("Answer with JSON", HOOK_SAID.strip() + "\nAnswer with JSON")
+    else:
+        items = [(f"Frame {i}:", b) for i, b in enumerate(jpegs)]
+        prompt = HOOK_PROMPT
+    raw = _call(prompt.format(last=len(jpegs) - 1), api_key, max_tokens=256, images=items)
     m = re.search(r'"frame"\s*:\s*(\d+)', raw)
     if not m or not 0 <= int(m.group(1)) < len(jpegs):
         raise ValueError("no hook frame picked")
