@@ -1318,10 +1318,12 @@ def _condense(job, src, utter):
     """The film with its long stretches without speech (songs, dances, montages,
     credits) cut out, and the lines moved onto the new timeline. Kept as long as
     at least 60% of the film remains."""
-    spans = speech_spans(utter, pad=1.5, join=8.0)
+    char = bool(job.get("char_voice"))
+    # 🗣️ character-voice style: tighter — songs, dances, long silent stretches go (about 80-90% stays)
+    spans = speech_spans(utter, pad=1.2, join=5.0) if char else speech_spans(utter, pad=1.5, join=8.0)
     kept = sum(b - a for a, b in spans)
     total = job["total"]
-    if not spans or kept < total * 0.6 or kept > total * 0.97:
+    if not spans or kept < total * (0.5 if char else 0.6) or kept > total * 0.97:
         jlog(job, "keeping the whole film (little to leave out)")
         return src, utter
     job.update(stage="recap", pct=55)
@@ -1341,6 +1343,14 @@ def _condense(job, src, utter):
             if a <= u["start"] < b:
                 moved.append({**u, "start": t0 + u["start"] - a, "end": t0 + min(u["end"], b) - a})
                 break
+    if job.get("comments"):              # 🎙️ silent-scene remarks follow their scene (or go with it)
+        cm = []
+        for c in job["comments"]:
+            for a, b, t0 in starts:
+                if a <= c["start"] and c["end"] <= b + 0.5:
+                    cm.append({**c, "start": t0 + c["start"] - a, "end": t0 + min(c["end"], b) - a})
+                    break
+        job["comments"] = cm
     job["total"] = new_total
     return out, moved
 
@@ -1362,7 +1372,7 @@ def _voice_and_mux(job):
         else:
             jlog(job, "demucs not installed — background music skipped "
                       "(pip install demucs)")
-    if job.get("condense"):              # 📺 YouTube full: leave out long music-only stretches
+    if job.get("condense") or job.get("char_voice"):   # leave out long music-only stretches (dances, songs, intros)
         src, utter = _condense(job, src, utter)
     if not job.get("recap") and not job.get("orig_audio"):
         job.update(stage="voice", pct=60)
