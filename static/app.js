@@ -640,7 +640,7 @@ function setSplit(v) {
   if (typeof partsNote === 'function' && $('#recapchk')) try { partsNote(); } catch (e) { /* not ready yet */ }
 }
 document.querySelectorAll('#splitgrid .opt').forEach((b) => b.addEventListener('click', () => setSplit(b.dataset.split)));
-setSplit('3');                         // ✂️ recap is the default mode: 3-minute TikTok parts
+setSplit('5');                         // ✂️ default: 5-minute TikTok parts (the ~80% recap made 3-min parts too many)
 
 $('#tgpickbtn').addEventListener('click', loadTgVideos);
 
@@ -707,8 +707,8 @@ function syncRecap() {
   $('#covertitle_in').hidden = !$('#titlechk').checked; $('#eprow').hidden = !$('#titlechk').checked;
   // 📺 YouTube 16:9: on by default in both modes (can still be unticked by hand)
   $('#ytchk').checked = true;
-  // ✂️ a recap goes to TikTok in 3-minute parts (can still be changed by hand)
-  if ($('#recapchk').checked) setSplit('3');
+  // ✂️ a recap goes to TikTok in 5-minute parts (can still be changed by hand)
+  if ($('#recapchk').checked) setSplit('5');
   try { syncYtMode(); partsNote(); } catch (e) { /* not ready */ }
 }));
 document.querySelectorAll('#recapgrid .opt').forEach((b) => b.addEventListener('click', () => {

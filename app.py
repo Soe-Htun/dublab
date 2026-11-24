@@ -940,7 +940,7 @@ def _game_job(job):
             found = [h for h in found if h[2] != "idle"]
             kinds = {t: k for t, _, k in found}
             # a fail is for a meme, not a reason to keep a stretch (its death screen follows)
-            found = [(t, sc) for t, sc, k in found if k not in ("fail", "death")]
+            found = [(t, sc) for t, sc, k in found if k not in ("fail", "death", "ganked", "ambush", "stolen", "end")]
             if idle:
                 jlog(job, f"🎮 {len(idle) * step:.0f}s of dead / shop / base / menu screens found — never in the highlight")
             if found:

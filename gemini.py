@@ -428,21 +428,31 @@ mark the frames worth keeping.
   shows the player's hero killing someone;
 - "teamfight": several heroes of both teams fighting around the player (skills flying, many health bars) — keep it
   even when the player dies in it;
-- "objective": Lord / Turtle fight or steal, a turret / base destroyed, the Victory / Defeat screen;
-- "outplay": a clever escape, a big combo or a close-health survival by the player;
+- "objective": a Lord / Turtle fight, a turret / base destroyed;
+- "steal": the PLAYER's team STEALS the Lord / Turtle from the enemy (the enemy was hitting it, our side takes
+  the last hit) — only a real steal, not a normal take (score 3);
+- "end": ONLY frames showing the big VICTORY / DEFEAT banner itself (score 3) — not the base exploding before
+  it, not the rank screen after it;
+- "outplay": a big combo or a clever play by the player;
+- "escape": enemies go all-in to kill the player, but the player SURVIVES at low health and gets away (score 2);
 - "fail": a funny / embarrassing moment for the player — dies alone, gets trolled, misses everything, a
   failed escape (score 1-2 only; it is for a meme, not for the best moments);
 - "death": the frame where the PLAYER's hero dies (the screen turns grey / the "killed by" panel appears) —
-  mark every death, score 1.
+  mark every death, score 1;
+- "ganked": two or more enemies jump on the player at once (a 2v1 / 3v1 on the player), score 1-2;
+- "ambush": an enemy jumps out of a BUSH and surprises the player, score 1-2;
+- "stolen": the player was fighting an enemy down to low health but a TEAMMATE (or the enemy's escape) took the
+  kill, while the player's own kill count (top of the screen) is still low, score 1.
 For a "kill", add "easy": true when the player wins it easily (still at high health, the enemy hardly fights
 back, one quick combo).
 Do NOT mark: walking, farming jungle minions alone, the shop, waiting to respawn, a grey death screen with no fight.
 "score": 1 = ok, 2 = good, 3 = the best moments (multi-kills like Triple/Maniac/Savage, a Lord steal, a 1v3 win).
 ALSO list in "idle" EVERY frame that must never be in a highlight: the player is DEAD (grey / black-and-white
 screen, a respawn countdown number, the "killed by" panel), the shop or the equipment/emblem menu is open, the
-hero stands or recalls in the base / fountain, a loading, pause, settings or end-of-match stats/MVP screen (the
-Victory / Defeat banner itself is fine), or the map is fully open.
-Answer with JSON only: {{"hits": [{{"frame": n, "kind": "kill"|"teamfight"|"objective"|"outplay"|"fail"|"death", "score": 1|2|3, "easy": true|false}}],
+hero stands or recalls in the base / fountain, a loading, pause or settings screen, the map fully open, and
+EVERYTHING after the Victory / Defeat banner (rank / star / Mythic points screen, protection points, MVP, stats,
+rewards, the lobby, a new match) — the banner itself is fine.
+Answer with JSON only: {{"hits": [{{"frame": n, "kind": "kill"|"teamfight"|"objective"|"steal"|"end"|"outplay"|"escape"|"fail"|"death"|"ganked"|"ambush"|"stolen", "score": 1|2|3, "easy": true|false}}],
 "idle": [n, …]}}"""
 
 

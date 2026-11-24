@@ -3168,10 +3168,20 @@ def game_moments(video, win=0.5):
 # 😂 our own Burmese meme lines for game highlights (no one else's clip: no copyright trouble):
 # situation → [(line, how it is said)]. Each line at most once per highlight, and not at every kill / death.
 MEME_LINES = {
-    "again": [("ငါ့မှာ ဘာအပြစ်ရှိလို့လဲ",                 # killed again and again
-               "crying and sobbing, a whiny broken voice, like about to burst into tears")],
+    "ganked": [("ငါ့မှာ ဘာအပြစ်ရှိလို့လဲ",                # two / three enemies on the player at once
+                "crying and sobbing, a whiny broken voice, like about to burst into tears")],
+    "stolen": [("မင်းတို့ပေးမှ စားရမယ့်ဘဝပါကွာ",           # a teammate took the player's kill
+                "crying and self-pitying, a sad sobbing voice, feeling sorry for himself")],
+    "ambush": [("မိုးကောင်းတုန်း ရွာထားကြဦးပေါ့ကွာ",       # jumped from a bush
+                "angry and threatening, scolding and warning them that revenge is coming")],
     "kill": [("ငါ စိတ်မကောင်းဘူး… ဟားဟားဟား",           # the player kills
-              "mocking and teasing with fake sadness, then bursting into loud mocking laughter")],
+              "mocking and teasing with fake sadness, then bursting into loud mocking laughter"),
+             ("နောက်တစ်ယောက် ဘယ်သူလဲ", "cocky, cool and confident, slightly bored")],
+    "teamfight": [("ဆရာကြီး ဆရာကြီး… Savage ပဲဟေ့", "hyped and excited, shouting like a fan")],
+    "steal": [("ဒါလေး ယူသွားမယ်နော်… ဘိုင့်ဘိုင်", "cheeky and playful, teasing the enemy")],   # only a Lord/Turtle STEAL
+    "escape": [("ငါ့ကိုသတ်ဖို့ ဆယ်နှစ် ကြိုးစားလိုက်ဦး",       # they tried to kill the player, he got away alive
+                "cocky and taunting, laughing at the enemy's failed attempt")],
+    "fail": [("ဟာ… line lag နေလို့ ပေါ့ကွာ", "embarrassed, making excuses with a nervous laugh")],
     "easy": [("လွယ်လိုက်တာကွာ", "sarcastic, smug and bored, mocking how easy it was"),   # an easy kill
              ("ထင်သလောက်လည်း မဟုတ်ပါဘူး", "sarcastic and smug, unimpressed, mocking the enemy")],
 }
@@ -3224,7 +3234,7 @@ def meme_card(src, t, text, out, w, h, enc, voice=None, dur=3.0, style=None):
 
 def game_edit(src, out, music=None, cut=True, slowmo=True, logo=None, logo_size=0.12, game_vol=0.35, log=None,
               moments=None, min_len=62.0, target=None, memes=None, meme_max=5.0, kinds=None, meme_gap=25.0,
-              idle=None, idle_step=2.0, meme_cards=False, meme_voice="my-MM-ThihaNeural"):
+              idle=None, idle_step=2.0, meme_cards=False, meme_voice="my-MM-ThihaNeural", meme_total=5):
     """🎮 Edit a gameplay highlight: keep the action (quiet walking around is cut), the 3
     biggest moments replayed in slow motion with a punch-in zoom, optional background
     music over the game's own (turned-down) sound, the logo. Returns the edited length.
@@ -3246,7 +3256,8 @@ def game_edit(src, out, music=None, cut=True, slowmo=True, logo=None, logo_size=
     # 💀 dead (respawn countdown), shop, base, menus: never in a highlight — each idle frame
     # stands for its `idle_step` s; what is left of a stretch under 2 s goes too
     bad = []
-    for t in sorted(idle or []) if cut else []:
+    ends = sorted(t for t, k in (kinds or {}).items() if k == "end")
+    for t in sorted(set(idle or []) - set(ends)) if cut else []:     # the banner is never "idle"
         x, y = t - idle_step / 2, t + idle_step / 2
         if bad and x <= bad[-1][1] + 0.1:
             bad[-1][1] = y
@@ -3297,6 +3308,17 @@ def game_edit(src, out, music=None, cut=True, slowmo=True, logo=None, logo_size=
                 break
         if bad and log:
             log(f"🎮 {sum(y - x for x, y in bad):.0f}s of dead / shop / base / menu screens left out")
+    # 🏆 the highlight ends on the VICTORY / DEFEAT banner: nothing after it (stats, MVP, lobby…),
+    # and the banner itself is always the last few seconds
+    finale = None
+    if cut and ends:
+        e0 = ends[0]
+        merged = [[a, min(b, e0 - 0.5)] for a, b in merged if a < e0 - 2.5]
+        # to the last banner frame (+1 s: a frame stands for 2 s) — never on to the rank / stats screen
+        # (stops at the first screen after it, but the banner always gets at least 2.5 s)
+        stop = min([total, ends[-1] + 1.0, e0 + 4.0] + [x for x, _ in bad if x > e0])
+        finale = ("n", max(0.0, e0 - 1.0), min(total, max(stop, e0 + 1.5)))
+        peaks = [p_ for p_ in peaks if p_[0] < e0 - 0.5]
     big = sorted(sorted(peaks, key=lambda x: -x[1])[:3]) if slowmo else []
     # clips in order: normal pieces, and the big moments as an extra slow-motion replay right after
     kinds = kinds or {}
@@ -3308,13 +3330,13 @@ def game_edit(src, out, music=None, cut=True, slowmo=True, logo=None, logo_size=
 
     def meme(t):
         """A meme clip for the moment at t (its situation's folder first, then any), or None."""
-        if t - last_meme[0] < meme_gap:
+        if t - last_meme[0] < meme_gap or sum(1 for c in clips if c[0] in "mc") >= meme_total:
             return None
-        kind = situation.get(t) or kinds.get(t) or ("kill" if t in dict(big) else "any")
+        kind = kinds.get(t) or ("kill" if t in dict(big) else "any")
         if meme_cards and not pool.get(kind) and not pool.get("any"):
             ln = lines.get(kind)
             # not at every kill: about half of them (the first one always, so a highlight has one)
-            if ln and (kind == "again" or not any(c[0] == "c" for c in clips) or _rnd.random() < 0.5):
+            if ln and (kind in SPECIAL or not any(c[0] == "c" for c in clips) or _rnd.random() < 0.5):
                 last_meme[0] = t
                 text, style = ln.pop(0)
                 return ("c", t, (text, style))
@@ -3331,11 +3353,11 @@ def game_edit(src, out, music=None, cut=True, slowmo=True, logo=None, logo_size=
                     return ("m", mp, ml)
         return None
 
-    # killed again within 2 minutes of the last death: the crying line
-    deaths = sorted(t for t, k in kinds.items() if k in ("death", "fail"))
-    situation = {t: "again" for p_, t in zip(deaths, deaths[1:]) if t - p_ <= 120}
-    # meme spots inside the action: repeat deaths, and kills (the 3 replayed ones get theirs after the replay)
-    fails = (sorted(set(situation) | {t for t, k in kinds.items() if k in ("kill", "easy") and t not in dict(big)})
+    # meme spots inside the action: ganked / ambushed / kill stolen (always), and kills (about half;
+    # the 3 replayed ones get theirs after the replay)
+    SPECIAL = ("ganked", "ambush", "stolen")
+    fails = (sorted(t for t, k in kinds.items()
+                    if k in SPECIAL or (k in ("kill", "easy", "steal", "escape", "fail") and t not in dict(big)))
              if meme_cards else sorted(t for t, k in kinds.items() if k == "fail"))
     clips = []
     for a, b in merged:
@@ -3360,6 +3382,8 @@ def game_edit(src, out, music=None, cut=True, slowmo=True, logo=None, logo_size=
                 m = meme(t) if (pool or meme_cards) else None
                 if m:
                     clips.append(m)
+    if finale:
+        clips.append(finale)
     if log:
         kept = sum(c[2] - c[1] for c in clips if c[0] == "n")
         nm = sum(1 for c in clips if c[0] in "mc")
