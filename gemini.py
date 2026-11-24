@@ -310,7 +310,15 @@ CHANNEL_RULE = """
 - CHANNEL NAME: this dub is published on the channel "{channel}". Whenever a line names the original creator's channel or brand (e.g. "subscribe to Filmyvia Recaps", "welcome back to X", "follow X for more"), write "{channel}" instead of that name, keeping it in Latin letters exactly as given. Never mention any other channel's name."""
 
 
-def translate_lines(lines, direction, api_key, src_lang_name=None, channel=None, prog=None, title=""):
+SHORT_RULE = """
+- STYLE (most important): this is NOT a literal dub. Speak each line AS THE CHARACTER, in first person, natural
+  casual spoken Burmese ("ငါ မင်းကို ချစ်တယ်" / "ငါ မင်းကို မချစ်နိုင်ဘူး"), but SHORT — keep only the gist, about
+  half to two-thirds the length of a word-for-word translation. Paraphrase freely, drop filler, repeats and small
+  talk (such a line may be just "အင်း" or a few words). Never narrate ("he says…"), never add speaker names.
+  Every line must still make sense with the lines before and after it."""
+
+
+def translate_lines(lines, direction, api_key, src_lang_name=None, channel=None, prog=None, title="", short=False):
     """lines: [str] -> [translated str], same order.
 
     direction "any2mm" translates from src_lang_name (e.g. "Japanese").
@@ -322,6 +330,9 @@ def translate_lines(lines, direction, api_key, src_lang_name=None, channel=None,
     if channel:
         head, sep, tail = prompt.partition("\n- Output format:")
         prompt = head + CHANNEL_RULE.format(channel=channel) + sep + tail
+    if short:
+        head, sep, tail = prompt.partition("\n- Output format:")
+        prompt = head + SHORT_RULE + sep + tail
     if direction != "mm2en":
         try:                                # 👤 one fixed list of character names for every chunk
             cast = write_cast(list(enumerate(lines)), api_key, src_lang_name, title=title)
@@ -386,14 +397,18 @@ Answer with JSON only: {{"remarks": ["<remark for pause 1>", "<remark for pause 
 {pauses}"""
 
 
-def write_comments(pauses, api_key):
+def write_comments(pauses, api_key, describe=False):
     """🎙️ pauses: [{"before": [lines], "after": [lines], "max": chars}] → one remark per pause
     ("" where nothing good fits)."""
     blocks = []
     for k, p in enumerate(pauses, 1):
         blocks.append(f"Pause {k} (at most {p['max']} characters):\n  before: " + " / ".join(p["before"])
                       + "\n  after: " + " / ".join(p["after"]))
-    raw = _call(COMMENT_PROMPT.replace("{{max}}", "the number given").replace("{{", "{").replace("}}", "}")
+    base = COMMENT_PROMPT
+    if describe:          # 🗣️ character-voice mode: the pause is a scene without talk — say what happens
+        base = base.replace("like a friend\nwatching along: explain what is really going on or why a character acts that way, point out a clue or a\ncultural detail, react, or make people curious about what comes next.",
+                            "like a recap\nnarrator: say briefly what is happening in this silent moment (e.g. \"မီးဖိုချောင်ထဲမှာ အခန်းလျှို့ဝှက် တစ်ခု\nတွေ့သွားတယ်\") or what it means for the story.")
+    raw = _call(base.replace("{{max}}", "the number given").replace("{{", "{").replace("}}", "}")
                 .replace("{pauses}", "\n\n".join(blocks)), api_key, max_tokens=4096)
     m = re.search(r"\{.*\}", raw, re.S)
     data = json.loads(re.sub(r",\s*([}\]])", r"\1", m.group(0))) if m else {}
@@ -1075,7 +1090,9 @@ def check_covers(jpegs, api_key):
 COVER_PROMPT = """The numbered frames below (0 to {last}) come from one movie.
 Never pick a frame with blood, gore or nudity for anything below.
 First work out its THREE MOST IMPORTANT CHARACTERS: the MAIN character (the protagonist, the person who appears
-most and the story is about), the SECOND (e.g. the villain or partner) and the THIRD (e.g. the love interest).
+most and the story is about), the SECOND and the THIRD. SECOND is the other lead: when the main character is a man
+and a woman leads the story with him (the heroine / love interest), she is SECOND (and the other way round) —
+never the main character again; THIRD is the next most important person (e.g. the villain).
 Then answer with JSON only, no other text:
 {{"layout": 2 or 4, "hero": [...], "second": [...], "third": [...], "scenes": [...], "action": [...],
   "tiktok": 1 or 2}}

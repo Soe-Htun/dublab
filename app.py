@@ -1174,14 +1174,14 @@ def _write_comments(job, api_key):
     utter = job.get("utter") or []
     job["comments"] = []
     try:
-        gaps = comment_gaps(utter, job.get("total") or 0)
+        gaps = comment_gaps(utter, job.get("total") or 0, every=60.0 if job.get("char_voice") else 150.0)
         if not gaps:
             jlog(job, "🎙️ no quiet pauses long enough for narrator remarks")
             return
         pauses = [{"before": [u["text"] for u in utter[max(0, i - 2):i + 1]],
                    "after": [u["text"] for u in utter[i + 1:i + 3]],
                    "max": max(12, int((b - a) * TTS_CPS * 0.85))} for a, b, i in gaps]
-        texts = write_comments(pauses, api_key)
+        texts = write_comments(pauses, api_key, describe=bool(job.get("char_voice")))
         job["comments"] = [{"start": round(a, 3), "end": round(b, 3), "text": t}
                            for (a, b, _), t in zip(gaps, texts) if t]
         jlog(job, f"🎙️ {len(job['comments'])} narrator remarks written (one every ~2½ min, in the pauses)")
@@ -1195,7 +1195,8 @@ def _translate(job, utter, direction, lang, api_key):
     try:
         texts = translate_lines([u["text"] for u in utter], direction, api_key,
                                 LANG_NAMES.get(lang, lang), _settings["channel_name"] or None,
-                                prog=lambda f: _sp(job, f), title=job.get("name") or "")
+                                prog=lambda f: _sp(job, f), title=job.get("name") or "",
+                                short=bool(job.get("char_voice")))
     except RateLimited as e:
         raise ValueError("Gemini ဘာသာပြန် quota ဒီနေ့အတွက် ကုန်သွားပြီ — မနက်ဖြန် ပြန်စမ်းပါ"
                          if e.daily else
@@ -1440,7 +1441,7 @@ def _voice_and_mux(job):
     else:
         lines = utter
         if not job.get("recap"):
-            if job.get("voice_auto") and not any(u.get("voice") for u in utter):
+            if job.get("voice_auto") and not job.get("char_voice") and not any(u.get("voice") for u in utter):
                 try:                              # 👥 a woman's line in the female voice, a man's in the male
                     wav = d / "audio.wav"
                     if not wav.exists():
@@ -1455,7 +1456,8 @@ def _voice_and_mux(job):
                 except Exception as e:  # noqa: BLE001 - one voice then
                     jlog(job, f"per-speaker voices skipped: {str(e)[:120]}")
             if job.get("comments"):               # 🎙️ narrator remarks in the pauses, a third voice
-                lines = sorted(utter + [{**c, "voice": NARRATOR_VOICE, "comment": True} for c in job["comments"]],
+                nv = voice_name if job.get("char_voice") else NARRATOR_VOICE   # 🗣️ one voice for everything
+                lines = sorted(utter + [{**c, "voice": nv, "comment": True} for c in job["comments"]],
                                key=lambda u: u["start"])
                 jlog(job, f"🎙️ {len(job['comments'])} narrator remarks added")
         dub_wav, cues, lead = build_dub_track(lines, voice_name, d, job["total"], tts_prog,
@@ -1809,6 +1811,7 @@ def create_job():
     outro = request.form.get("outro", "1") == "1"
     intro = request.form.get("intro", "0") == "1"      # off unless ticked
     commentary = request.form.get("commentary", "1") == "1"   # 🎙️ narrator remarks (no-recap videos)
+    char_voice = request.form.get("fullstyle") == "char"       # 🗣️ characters' lines, short, one AI voice
     cover_src = "frames"       # 🖼️ covers always from the video: the main character (+ one more photo)
     hook = request.form.get("hook", "0") == "1"        # ⚡ a teaser scene from inside the video first (off unless ticked)
     youtube = request.form.get("youtube", "0") == "1"  # TikTok 9:16 always; this adds the 16:9 YouTube one
@@ -1911,7 +1914,8 @@ def create_job():
     jobs[jid] = {"status": "queued", "stage": "queue", "pct": 0, "error": "",
                  "dir": d, "ext": ext, "direction": direction, "url": url,
                  "voice": voice, "review": review, "keep_bg": keep_bg, "phase": 1,
-                 "model": model, "outro": outro, "intro": intro, "hook": hook or bool(recap), "cover_src": cover_src, "commentary": commentary and not recap, "cover": cover, "logo": logo, "name": name,
+                 "model": model, "outro": outro, "intro": intro, "hook": hook or bool(recap) or char_voice, "cover_src": cover_src, "commentary": char_voice and not recap and not orig_audio,
+                 "char_voice": char_voice and not recap and not orig_audio, "cover": cover, "logo": logo, "name": name,
                  "recap": recap,
                  "tg_src": tg_msg,
                  "id": jid, "telegram": send_tg, "owner": _admin_ok(),

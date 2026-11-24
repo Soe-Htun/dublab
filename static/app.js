@@ -76,7 +76,8 @@ $('#go').addEventListener('click', () => {
   fd.append('outro', $('#outrochk') && $('#outrochk').checked ? '1' : '0');
   fd.append('intro', $('#introchk').checked ? '1' : '0');
   fd.append('hook', $('#hookchk') && $('#hookchk').checked ? '1' : '0');
-  fd.append('commentary', $('#commentchk') && $('#commentchk').checked ? '1' : '0');
+  fd.append('commentary', '1');       // 🎙️ silent scenes explained: part of the character-voice style
+  fd.append('fullstyle', $('#fullchk').checked && $('#charchk') && $('#charchk').checked ? 'char' : '');
   fd.append('youtube', $('#ytchk').checked ? '1' : '0');
   fd.append('ytmode', 'recap');       // 📺 YouTube = the recap as one video (the 83% long version was dropped)
   fd.append('show_title', $('#titlechk').checked ? '1' : '0');
@@ -685,6 +686,7 @@ function syncOrig() {
   $('#voicehead').hidden = on;
 }
 $('#origchk').addEventListener('change', syncOrig);
+$('#charchk').addEventListener('change', syncOrig);
 
 function syncRecap() {
   const on = $('#recapchk').checked;

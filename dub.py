@@ -2869,10 +2869,13 @@ def make_covers(video, title, out_dir, start, end, portrait=False, logo=None, bl
                 # the 2nd photo: another character with a clear face, else the main action —
                 # only a decent one (a poor 2nd photo is worse than one big photo)
                 # it must show a face (Apple Vision) of a fair size — not a back, a hand or a crowd
-                faced = lambda t: bool(boxes.get(t)) and (boxes[t][3] - boxes[t][1]) >= 0.12
-                second = [t for t in clean(others) + clean(action) + clean(hero[1:])
-                          if t not in pick and not ugly(t) and faced(t)]
-                second = sorted(second[:8], key=lambda t: (good(t) > 0, -sc.get(t, 0.0)))[:1]
+                # — and a DIFFERENT person: the other lead (e.g. the heroine) first, never the main
+                # character a second time (two photos of the hero looked like a mistake)
+                faced = lambda t: bool(boxes.get(t)) and (boxes[t][3] - boxes[t][1]) >= 0.08
+                cands = [t for t in clean(others) if t not in hero and t not in pick and not ugly(t) and faced(t)]
+                second = cands[:1]                       # others[0…] = the 2nd character's best shots
+                if not second:
+                    second = [t for t in clean(action) if t not in hero and t not in pick and not ugly(t) and faced(t)][:1]
                 pick += second
                 layout = len(pick)
             elif portrait:        # TikTok: the main character's face on top, the movie's main action below
