@@ -312,9 +312,8 @@ CHANNEL_RULE = """
 
 SHORT_RULE = """
 - STYLE (most important): this is NOT a stiff literal dub. Speak each line AS THE CHARACTER, in first person, natural
-  casual spoken Burmese ("ငါ မင်းကို ချစ်တယ်" / "ငါ မင်းကို မချစ်နိုင်ဘူး"), SHORTER and simpler than the original
-  (about two-thirds of a word-for-word translation) so viewers follow easily — keep the meaning that matters for
-  the story, drop filler and repeats. But NEVER drop a line and never leave one empty: even a short "嗯" / "Yes"
+  casual spoken Burmese ("ငါ မင်းကို ချစ်တယ်" / "ငါ မင်းကို မချစ်နိုင်ဘူး"), simple and clear so viewers
+  follow easily — keep the meaning that matters for the story, drop filler and repeats (its LENGTH: see TIME). But NEVER drop a line and never leave one empty: even a short "嗯" / "Yes"
   becomes "အင်း" / "ဟုတ်ကဲ့". Never narrate ("he says…"), never add speaker names.
   Every line must still make sense with the lines before and after it."""
 
@@ -333,16 +332,27 @@ Never copy the [F] / [M] tags into your answer."""
 def _fit_gender(text, tag):
     """The model still slips sometimes ("…ခင်ဗျာ" in a girl's line): fix the
     speaker's own pronoun and the polite ending to match the voice."""
-    if tag.startswith("[F]"):
+    if "[F]" in tag:
         text = text.replace("ကျွန်တော်", "ကျွန်မ")
         text = re.sub(r"\s*(?:ခင်ဗျာ|ခင်ဗျ|ဗျာ|ဗျ)(?=[\s။!?.…]*$)", "ရှင်", text)
-    elif tag.startswith("[M]"):
+    elif "[M]" in tag:
         text = text.replace("ကျွန်မ", "ကျွန်တော်")      # (a final "ရှင်" can be a word: "အသက်ရှင်")
     return text
 
 
+TIME_RULE = """
+
+LENGTH (most important): each line starts with a tag like [4.2s ~72] = the character talks for 4.2 s on
+screen, and your Burmese line must be about 72 Burmese characters long (count them; between 80% and 100% of the
+number). The voice reads it in that time: a much shorter line leaves the actor talking in silence (viewers leave),
+a longer one gets rushed. When the original is short but the time is long, say it more fully and naturally —
+add the feeling, who/what it is about, or a natural follow-up the character would say (never invent new story
+facts). Every line must be ONE complete thought that makes sense on its own — never leave a sentence half-said to
+finish in the next line. Never copy the tag into your answer."""
+
+
 def translate_lines(lines, direction, api_key, src_lang_name=None, channel=None, prog=None, title="", short=False,
-                    genders=None):
+                    genders=None, durs=None):
     """lines: [str] -> [translated str], same order.
 
     direction "any2mm" translates from src_lang_name (e.g. "Japanese").
@@ -375,6 +385,10 @@ def translate_lines(lines, direction, api_key, src_lang_name=None, channel=None,
     if genders and direction != "mm2en" and any(genders):
         prompt += GENDER_RULE
         tags = [{"male": "[M] ", "female": "[F] "}.get(g or "", "") for g in genders]
+    if durs and len(durs) == len(lines):      # ⏱️ each line as long as the character speaks it
+        prompt += TIME_RULE.format(cps=TTS_CPS)
+        tags = [f"[{max(0.5, d):.1f}s ~{int(max(0.5, d) * TTS_CPS * 0.9)}] " + (tags[i] if tags else "")
+                for i, d in enumerate(durs)]
     def _chunk(start):
         chunk = lines[start:start + CHUNK]
         numbered = "\n".join(f"{i + 1}|||{tags[start + i] if tags else ''}{t}" for i, t in enumerate(chunk))
@@ -383,7 +397,7 @@ def translate_lines(lines, direction, api_key, src_lang_name=None, channel=None,
         for line in raw.strip().split("\n"):
             m = re.match(r"(\d+)\|\|\|(.+)", line.strip())
             if m:
-                results[int(m.group(1))] = re.sub(r"^\s*\[[MF]\]\s*", "", m.group(2)).strip()
+                results[int(m.group(1))] = re.sub(r"^\s*(\[[\d.]+s[^\]]*\]\s*)?(\[[MF]\]\s*)?", "", m.group(2)).strip()
         out = [results.get(i, orig) for i, orig in enumerate(chunk, 1)]
         if tags:
             out = [_fit_gender(t, tags[start + k]) for k, t in enumerate(out)]

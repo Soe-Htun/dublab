@@ -15,14 +15,14 @@ from flask import Flask, jsonify, redirect, render_template, request, send_file
 
 import telegram
 
-from dub import (WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segments, configure_tts, frame_layout, render_frames,
+from dub import (tight_spans, WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segments, configure_tts, frame_layout, render_frames,
                  frame_caption_y,
                  footage, speech_spans, char_spans, keep_most, trim_copy, picture_area,
                  add_outro_tail, caption_y, normalize_logo, render_captions, sample_frames, video_size, write_srt,
                  default_whisper_model, demucs_available, detect_gender,
                  download_url, extract_audio,
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
-                 build_recap_video, make_covers, mux, run, separate_vocals, beat_footage, trim_silence, frames_every, cut_ranges, mosaic_video, edit_video, fiction_notice, synthesize, speech_regions, fit_cues_to_speech, probe_duration, probe_url, separate_music, split_points, YouTubeBlocked, line_genders, mix_comments, NARRATOR_VOICE,
+                 build_recap_video, make_covers, mux, run, separate_vocals, beat_footage, trim_silence, frames_every, cut_ranges, mosaic_video, edit_video, fiction_notice, synthesize, speech_regions, snap_to_speech, fit_cues_to_speech, probe_duration, probe_url, separate_music, split_points, YouTubeBlocked, line_genders, mix_comments, NARRATOR_VOICE,
                  split_video, transcribe)
 from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, find_movie_bounds, pick_cover_frames, pick_hook, thumb_is_good, translate_lines,
                     write_cover_scene, write_intro, write_recap, write_title, movie_name,
@@ -1160,7 +1160,7 @@ def _transcribe_and_translate(jid, job):
     else:
         jlog(job, f"speech model: {job.get('model') or default_whisper_model()}")
         segs, lang = transcribe(wav, SRC_LANG[direction], stt_prog, job.get("model"), title=job.get("name") or "",
-                                words=bool(job.get("orig_audio")))   # 🔊 captions: exact word times
+                                words=bool(job.get("orig_audio") or job.get("char_voice")))   # exact word times
         job["segs"], job["seg_lang"] = segs, lang
     if lang == "my" and (job.get("seg_engine") != "gemini" or not segs):
         # whisper writes Burmese speech as junk ("වවවව…"): let Gemini listen instead
@@ -1207,7 +1207,16 @@ def _transcribe_and_translate(jid, job):
     if job.get("orig_audio"):
         utter = merge_segments(segs, max_gap=0.3, max_len=5.0)
     elif job.get("char_voice"):          # 🗣️ line by line: each voice line sits on its own speech
-        utter = merge_segments(segs, max_gap=0.4, max_len=6.0)
+        # whole sentences (a line cut in two was rushed, stopped dead, then went on): longer pieces
+        # (word-timed pieces: joined over a short breath into one sentence, but at most ~7 s so
+        # a line the voice says faster never leaves more than ~3 s of the actor talking alone)
+        utter = merge_segments(segs, max_gap=1.2, max_len=7.0)
+        try:                             # 🎯 onto the real talking: in sync, and the true speaking time
+            sw = JOBS / job["id"] / "audio.wav"
+            utter, moved = snap_to_speech(utter, speech_regions(sw if sw.exists() else wav))
+            jlog(job, f"🎯 {moved} of {len(utter)} lines moved onto the actors' real speech")
+        except Exception as e:  # noqa: BLE001 - Whisper's times then
+            jlog(job, f"speech timing skipped: {str(e)[:100]}")
     else:
         utter = merge_segments(segs)
     jlog(job, f"transcribed {len(segs)} segments → {len(utter)} utterances")
@@ -1388,7 +1397,8 @@ def _translate(job, utter, direction, lang, api_key):
         texts = translate_lines([u["text"] for u in utter], direction, api_key,
                                 LANG_NAMES.get(lang, lang), _settings["channel_name"] or None,
                                 prog=lambda f: _sp(job, f), title=job.get("name") or "",
-                                short=bool(job.get("char_voice")), genders=genders)
+                                short=bool(job.get("char_voice")), genders=genders,
+                                durs=[u["end"] - u["start"] for u in utter] if job.get("char_voice") else None)
     except RateLimited as e:
         raise ValueError("Gemini ဘာသာပြန် quota ဒီနေ့အတွက် ကုန်သွားပြီ — မနက်ဖြန် ပြန်စမ်းပါ"
                          if e.daily else
@@ -1523,14 +1533,14 @@ def _condense(job, src, utter):
         except Exception as e:  # noqa: BLE001 - the transcript alone then
             jlog(job, f"speech check skipped: {str(e)[:100]}")
         spans = keep_most(talk, job["total"], keep=0.85)
-    elif char:   # 🎬 recap: the longest stretches without talk go until ~80% is left — fights and action
-        # mostly stay (King Kong, war films…), the narrator talks through them every ~10 s
-        spans = keep_most([u for u in utter if (u.get("text") or "").strip()], job["total"], keep=0.80)
+    elif char:   # 🎬 recap: talk is what matters — stretches without talk go (from 6 s up, longest first)
+        # until ~70% is left; a short pause keeps 3 s, a long fight a quarter with the narrator on it
+        spans = tight_spans([u for u in utter if (u.get("text") or "").strip()], job["total"])
     else:
         spans = speech_spans(utter, pad=1.5, join=8.0)
     kept = sum(b - a for a, b in spans)
     total = job["total"]
-    if not spans or kept < total * (0.25 if char else 0.6) or kept > total * 0.97:
+    if not spans or kept < total * (0.15 if char else 0.6) or kept > total * 0.97:
         jlog(job, "keeping the whole film (little to leave out)")
         return src, utter
     job.update(stage="recap", pct=55)

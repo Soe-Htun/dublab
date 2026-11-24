@@ -211,7 +211,7 @@ def _mlx_model_ready(repo, timeout=240):
         raise TimeoutError(f"{repo} download took over {timeout}s")
 
 
-def _transcribe_mlx(wav, lang_hint, progress, name):
+def _transcribe_mlx(wav, lang_hint, progress, name, words=False):
     """Whisper on the Apple GPU (mlx-whisper): the CPU engine below can't use it.
     The audio goes in 10-minute pieces so progress can be shown."""
     import tempfile
@@ -227,10 +227,25 @@ def _transcribe_mlx(wav, lang_hint, progress, name):
                  "-i", str(wav), "-ac", "1", "-ar", "16000", str(piece)])
             r = mlx_whisper.transcribe(str(piece), path_or_hf_repo=repo, language=lang,
                                        condition_on_previous_text=False,   # no runaway repeats
-                                       no_speech_threshold=0.6, verbose=None)
+                                       no_speech_threshold=0.6, verbose=None, word_timestamps=words)
             lang = lang or r.get("language")
             for sg in r.get("segments", []):
                 text = (sg.get("text") or "").strip()
+                ws = [w for w in (sg.get("words") or []) if (w.get("word") or "").strip()] if words else []
+                if text and ws and sg.get("no_speech_prob", 0) < 0.8:
+                    # exact word times: one line per stretch of talking (a segment's own times run
+                    # into the silence around it — "陛下息怒" given 10 s)
+                    run_ = []
+                    for w in ws + [None]:
+                        if run_ and (w is None or float(w["start"]) - float(run_[-1]["end"]) > 0.7):
+                            tx = _collapse_repeats("".join(x["word"] for x in run_).strip())
+                            if tx:
+                                segs.append({"start": t0 + float(run_[0]["start"]), "end": t0 + float(run_[-1]["end"]),
+                                             "text": tx})
+                            run_ = []
+                        if w is not None:
+                            run_.append(w)
+                    continue
                 if text and sg.get("no_speech_prob", 0) < 0.8:
                     segs.append({"start": t0 + float(sg["start"]), "end": t0 + float(sg["end"]),
                                  "text": text})
@@ -311,7 +326,7 @@ def _transcribe(wav, lang_hint, progress, name, title="", words=False):
             print(f"[whisper] language vote failed: {e}")
     if _use_mlx():
         try:
-            out = _transcribe_mlx(wav, lang_hint, progress, name)
+            out = _transcribe_mlx(wav, lang_hint, progress, name, words)
             print(f"[whisper] {name} on Apple GPU (mlx)")
             return out
         except Exception as e:  # noqa: BLE001 - fall back to the CPU engine
@@ -705,6 +720,10 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=N
         ratio = tts_dur / slot
         # lines are already at SPEAK_SPEED: cap the extra so the total stays ≤ MAX_ATEMPO
         atempo = 1.0 if ratio <= 1.0 else min(ratio, max(1.0, MAX_ATEMPO / SPEAK_SPEED))
+        if ratio < 1.0 and SPEAK_SPEED > 1.0:
+            # plenty of room: back towards the voice's own pace (not sped up) — fills more of the
+            # actor's talking, fewer silent mouths
+            atempo = max(ratio, 1.0 / SPEAK_SPEED)
         fitted = tts_dur / atempo
         start = max(u["start"] + lead, cursor)
         plan.append((_path(i), atempo, start))
@@ -731,7 +750,7 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=N
     def _fit(item):
         path, atempo, start = item
         cmd = ["ffmpeg", "-v", "error", "-i", str(path)]
-        if atempo > 1.001:
+        if abs(atempo - 1.0) > 0.001:
             cmd += ["-af", f"atempo={atempo:.3f}"]
         cmd += ["-ac", "1", "-ar", str(SR), "-f", "f32le", "-"]
         p = subprocess.run(cmd, capture_output=True)
@@ -775,6 +794,28 @@ def speech_regions(wav, min_silence=0.25):
     ts = get_speech_timestamps(audio, VadOptions(min_silence_duration_ms=int(min_silence * 1000),
                                                  speech_pad_ms=120))
     return [(t["start"] / sr, t["end"] / sr) for t in ts]
+
+
+def snap_to_speech(utterances, regions, min_dur=0.6):
+    """🎯 Whisper's times run into the silence around a line (two words shown as 7 s): each
+    line is moved onto the talking inside it — the voice starts when the actor really starts
+    (never before the scene), and its length is the real speaking time (so the Burmese line
+    is written to fill it). A line with no talking found keeps its times."""
+    out, moved = [], 0
+    for u in utterances:
+        a, b = u["start"], u["end"]
+        inside = [(max(a - 0.2, s), min(b + 0.2, e)) for s, e in regions if e > a - 0.2 and s < b + 0.2]
+        inside = [(s, e) for s, e in inside if e - s >= 0.15]
+        if inside:
+            s0, e0 = inside[0][0], inside[-1][1]
+            if e0 - s0 >= min_dur and (abs(s0 - a) > 0.15 or abs(e0 - b) > 0.15):
+                u = {**u, "start": round(s0, 3), "end": round(e0, 3)}
+                moved += 1
+        out.append(u)
+    for k in range(len(out) - 1):              # never into the next line
+        if out[k]["end"] > out[k + 1]["start"]:
+            out[k] = {**out[k], "end": max(out[k]["start"] + 0.3, out[k + 1]["start"] - 0.05)}
+    return out, moved
 
 
 def fit_cues_to_speech(cues, regions, min_dur=0.8, max_dur=7.0):
@@ -3012,6 +3053,37 @@ def char_spans(utterances, keep_gap=10.0, tail=7.0, pad=1.0):
         else:
             out.append([a, b])
     return [tuple(x) for x in out]
+
+
+def tight_spans(talk, total, pause=2.5, head=0.4, long=20.0, long_keep=0.25, long_max=20.0):
+    """🎬 Recap cut: talk is what matters. Every stretch without talk keeps only `pause` s
+    after the line before it and `head` s before the next one (no wait over ~3 s); a long
+    one (`long` s+: a fight, a chase) keeps a quarter of itself (at most `long_max` s) for
+    the narrator to talk over. [(start, end)] to keep."""
+    talk = sorted((max(0.0, u["start"]), min(total, u["end"])) for u in talk)
+    merged = []
+    for a, b in talk:
+        if merged and a <= merged[-1][1] + 0.3:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    keep, prev = [], 0.0
+    for a, b in merged + [[total, total]]:
+        gap = a - prev
+        if gap > pause + head + 0.5:
+            hold = pause
+            if gap >= long:
+                hold = max(pause, min(long_max, gap * long_keep))
+            keep.append((prev + hold, a - head))          # this part of the pause goes
+        prev = max(prev, b)
+    spans, t = [], 0.0
+    for c0, c1 in keep:
+        if c0 > t:
+            spans.append((t, c0))
+        t = c1
+    if total > t:
+        spans.append((t, total))
+    return [(a, b) for a, b in spans if b - a > 0.3]
 
 
 def keep_most(talk, total, keep=0.85, min_gap=12.0, tail=6.0, head=1.0):
