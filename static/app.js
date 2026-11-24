@@ -682,6 +682,7 @@ function syncOrig() {
   $('#fullopts').hidden = !full;
   const on = full && $('#origchk').checked;
   $('#nomusicrow').hidden = !on;           // 🎵 only with the original sound
+  if ($('#origwarn')) $('#origwarn').hidden = !on;   // ⚠️ the "unoriginal" warning: subtitles-only style
   $('#voicegrid').hidden = on;
   $('#voicehead').hidden = on;
 }
