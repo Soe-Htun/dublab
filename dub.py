@@ -1305,20 +1305,29 @@ def render_frames(title, windows, out_dir, layout, logo=None, extra=30.0, tag=No
 def _mosaic_parts(censor, w, h, cur, lead=0.0):
     """ffmpeg filter steps that pixelate each (start, end, x0, y0, x1, y1) box of the
     picture (w x h) while it shows. Returns (steps, label of the result)."""
-    parts = []
+    # One pixelated copy of the whole picture shown through a mask of the boxes.
+    # (A split + overlay per box hangs ffmpeg once there are ~20+ boxes.)
+    if not censor:
+        return [], cur
     w, h = w // 2 * 2, h // 2 * 2
-    for k, (a, b, x0, y0, x1, y1) in enumerate(censor):
+    blk = max(8, w // 80)
+    boxes, whens = [], []
+    for a, b, x0, y0, x1, y1 in censor:
         bx, by = int(w * x0) // 2 * 2, int(h * y0) // 2 * 2
         bw = min(max(16, int(w * (x1 - x0)) // 2 * 2), w - bx)
         bh = min(max(16, int(h * (y1 - y0)) // 2 * 2), h - by)
         when = f"between(t,{a + lead:.2f},{b + lead:.2f})"
-        parts.append(f"[{cur}]split[cm{k}][cc{k}];"
-                     f"[cc{k}]crop={bw}:{bh}:{bx}:{by},"          # mosaic, like TV censoring
-                     f"scale='max(2,trunc(iw/24))':'max(2,trunc(ih/24))',"
-                     f"scale={bw}:{bh}:flags=neighbor[cb{k}];"
-                     f"[cm{k}][cb{k}]overlay={bx}:{by}:enable='{when}'[cz{k}]")
-        cur = f"cz{k}"
-    return parts, cur
+        whens.append(when)
+        boxes.append(f"drawbox=x={bx}:y={by}:w={bw}:h={bh}:color=white:t=fill"
+                     f":enable='{when}'")
+    parts = [f"[{cur}]split[cmm][cmp];"
+             f"[cmp]scale={max(2, w // blk)}:{max(2, h // blk)},"   # mosaic, like TV censoring
+             f"scale={w}:{h}:flags=neighbor,split[cpx][cpm];"
+             f"[cpm]format=gray,drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill,"
+             + ",".join(boxes) + "[cmask];"
+             f"[cpx][cmask]alphamerge[cpa];"
+             f"[cmm][cpa]overlay=0:0:enable='{'+'.join(whens)}'[czz]"]
+    return parts, "czz"
 
 
 def cut_ranges(src, out, cuts, progress=None):
