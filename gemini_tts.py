@@ -88,13 +88,13 @@ def _drop(key):
         _invalid.add(key)
 
 
-def _request(text, voice, lang, api_key):
+def _request(text, voice, lang, api_key, style=None):
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}"
            f":generateContent?key={api_key}")
     # Language instruction as a prompt prefix: the model speaks only the
     # Burmese/English line that follows (verified: prefix is not spoken).
     # NOTE: systemInstruction caused HTTP 500s on this preview model (2026-10-11).
-    instruction = ("Speak in Burmese: " if lang == "my" else "Speak in English: ")
+    instruction = ("Speak in Burmese" if lang == "my" else "Speak in English") + (f", {style}" if style else "") + ": "
     body = {
         "contents": [{"parts": [{"text": instruction + text}]}],
         "generationConfig": {
@@ -128,7 +128,7 @@ def _earliest_cooldown():
         return min(_cooling_until.values())
 
 
-def synthesize(text, voice, lang, out_path, max_rounds=3):
+def synthesize(text, voice, lang, out_path, max_rounds=3, style=None):
     """Synthesize one utterance.
 
     text: the line to speak. voice: Gemini prebuilt voice name
@@ -149,7 +149,7 @@ def synthesize(text, voice, lang, out_path, max_rounds=3):
                 break
             tried += 1
             try:
-                pcm = _request(text, voice, lang, key)
+                pcm = _request(text, voice, lang, key, style)
                 buf = io.BytesIO()
                 with wave.open(buf, "wb") as w:
                     w.setnchannels(1)

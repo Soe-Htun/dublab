@@ -429,10 +429,21 @@ mark the frames worth keeping.
 - "teamfight": several heroes of both teams fighting around the player (skills flying, many health bars) — keep it
   even when the player dies in it;
 - "objective": Lord / Turtle fight or steal, a turret / base destroyed, the Victory / Defeat screen;
-- "outplay": a clever escape, a big combo or a close-health survival by the player.
+- "outplay": a clever escape, a big combo or a close-health survival by the player;
+- "fail": a funny / embarrassing moment for the player — dies alone, gets trolled, misses everything, a
+  failed escape (score 1-2 only; it is for a meme, not for the best moments);
+- "death": the frame where the PLAYER's hero dies (the screen turns grey / the "killed by" panel appears) —
+  mark every death, score 1.
+For a "kill", add "easy": true when the player wins it easily (still at high health, the enemy hardly fights
+back, one quick combo).
 Do NOT mark: walking, farming jungle minions alone, the shop, waiting to respawn, a grey death screen with no fight.
 "score": 1 = ok, 2 = good, 3 = the best moments (multi-kills like Triple/Maniac/Savage, a Lord steal, a 1v3 win).
-Answer with JSON only: {{"hits": [{{"frame": n, "kind": "kill"|"teamfight"|"objective"|"outplay", "score": 1|2|3}}]}}"""
+ALSO list in "idle" EVERY frame that must never be in a highlight: the player is DEAD (grey / black-and-white
+screen, a respawn countdown number, the "killed by" panel), the shop or the equipment/emblem menu is open, the
+hero stands or recalls in the base / fountain, a loading, pause, settings or end-of-match stats/MVP screen (the
+Victory / Defeat banner itself is fine), or the map is fully open.
+Answer with JSON only: {{"hits": [{{"frame": n, "kind": "kill"|"teamfight"|"objective"|"outplay"|"fail"|"death", "score": 1|2|3, "easy": true|false}}],
+"idle": [n, …]}}"""
 
 
 def game_highlights(frames, step, api_key, hero=""):
@@ -449,7 +460,17 @@ def game_highlights(frames, step, api_key, hero=""):
         except (TypeError, ValueError):
             continue
         if 0 <= n < len(frames):
-            out.append((n, str(h.get("kind") or "teamfight"), max(1, min(3, sc))))
+            kind = str(h.get("kind") or "teamfight")
+            if kind == "kill" and h.get("easy") is True:
+                kind = "easy"                   # an easy kill (a sarcastic meme fits it)
+            out.append((n, kind, max(1, min(3, sc))))
+    for n in data.get("idle") or []:          # dead / shop / base / menus: kind "idle", cut out later
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= n < len(frames):
+            out.append((n, "idle", 0))
     return out
 
 

@@ -93,6 +93,7 @@ $('#go').addEventListener('click', () => {
   fd.append('game_cut', $('#gamecutchk') && $('#gamecutchk').checked ? '1' : '0');
   fd.append('game_slow', $('#gameslowchk') && $('#gameslowchk').checked ? '1' : '0');
   fd.append('game_music', $('#gamemusicchk') && $('#gamemusicchk').checked ? '1' : '0');
+  fd.append('game_meme', $('#gamememechk') && $('#gamememechk').checked ? '1' : '0');
   fd.append('game_hero', ($('#gamehero_in') && $('#gamehero_in').value || '').trim());
   try { localStorage.setItem('dublab_split', split); } catch (e) {}
   fd.append('logo', $('#logochk') && $('#logochk').checked ? '1' : '0');

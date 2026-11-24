@@ -3165,17 +3165,107 @@ def game_moments(video, win=0.5):
     return kept
 
 
+# 😂 our own Burmese meme lines for game highlights (no one else's clip: no copyright trouble):
+# situation → [(line, how it is said)]. Each line at most once per highlight, and not at every kill / death.
+MEME_LINES = {
+    "again": [("ငါ့မှာ ဘာအပြစ်ရှိလို့လဲ",                 # killed again and again
+               "crying and sobbing, a whiny broken voice, like about to burst into tears")],
+    "kill": [("ငါ စိတ်မကောင်းဘူး… ဟားဟားဟား",           # the player kills
+              "mocking and teasing with fake sadness, then bursting into loud mocking laughter")],
+    "easy": [("လွယ်လိုက်တာကွာ", "sarcastic, smug and bored, mocking how easy it was"),   # an easy kill
+             ("ထင်သလောက်လည်း မဟုတ်ပါဘူး", "sarcastic and smug, unimpressed, mocking the enemy")],
+}
+MEME_VOICE_GEMINI = "Puck"     # Gemini TTS can act the tone; Edge (no tone) is the fallback
+
+
+def meme_card(src, t, text, out, w, h, enc, voice=None, dur=3.0, style=None):
+    """😂 A 3-second meme beat: the moment frozen, shaking and punching in, with a big
+    gold Burmese line on it — read out by the TTS voice when one is given."""
+    from PIL import Image, ImageEnhance
+    out = Path(out)
+    png = out.with_suffix(".png")
+    run(["ffmpeg", "-y", "-v", "error", "-ss", f"{max(0.0, t):.2f}", "-i", str(src), "-frames:v", "1",
+         "-vf", f"scale={w}:{h}", str(png)])
+    img = ImageEnhance.Brightness(Image.open(png).convert("RGB")).enhance(0.8)
+    _gold_title(img, text, int(w * 0.86), w // 2, int(h * 0.5), 2, int(min(w, h) * 0.13))
+    img.save(png)
+    mp3 = out.with_suffix(".mp3")
+    has_v = False
+    if style:          # 🎭 crying / mocking laugh / sarcastic: Gemini TTS acts it out
+        try:
+            wav = out.with_suffix(".wav")
+            _gemini_tts(text, MEME_VOICE_GEMINI, "my", wav, style=style)
+            run(["ffmpeg", "-y", "-v", "error", "-i", str(wav), "-b:a", "160k", str(mp3)])
+            wav.unlink(missing_ok=True)
+            has_v = mp3.exists() and mp3.stat().st_size > 500
+            if has_v:      # a long acted line (the laugh) gets the time it needs, up to 5 s
+                dur = max(dur, min(5.0, probe_duration(mp3) + 0.4))
+        except Exception:  # noqa: BLE001 - the plain voice then
+            has_v = False
+    if voice and not has_v:
+        try:
+            synthesize(text, voice, mp3)
+            has_v = mp3.exists() and mp3.stat().st_size > 500
+        except Exception:  # noqa: BLE001 - a silent card then
+            has_v = False
+    ain = (["-i", str(mp3)] if has_v else ["-f", "lavfi", "-t", f"{dur:.2f}", "-i", "anullsrc=r=44100:cl=stereo"])
+    zw, zh = int(w * 1.12) // 2 * 2, int(h * 1.12) // 2 * 2
+    # a hard shake for the first 0.6 s, then a slow push in
+    vf = (f"scale={zw}:{zh},crop={w}:{h}:x='(iw-ow)/2+{max(4, w // 90)}*sin(t*45)*lt(t,0.6)':"
+          f"y='(ih-oh)/2+{max(4, h // 90)}*cos(t*39)*lt(t,0.6)',fps=30,format=yuv420p,setsar=1")
+    run(["ffmpeg", "-y", "-v", "error", "-loop", "1", "-framerate", "30", "-t", f"{dur:.2f}", "-i", str(png), *ain,
+         "-map", "0:v:0", "-map", "1:a:0", "-vf", vf,
+         "-af", "adelay=150:all=1,apad,aresample=44100,aformat=channel_layouts=stereo", *enc,
+         "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2", "-video_track_timescale", "90000",
+         "-t", f"{dur:.2f}", str(out)])
+    png.unlink(missing_ok=True)
+    mp3.unlink(missing_ok=True)
+
+
 def game_edit(src, out, music=None, cut=True, slowmo=True, logo=None, logo_size=0.12, game_vol=0.35, log=None,
-              moments=None, min_len=62.0, target=None):
+              moments=None, min_len=62.0, target=None, memes=None, meme_max=5.0, kinds=None, meme_gap=25.0,
+              idle=None, idle_step=2.0, meme_cards=False, meme_voice="my-MM-ThihaNeural"):
     """🎮 Edit a gameplay highlight: keep the action (quiet walking around is cut), the 3
     biggest moments replayed in slow motion with a punch-in zoom, optional background
-    music over the game's own (turned-down) sound, the logo. Returns the edited length."""
+    music over the game's own (turned-down) sound, the logo. Returns the edited length.
+    memes: the owner's short meme clips, {situation: [paths]} ("kill", "fail", … and "any")
+    or a plain list — one (its first `meme_max` s, with its own sound; the music dips under
+    it) after each slow-motion replay and right after a funny fail, picked for that moment
+    (kinds: {time: situation} from the AI), no clip twice, at most one per `meme_gap` s.
+    idle: times of frames (one every `idle_step` s) the AI saw the player dead / in the shop /
+    in base / in a menu — cut out of every kept stretch, even inside a fight's margin.
+    meme_cards: when no clip fits, our own 3-s Burmese meme card (frozen moment, shake,
+    a gold line from MEME_LINES for the situation, read out by `meme_voice`)."""
     import shutil as _sh
     src, out = Path(src), Path(out)
     total = probe_duration(src)
     # moments: [(time, score)] from the AI looking at the screen (kills, team fights…), best first;
     # else the loudest stretches of the game's sound
     peaks = moments if moments else game_moments(src)
+
+    # 💀 dead (respawn countdown), shop, base, menus: never in a highlight — each idle frame
+    # stands for its `idle_step` s; what is left of a stretch under 2 s goes too
+    bad = []
+    for t in sorted(idle or []) if cut else []:
+        x, y = t - idle_step / 2, t + idle_step / 2
+        if bad and x <= bad[-1][1] + 0.1:
+            bad[-1][1] = y
+        else:
+            bad.append([x, y])
+
+    def strip(spans):
+        clean = []
+        for a, b in spans:
+            cur = a
+            for x, y in bad:
+                if y <= cur or x >= b:
+                    continue
+                if x - cur >= 2.0:
+                    clean.append([cur, x])
+                cur = max(cur, y)
+            if b - cur >= 2.0:
+                clean.append([cur, b])
+        return clean
 
     def keep_spans(pad_a, pad_b, pts):
         spans = sorted((max(0.0, t - pad_a), min(total, t + pad_b)) for t, _ in pts)
@@ -3185,7 +3275,7 @@ def game_edit(src, out, music=None, cut=True, slowmo=True, logo=None, logo_size=
                 merged[-1][1] = max(merged[-1][1], b)
             else:
                 merged.append([a, b])
-        return merged
+        return strip(merged)
 
     # the stretches to keep: the build-up before each moment and a little after it — at least
     # `min_len` s in all (TikTok counts 1 min+ videos): wider margins, then more moments, else all
@@ -3205,17 +3295,76 @@ def game_edit(src, out, music=None, cut=True, slowmo=True, logo=None, logo_size=
             if sum(b - a for a, b in m) >= min_len:
                 merged = m
                 break
+        if bad and log:
+            log(f"🎮 {sum(y - x for x, y in bad):.0f}s of dead / shop / base / menu screens left out")
     big = sorted(sorted(peaks, key=lambda x: -x[1])[:3]) if slowmo else []
     # clips in order: normal pieces, and the big moments as an extra slow-motion replay right after
+    kinds = kinds or {}
+    pool = ({"any": list(memes)} if isinstance(memes, (list, tuple)) else
+            {k: list(v) for k, v in (memes or {}).items()})
+    last_meme = [-1e9]
+    import random as _rnd
+    lines = {k: _rnd.sample(v, len(v)) for k, v in MEME_LINES.items()}
+
+    def meme(t):
+        """A meme clip for the moment at t (its situation's folder first, then any), or None."""
+        if t - last_meme[0] < meme_gap:
+            return None
+        kind = situation.get(t) or kinds.get(t) or ("kill" if t in dict(big) else "any")
+        if meme_cards and not pool.get(kind) and not pool.get("any"):
+            ln = lines.get(kind)
+            # not at every kill: about half of them (the first one always, so a highlight has one)
+            if ln and (kind == "again" or not any(c[0] == "c" for c in clips) or _rnd.random() < 0.5):
+                last_meme[0] = t
+                text, style = ln.pop(0)
+                return ("c", t, (text, style))
+            return None
+        for k in (kind, "any", *pool):
+            while pool.get(k):
+                mp = Path(pool[k].pop(0))
+                try:
+                    ml = min(meme_max, probe_duration(mp))
+                except Exception:  # noqa: BLE001 - a broken file is skipped
+                    continue
+                if ml >= 0.8:
+                    last_meme[0] = t
+                    return ("m", mp, ml)
+        return None
+
+    # killed again within 2 minutes of the last death: the crying line
+    deaths = sorted(t for t, k in kinds.items() if k in ("death", "fail"))
+    situation = {t: "again" for p_, t in zip(deaths, deaths[1:]) if t - p_ <= 120}
+    # meme spots inside the action: repeat deaths, and kills (the 3 replayed ones get theirs after the replay)
+    fails = (sorted(set(situation) | {t for t, k in kinds.items() if k in ("kill", "easy") and t not in dict(big)})
+             if meme_cards else sorted(t for t, k in kinds.items() if k == "fail"))
     clips = []
     for a, b in merged:
-        clips.append(("n", a, b))
+        # a funny fail: the meme right after it (the span is cut there, then goes on)
+        cur, tail = a, None
+        for t in fails:
+            if a <= t <= b and cur < t and (pool or meme_cards):
+                m = meme(t)
+                if not m:
+                    continue
+                if t + 1.5 < b - 1.0:
+                    clips += [("n", cur, t + 1.5), m]
+                    cur = t + 1.5
+                else:         # dies at the end of the stretch (the dead screen is cut): right after it
+                    tail = m
+        clips.append(("n", cur, b))
+        if tail:
+            clips.append(tail)
         for t, _ in big:
             if a <= t <= b:
                 clips.append(("s", max(a, t - 1.2), min(b, t + 0.8)))
+                m = meme(t) if (pool or meme_cards) else None
+                if m:
+                    clips.append(m)
     if log:
-        kept = sum(b - a for _, a, b in clips if _ == "n")
-        log(f"🎮 keeping {kept:.0f}s of {total:.0f}s (the action), {len(big)} slow-motion replay(s)")
+        kept = sum(c[2] - c[1] for c in clips if c[0] == "n")
+        nm = sum(1 for c in clips if c[0] in "mc")
+        log(f"🎮 keeping {kept:.0f}s of {total:.0f}s (the action), {len(big)} slow-motion replay(s)"
+            + (f", {nm} meme(s)" if nm else ""))
     tmp = out.with_name(out.stem + "_clips")
     tmp.mkdir(exist_ok=True)
     w, h = video_size(src)
@@ -3223,10 +3372,37 @@ def game_edit(src, out, music=None, cut=True, slowmo=True, logo=None, logo_size=
     enc = (["-c:v", "h264_videotoolbox", "-q:v", "62", "-allow_sw", "1"] if hw
            else ["-c:v", "libx264", "-preset", "veryfast", "-crf", "19"])
     has_a = has_audio_stream(src)
-    parts = []
+    parts, meme_at, pos = [], [], 0.0
     try:
         for i, (kind, a, b) in enumerate(clips):
             p = tmp / f"c{i:04d}.mp4"
+            if kind == "c":       # 😂 our own Burmese meme card
+                meme_card(src, a + 0.3, b[0], p, w, h, enc, meme_voice, style=b[1])
+                d_ = probe_duration(p)
+                meme_at.append((pos, pos + d_))
+                pos += d_
+                parts.append(p)
+                continue
+            if kind == "m":       # 😂 the meme, fitted into the game's frame over a blurred copy of itself
+                mp, ml = a, b
+                has_ma = has_audio_stream(mp)
+                ins = ["-t", f"{ml:.3f}", "-i", str(mp)]
+                if not has_ma:
+                    ins += ["-f", "lavfi", "-t", f"{ml:.3f}", "-i", "anullsrc=r=44100:cl=stereo"]
+                fc = (f"[0:v]fps=30,split[mb][mf];[mb]scale={w}:{h}:force_original_aspect_ratio=increase,"
+                      f"crop={w}:{h},boxblur=20:2,eq=brightness=-0.15[bg];"
+                      f"[mf]scale={w}:{h}:force_original_aspect_ratio=decrease[fg];"
+                      "[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p,setsar=1[v]")
+                am = (["-map", "0:a:0", "-af", "aresample=44100,aformat=channel_layouts=stereo"] if has_ma
+                      else ["-map", "1:a:0"])
+                run(["ffmpeg", "-y", "-v", "error", *ins, "-filter_complex", fc, "-map", "[v]", *am, *enc,
+                     "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2", "-video_track_timescale", "90000",
+                     "-t", f"{ml:.3f}", str(p)])
+                d_ = probe_duration(p)
+                meme_at.append((pos, pos + d_))
+                pos += d_
+                parts.append(p)
+                continue
             ins = ["-ss", f"{a:.3f}", "-t", f"{b - a:.3f}", "-i", str(src)]
             if not has_a:
                 ins += ["-f", "lavfi", "-t", f"{(b - a) * (2 if kind == 's' else 1):.3f}",
@@ -3241,6 +3417,7 @@ def game_edit(src, out, music=None, cut=True, slowmo=True, logo=None, logo_size=
             run(["ffmpeg", "-y", "-v", "error", *ins, "-map", "0:v:0", "-vf", vf, *amap, *enc,
                  "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2", "-video_track_timescale", "90000",
                  "-shortest", str(p)])
+            pos += probe_duration(p)
             parts.append(p)
         lst = tmp / "list.txt"
         lst.write_text("".join(f"file '{p.name}'\n" for p in parts))
@@ -3252,7 +3429,12 @@ def game_edit(src, out, music=None, cut=True, slowmo=True, logo=None, logo_size=
         if music:
             ins += ["-stream_loop", "-1", "-i", str(music)]
             fo = max(0.0, length - 2.5)
-            fc.append(f"[0:a]volume={game_vol}[g];[1:a]volume=0.75,afade=t=in:d=1.5,afade=t=out:st={fo:.2f}:d=2.5[m];"
+            # the meme keeps its own sound at full volume; the music dips to 15% under it
+            gv = (f"volume='if({'+'.join(f'between(t,{x:.2f},{y:.2f})' for x, y in meme_at)},1,{game_vol})':eval=frame"
+                  if meme_at else f"volume={game_vol}")
+            mv = (f"volume='if({'+'.join(f'between(t,{x:.2f},{y:.2f})' for x, y in meme_at)},0.15,0.75)':eval=frame"
+                  if meme_at else "volume=0.75")
+            fc.append(f"[0:a]{gv}[g];[1:a]{mv},afade=t=in:d=1.5,afade=t=out:st={fo:.2f}:d=2.5[m];"
                       f"[g][m]amix=inputs=2:duration=first:normalize=0[a]")
         vmap = "0:v:0"
         if logo and Path(logo).exists():

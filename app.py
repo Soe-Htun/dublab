@@ -870,6 +870,8 @@ def _fix_job(job):
 
 
 MUSIC_DIR = BASE / "music"          # 🎮 royalty-free / licensed tracks for game highlights (mp3 / m4a / wav)
+MEME_DIR = BASE / "memes"           # 😂 the owner's own / licensed short meme clips for game highlights
+MEME_EXT = (".mp4", ".mov", ".webm", ".mkv", ".gif", ".m4v")
 
 
 def _game_job(job):
@@ -893,12 +895,25 @@ def _game_job(job):
             raise ValueError("music folder ထဲမှာ သီချင်း မရှိသေးဘူး — copyright မရှိတဲ့ (royalty-free) သီချင်းတွေကို "
                              f"{MUSIC_DIR} ထဲ ထည့်ပါ (ဒါမှမဟုတ် 🎵 ကို ဖြုတ်ပါ)")
         track = random.choice(tracks)
+    memes = None
+    if job.get("game_meme"):
+        # 😂 by situation: memes/kill, memes/fail, memes/teamfight, memes/objective, memes/outplay;
+        # clips straight in memes/ fit anywhere
+        memes = {}
+        for p in MEME_DIR.rglob("*"):
+            if p.suffix.lower() in MEME_EXT and not p.name.startswith("."):
+                k = p.parent.name.lower() if p.parent != MEME_DIR else "any"
+                memes.setdefault(k, []).append(p)
+        for v in memes.values():
+            random.shuffle(v)
+        jlog(job, "😂 memes: " + (", ".join(f"{k} {len(v)}" for k, v in sorted(memes.items())) if memes else "none in the folder")
+                  + " · our own Burmese meme cards where no clip fits")
     job["total"] = probe_duration(src)
     job.update(stage="mux", pct=40)
     jlog(job, "🎮 game highlight" + (f": music “{track.stem}”, game sound at 35%" if track else ": no music, game sound as it is"))
     from dub import game_edit, frames_every
     logo = LOGO_FILE if job.get("logo") and LOGO_FILE.exists() else None
-    moments = None
+    moments, kinds, idle = None, {}, []
     key = os.environ.get("GEMINI_API_KEY")
     if key and job.get("game_cut", True):
         # 👀 the AI watches the match (a frame every 2 s): the player's kills, team fights (even when the
@@ -918,9 +933,16 @@ def _game_job(job):
                 hits = game_highlights([f for _, f in batch], step, key, hero)
                 done[0] += 1
                 _sp(job, done[0] / len(batches))
-                return [(batch[n][0], sc + (0.5 if kind == "kill" else 0)) for n, kind, sc in hits]
+                return [(batch[n][0], sc + (0.5 if kind in ("kill", "easy") else 0), kind) for n, kind, sc in hits]
             with ThreadPoolExecutor(4) as ex:
                 found = [h for part in ex.map(look, batches) for h in part]
+            idle = sorted(t for t, _, k in found if k == "idle")
+            found = [h for h in found if h[2] != "idle"]
+            kinds = {t: k for t, _, k in found}
+            # a fail is for a meme, not a reason to keep a stretch (its death screen follows)
+            found = [(t, sc) for t, sc, k in found if k not in ("fail", "death")]
+            if idle:
+                jlog(job, f"🎮 {len(idle) * step:.0f}s of dead / shop / base / menu screens found — never in the highlight")
             if found:
                 moments = sorted(found, key=lambda x: -x[1])
                 kills = sum(1 for _, sc in found if sc % 1)
@@ -929,7 +951,8 @@ def _game_job(job):
             jlog(job, f"AI match check skipped ({str(e)[:120]}) — going by the game's sound")
     job["total"] = game_edit(src, d / "dubbed.mp4", track, cut=job.get("game_cut", True),
                              slowmo=job.get("game_slow", True), logo=logo, logo_size=_settings["logo_size"] / 100,
-                             game_vol=0.35 if track else 1.0, log=lambda m: jlog(job, m), moments=moments)
+                             game_vol=0.35 if track else 1.0, log=lambda m: jlog(job, m), moments=moments,
+                             memes=memes, kinds=kinds, idle=idle, idle_step=2.0, meme_cards=bool(job.get("game_meme")))
     src.unlink(missing_ok=True)
     if job.get("telegram"):
         job["tg"] = {"state": "sending", "error": "", "pct": 0}
@@ -2125,6 +2148,7 @@ def create_job():
                  **({"kind": "game", "recap": 0, "split": 0, "game_music": request.form.get("game_music", "1") == "1",
                      "game_cut": request.form.get("game_cut", "1") == "1",
                      "game_slow": request.form.get("game_slow", "1") == "1",
+                     "game_meme": request.form.get("game_meme", "0") == "1",
                      "game_hero": re.sub(r"[^\w .'-]", "", request.form.get("game_hero") or "")[:30]}
                     if request.form.get("game") == "1" else {}), "cover": cover, "logo": logo, "name": name,
                  "recap": recap,
