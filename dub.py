@@ -1903,7 +1903,9 @@ def caption_y(strip_h, blur=None, bottom=0.08, margin=0.035):
     if blur:      # text is centred in its strip (box=False): centre the strip on the band
         b0, bh = float(blur["bottom"]), float(blur["height"])
         mid = 1 - b0 - bh / 2
-        return f"H*{mid:.4f}-{int(strip_h) // 2}"
+        # a band low in the picture put two lines on its last few pixels, and phones
+        # cut them off: the strip never goes lower than `margin` from the bottom
+        return f"min(H*{mid:.4f}-{int(strip_h) // 2}\\,H*{1 - margin:.4f}-{int(strip_h)})"
     bot = 1 - float(bottom)
     return f"H*{min(bot, 1 - margin):.4f}-{int(strip_h)}"
 
@@ -2327,6 +2329,11 @@ def _gold_title(img, title, box_w, center_x, center_y, max_lines, size, suffix="
     ink = [_tbbox(d, (0, k * line_h), ln, font) for k, ln in enumerate(lines)]
     top, bot = min(b[1] for b in ink), max(b[3] for b in ink)
     y0 = int(center_y - (top + bot) / 2)      # centre the real ink, not the line boxes
+    # two lines near the bottom ran off the picture (phones crop the edges too):
+    # keep the whole title, glow and outline included, inside 5% of the edges
+    edge = int(H * 0.05) + stroke * 2
+    y0 = min(y0, H - edge - bot)
+    y0 = max(y0, edge - top)
     mask = Image.new("L", (W, H), 0)
     outline = Image.new("L", (W, H), 0)
     md, od = ImageDraw.Draw(mask), ImageDraw.Draw(outline)

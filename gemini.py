@@ -319,11 +319,36 @@ SHORT_RULE = """
   Every line must still make sense with the lines before and after it."""
 
 
-def translate_lines(lines, direction, api_key, src_lang_name=None, channel=None, prog=None, title="", short=False):
+GENDER_RULE = """
+
+WHO SPEAKS: a line starting with [F] is spoken by a WOMAN, [M] by a MAN (from the voice; untagged = not sure, judge
+from the story and the character names). Burmese words change with the speaker's sex — get this right:
+- a woman ([F]) says ကျွန်မ (never ကျွန်တော်), ends politely with ရှင် / ရှင့် / နော် / ပါရှင် (never ဗျ, ဗျာ, ခင်ဗျာ, ခင်ဗျား);
+- a man ([M]) says ကျွန်တော်, ဗျ / ဗျာ / ခင်ဗျာ (never ကျွန်မ, ရှင်, ရှင့်);
+- casual ငါ / နင် / မင်း are fine for either when the scene is casual.
+Untagged and unsure: avoid the gendered words (use ငါ, or no pronoun, and ending like "…ပါ", "…နော်", "…လား").
+Never copy the [F] / [M] tags into your answer."""
+
+
+def _fit_gender(text, tag):
+    """The model still slips sometimes ("…ခင်ဗျာ" in a girl's line): fix the
+    speaker's own pronoun and the polite ending to match the voice."""
+    if tag.startswith("[F]"):
+        text = text.replace("ကျွန်တော်", "ကျွန်မ")
+        text = re.sub(r"\s*(?:ခင်ဗျာ|ခင်ဗျ|ဗျာ|ဗျ)(?=[\s။!?.…]*$)", "ရှင်", text)
+    elif tag.startswith("[M]"):
+        text = text.replace("ကျွန်မ", "ကျွန်တော်")      # (a final "ရှင်" can be a word: "အသက်ရှင်")
+    return text
+
+
+def translate_lines(lines, direction, api_key, src_lang_name=None, channel=None, prog=None, title="", short=False,
+                    genders=None):
     """lines: [str] -> [translated str], same order.
 
     direction "any2mm" translates from src_lang_name (e.g. "Japanese").
-    channel: the owner's channel name, swapped in for the original creator's."""
+    channel: the owner's channel name, swapped in for the original creator's.
+    genders: optional "male" / "female" / None per line (from the voice), so a
+    woman's line says ကျွန်မ / ရှင့် and a man's ကျွန်တော် / ဗျ."""
     if direction == "any2mm":
         prompt = PROMPT_ANY2MM.format(lang=src_lang_name or "the original")
     else:
@@ -346,16 +371,23 @@ def translate_lines(lines, direction, api_key, src_lang_name=None, channel=None,
                            "(speech recognition may have garbled them in the source):\n" + cast)
         except Exception:  # noqa: BLE001 - the per-line name rule still applies
             pass
+    tags = None
+    if genders and direction != "mm2en" and any(genders):
+        prompt += GENDER_RULE
+        tags = [{"male": "[M] ", "female": "[F] "}.get(g or "", "") for g in genders]
     def _chunk(start):
         chunk = lines[start:start + CHUNK]
-        numbered = "\n".join(f"{i + 1}|||{t}" for i, t in enumerate(chunk))
+        numbered = "\n".join(f"{i + 1}|||{tags[start + i] if tags else ''}{t}" for i, t in enumerate(chunk))
         raw = _call(prompt + "\n\nTranslate these lines:\n" + numbered, api_key)
         results = {}
         for line in raw.strip().split("\n"):
             m = re.match(r"(\d+)\|\|\|(.+)", line.strip())
             if m:
-                results[int(m.group(1))] = m.group(2).strip()
-        return [results.get(i, orig) for i, orig in enumerate(chunk, 1)]
+                results[int(m.group(1))] = re.sub(r"^\s*\[[MF]\]\s*", "", m.group(2)).strip()
+        out = [results.get(i, orig) for i, orig in enumerate(chunk, 1)]
+        if tags:
+            out = [_fit_gender(t, tags[start + k]) for k, t in enumerate(out)]
+        return out
 
     # chunks are independent: send a few at once (a 24-min video is ~10 chunks)
     from concurrent.futures import ThreadPoolExecutor

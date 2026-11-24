@@ -1352,11 +1352,20 @@ def _write_comments(job, api_key, utter=None, video=None):
 def _translate(job, utter, direction, lang, api_key):
     job.update(stage="translate", pct=45)
     jlog(job, "translating with gemini…")
+    genders = None
+    wav = JOBS / job["id"] / "audio.wav"
+    if direction != "mm2en" and wav.exists():
+        try:                      # 👥 who says each line (voice pitch): a woman's line says ကျွန်မ / ရှင့်, not ဗျ
+            genders = line_genders(wav, utter)
+            jlog(job, f"👥 speakers by voice: {genders.count('male')} lines male, "
+                      f"{genders.count('female')} female — the translation uses ကျွန်တော်/ဗျ or ကျွန်မ/ရှင့် to match")
+        except Exception as e:  # noqa: BLE001 - the story context still guides it
+            jlog(job, f"speaker detection skipped: {str(e)[:120]}")
     try:
         texts = translate_lines([u["text"] for u in utter], direction, api_key,
                                 LANG_NAMES.get(lang, lang), _settings["channel_name"] or None,
                                 prog=lambda f: _sp(job, f), title=job.get("name") or "",
-                                short=bool(job.get("char_voice")))
+                                short=bool(job.get("char_voice")), genders=genders)
     except RateLimited as e:
         raise ValueError("Gemini ဘာသာပြန် quota ဒီနေ့အတွက် ကုန်သွားပြီ — မနက်ဖြန် ပြန်စမ်းပါ"
                          if e.daily else
