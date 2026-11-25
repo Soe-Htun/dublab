@@ -1522,6 +1522,10 @@ def _condense(job, src, utter):
     at least 60% of the film remains."""
     char = bool(job.get("char_voice"))
     orig = bool(job.get("orig_audio"))
+    try:         # the uncut film's own length: job["total"] is the CUT length after a first run, and a
+        job["total"] = probe_duration(src)          # resume cut the cut film again (40 → 24 → 14 min)
+    except Exception:  # noqa: BLE001
+        pass
     if orig:     # 🎞️ no recap, the film's own voices: songs, dances and long silent scenes go (~85% stays).
         # The talking comes from the sound itself too (whisper misses lines; a cut must never take real talk)
         talk = [{"start": u["start"], "end": u["end"]} for u in utter]

@@ -16,6 +16,17 @@ def set_speak_speed(v):
 MAX_ATEMPO = 1.65  # never speed speech up more than this (1.5->1.8 on 2026-10-26 to fix ~1.7s drift, then 1.8->1.65 same night: 1.8 sounded too fast; 1.65 fits every ratio measured on the Oct 25 test video, 1.61-1.67, with ~0.04s total drift)
 
 
+def any_of(terms):
+    """ffmpeg expression true while any of `terms` (e.g. "between(t,1,2)") is: their sum,
+    grouped 40 at a time in brackets — ffmpeg can't evaluate one flat sum of more than
+    100 terms ("Error when evaluating the expression": a film with 104 caption stretches
+    failed its whole render)."""
+    terms = list(terms) or ["0"]
+    while len(terms) > 40:
+        terms = ["(" + "+".join(terms[i:i + 40]) + ")" for i in range(0, len(terms), 40)]
+    return "+".join(terms)
+
+
 def run(cmd):
     p = subprocess.run(cmd, capture_output=True, text=True)
     if p.returncode != 0:
@@ -463,7 +474,7 @@ def mix_comments(base_audio, clips, out, duck=0.25):
         d = probe_duration(p)
         wins.append(f"between(t,{st - 0.15:.3f},{st + d + 0.15:.3f})")
     fc = [f"[0:a]aformat=sample_rates=44100:channel_layouts=stereo,"
-          f"volume='if({'+'.join(wins)},{duck},1)':eval=frame[b]"]
+          f"volume='if({any_of(wins)},{duck},1)':eval=frame[b]"]
     labels = ["[b]"]
     for k, (_, st) in enumerate(clips, 1):
         ms = int(st * 1000)
@@ -683,11 +694,18 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=N
     done_lock = threading.Lock()
     n = len(utterances)
 
+    import hashlib
+
+    def _key(i):            # ▶️ resume reuses a voiced line only when it is the SAME line (text + voice):
+        u = utterances[i]   # by number alone, a re-cut film played old lines' audio for new ones
+        h = hashlib.md5(f"{u.get('voice') or voice}|{u['text']}".encode()).hexdigest()[:10]
+        return tmpdir / f"u{i}_{h}.mp3"
+
     def _path(i):           # recap mode hands in narration it already voiced
-        return Path(utterances[i].get("audio") or tmpdir / f"u{i}.mp3")
+        return Path(utterances[i].get("audio") or _key(i))
 
     def _tts(i):
-        out = tmpdir / f"u{i}.mp3"
+        out = _key(i)
         if not utterances[i].get("audio") and not (out.exists() and out.stat().st_size > 0):
             synthesize(utterances[i]["text"], utterances[i].get("voice") or voice, out)   # (▶️ resume keeps voiced lines)
         with done_lock:
@@ -1369,7 +1387,7 @@ def _mosaic_parts(censor, w, h, cur, lead=0.0):
              f"[cpm]format=gray,drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill,"
              + ",".join(boxes) + "[cmask];"
              f"[cpx][cmask]alphamerge[cpa];"
-             f"[cmm][cpa]overlay=0:0:enable='{'+'.join(whens)}'[czz]"]
+             f"[cmm][cpa]overlay=0:0:enable='{any_of(whens)}'[czz]"]
     return parts, "czz"
 
 
@@ -1610,7 +1628,7 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
                     # only while the film's own captions are on screen (= while someone talks
                     # in it): no needless blur band over scenes without them
                     when = blur.get("when")
-                    en = (":enable='" + "+".join(f"between(t,{a + lead:.2f},{b + lead:.2f})" for a, b in when) + "'"
+                    en = (":enable='" + any_of(f"between(t,{a + lead:.2f},{b + lead:.2f})" for a, b in when) + "'"
                           if when else "")
                     parts.append(f"[bm][bz]overlay=0:H*{1 - b0 - bh:.4f}{en}[s1]")
                     cur = "s1"
@@ -3532,9 +3550,9 @@ def game_edit(src, out, music=None, cut=True, slowmo=True, logo=None, logo_size=
             ins += ["-stream_loop", "-1", "-i", str(music)]
             fo = max(0.0, length - 2.5)
             # the meme keeps its own sound at full volume; the music dips to 15% under it
-            gv = (f"volume='if({'+'.join(f'between(t,{x:.2f},{y:.2f})' for x, y in meme_at)},1,{game_vol})':eval=frame"
+            gv = (f"volume='if({any_of(f'between(t,{x:.2f},{y:.2f})' for x, y in meme_at)},1,{game_vol})':eval=frame"
                   if meme_at else f"volume={game_vol}")
-            mv = (f"volume='if({'+'.join(f'between(t,{x:.2f},{y:.2f})' for x, y in meme_at)},0.15,0.75)':eval=frame"
+            mv = (f"volume='if({any_of(f'between(t,{x:.2f},{y:.2f})' for x, y in meme_at)},0.15,0.75)':eval=frame"
                   if meme_at else "volume=0.75")
             fc.append(f"[0:a]{gv}[g];[1:a]{mv},afade=t=in:d=1.5,afade=t=out:st={fo:.2f}:d=2.5[m];"
                       f"[g][m]amix=inputs=2:duration=first:normalize=0[a]")
