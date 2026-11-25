@@ -63,7 +63,7 @@ _settings = {"max_minutes": int(os.environ.get("DUBLAB_MAX_MINUTES") or 30),
              "logo_size": 12,   # % of the video width
              # Burmese captions: text size (% of video height); blur band that
              # hides burned-in original captions (% from bottom, % tall)
-             "caption_size": 5.5, "caption_bottom": 8, "blur_bottom": 4, "blur_height": 16,
+             "caption_size": 5.1, "caption_bottom": 8, "blur_bottom": 4, "blur_height": 16,
              # portrait (TikTok/Shorts) videos: TikTok's own UI covers the bottom
              # ~20%, and burned-in captions there usually sit higher up
              "caption_bottom_v": 24, "blur_bottom_v": 20, "blur_height_v": 12,
