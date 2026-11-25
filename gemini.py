@@ -315,7 +315,10 @@ SHORT_RULE = """
   casual spoken Burmese ("ငါ မင်းကို ချစ်တယ်" / "ငါ မင်းကို မချစ်နိုင်ဘူး"), simple and clear so viewers
   follow easily — keep the meaning that matters for the story, drop filler and repeats (its LENGTH: see TIME). But NEVER drop a line and never leave one empty: even a short "嗯" / "Yes"
   becomes "အင်း" / "ဟုတ်ကဲ့". Never narrate ("he says…"), never add speaker names.
-  Every line must still make sense with the lines before and after it."""
+  Every line must still make sense with the lines before and after it.
+- REAL BURMESE ONLY: words every Burmese viewer uses in daily speech. Never translate English slang / idioms word by
+  word or coin a word ("overpowered" ≠ "တာဝါလွန်", "out of this world" ≠ "ကမ္ဘာပြင်ပ") — say what it MEANS
+  ("တော်လိုက်တာဗျာ", "အရမ်းကို တော်တာပဲ"). If unsure a word exists, use a plainer one."""
 
 
 GENDER_RULE = """
@@ -343,12 +346,12 @@ def _fit_gender(text, tag):
 TIME_RULE = """
 
 LENGTH (most important): each line starts with a tag like [4.2s ~72] = the character talks for 4.2 s on
-screen, and your Burmese line must be about 72 Burmese characters long (count them; between 80% and 100% of the
-number). The voice reads it in that time: a much shorter line leaves the actor talking in silence (viewers leave),
-a longer one gets rushed. When the original is short but the time is long, say it more fully and naturally —
-add the feeling, who/what it is about, or a natural follow-up the character would say (never invent new story
-facts). Every line must be ONE complete thought that makes sense on its own — never leave a sentence half-said to
-finish in the next line. Never copy the tag into your answer."""
+screen, and your Burmese line must be AT MOST about 72 Burmese characters (a longer one gets rushed). Shorter is
+good: say exactly what the character means, tight and natural, like real spoken Burmese — NEVER pad a short line to
+fill the time (no added feelings, no extra follow-up sentences, no repeating): the video is cut to the voice, so
+a short line simply moves on to the next scene. Every line must be ONE complete thought that makes sense on its own
+and follows from the line before — never leave a sentence half-said to finish in the next line, never start a new
+topic the original doesn't. Never copy the tag into your answer."""
 
 
 def translate_lines(lines, direction, api_key, src_lang_name=None, channel=None, prog=None, title="", short=False,
@@ -369,6 +372,9 @@ def translate_lines(lines, direction, api_key, src_lang_name=None, channel=None,
     if short:
         head, sep, tail = prompt.partition("\n- Output format:")
         prompt = head + SHORT_RULE + sep + tail
+    elif direction != "mm2en":           # every Burmese translation: no word-by-word slang, no made-up words
+        head, sep, tail = prompt.partition("\n- Output format:")
+        prompt = head + "\n" + SHORT_RULE[SHORT_RULE.index("- REAL BURMESE ONLY"):].rstrip('"') + sep + tail
         if (src_lang_name or "").lower().startswith("burmese"):   # a Burmese film: retell, don't translate
             prompt += ("\n\nThe source lines are ALREADY Burmese (from speech recognition, may contain mistakes): "
                        "do not translate — RETELL each line in your own shorter spoken Burmese words as described, "

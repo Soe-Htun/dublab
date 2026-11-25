@@ -140,14 +140,33 @@ def transcribe(wav, lang_hint=None, progress=None, model_name=None, title="", wo
     global _cpu_only
     name = model_name or default_whisper_model()
     try:
-        return _transcribe(wav, lang_hint, progress, name, title, words)
+        segs, lang = _transcribe(wav, lang_hint, progress, name, title, words)
     except Exception as e:  # noqa: BLE001 - GPU backends are experimental
         if _cpu_only:
             raise
         print(f"[whisper] GPU failed ({type(e).__name__}: {e}); retrying on CPU")
         _cpu_only = True
         _models.clear()
-        return _transcribe(wav, lang_hint, progress, name, title, words)
+        segs, lang = _transcribe(wav, lang_hint, progress, name, title, words)
+    if (lang or "")[:2] in ("zh", "ja", "ko", "yu"):
+        segs = fix_dangling(segs)
+    return segs, lang
+
+
+_DANGLING = re.compile(r"^(.*\S)\s+(\S{1,2})$")
+
+
+def fix_dangling(segs, near=2.5):
+    """Chinese whisper often ends a line with the FIRST word of the next sentence
+    ("…是我抓的 你" | "對住戶的安排…", "…叫出來 不" | "懂你在說什麼"): each line was then
+    translated with a word that belongs to the other — the voice said half-sentences that
+    didn't match. A 1–2 character tail after the last space moves onto the next line."""
+    out = [dict(x) for x in segs]
+    for a, b in zip(out, out[1:]):
+        m = _DANGLING.match(a["text"].strip())
+        if m and b["start"] - a["end"] <= near:
+            a["text"], b["text"] = m.group(1), m.group(2) + b["text"].lstrip()
+    return out
 
 
 def _whisper_device():
@@ -2502,7 +2521,7 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
     if not portrait and n >= 3:
         img = _poster(video, times, W, H, hide, blur, focus)
         if not title:
-            return _cover_logo_save(img, logo, W, portrait, out_jpg)
+            return _cover_logo_save(img, logo, W, portrait, out_jpg, badge=suffix)
         img = img.convert("RGBA")
         band_h = int(H * 0.5)                        # dark at the bottom, fading out upwards
         grad = Image.new("L", (1, band_h))
@@ -2512,8 +2531,8 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
         shade.putalpha(grad.resize((W, band_h)))
         img.alpha_composite(shade, (0, H - band_h))
         img = img.convert("RGB")
-        _gold_title(img, title, int(W * 0.86), W // 2, int(H * 0.78), 2, int(H * 0.13), suffix)   # ~20% above the bottom
-        return _cover_logo_save(img, logo, W, portrait, out_jpg)
+        _gold_title(img, title, int(W * 0.86), W // 2, int(H * 0.78), 2, int(H * 0.13), "")   # number: corner badge · ~20% above the bottom
+        return _cover_logo_save(img, logo, W, portrait, out_jpg, badge=suffix)
     # photos BLEND into each other (soft overlapping edges, like Burmese movie
     # posters) instead of sitting in boxes with gold lines between them
     canvas = Image.new("RGB", (W, H), (12, 8, 6))
@@ -2544,7 +2563,7 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
         canvas.paste(fr, (l, tp), mask)
     img = canvas.convert("RGBA")
     if not title:                  # no title wanted: just the photos (and the logo)
-        return _cover_logo_save(img.convert("RGB"), logo, W, portrait, out_jpg)
+        return _cover_logo_save(img.convert("RGB"), logo, W, portrait, out_jpg, badge=suffix)
     # warm dark band behind the title: across the middle (between photos), or in
     # the lower part when a single photo fills the cover (the face is higher up)
     # landscape: along the bottom (faces sit in the upper part of the photos)
@@ -2560,10 +2579,10 @@ def render_collage(video, times, title, out_jpg, portrait=False, logo=None, blur
     img.alpha_composite(shade, (0, band_y))
     img = img.convert("RGB")
     if portrait:      # big for phones, but at most 2 lines so it never buries the photos
-        _gold_title(img, title, int(W * 0.92), W // 2, cy, 2, int(W * 0.15), suffix)
+        _gold_title(img, title, int(W * 0.92), W // 2, cy, 2, int(W * 0.15), "")   # the part number goes in the corner badge
     else:
-        _gold_title(img, title, int(W * 0.86), W // 2, cy, 2, int(H * 0.13), suffix)
-    return _cover_logo_save(img, logo, W, portrait, out_jpg)
+        _gold_title(img, title, int(W * 0.86), W // 2, cy, 2, int(H * 0.13), "")   # the part number goes in the corner badge
+    return _cover_logo_save(img, logo, W, portrait, out_jpg, badge=suffix)
 
 
 def _trim_bars(img, dark=28, min_keep=0.4):
@@ -2699,15 +2718,46 @@ def thumb_cover(thumb, title, out_jpg, portrait=False, logo=None, suffix=""):
         if portrait:
             band = H - pic_bottom                          # the whole title must fit in the band
             cy = pic_bottom + band // 2
-            _gold_title(img, title, int(W * 0.9), W // 2, cy, 2, int(min(W * 0.12, band * 0.34)), suffix)
+            _gold_title(img, title, int(W * 0.9), W // 2, cy, 2, int(min(W * 0.12, band * 0.34)), "")   # the part number goes in the corner badge
         else:
-            _gold_title(img, title, int(W * 0.92), W // 2, int(H * 0.8), 2, int(H * 0.14), suffix)   # ~20% above the bottom
-    return _cover_logo_save(img, logo, W, portrait, out_jpg, left=_logo_left)
+            _gold_title(img, title, int(W * 0.92), W // 2, int(H * 0.8), 2, int(H * 0.14), "")   # number: corner badge · ~20% above the bottom
+    return _cover_logo_save(img, logo, W, portrait, out_jpg, badge=suffix, left=_logo_left)
 
 
-def _cover_logo_save(img, logo, W, portrait, out_jpg, left=False):
-    """Channel logo top-right, then save the cover."""
+def _part_badge(img, suffix, right=False):
+    """"EP 7" / "EP 3/1" in a red pill with a gold rim in a top corner: the part number in the
+    title's last line sat where TikTok draws the views / length over the thumbnail (hidden)."""
+    from PIL import Image, ImageDraw, ImageFont
+    num = (suffix or "").strip().lstrip("-").strip()
+    if not num:
+        return img
+    text = "END" if num == "End" else f"EP {num.replace('End', 'END')}"
+    W, H = img.size
+    lat = next((p for p in _LATIN_FONTS if os.path.exists(p)), None)
+    size = int(W * (0.075 if H > W else 0.05))
+    f = ImageFont.truetype(lat, size) if lat else ImageFont.load_default()
+    im = img.convert("RGBA")
+    d = ImageDraw.Draw(im)
+    l, t, r, b = d.textbbox((0, 0), text, font=f)
+    px, py = int(size * 0.5), int(size * 0.28)
+    bw, bh = r - l + 2 * px, b - t + 2 * py
+    x0 = W - bw - int(W * 0.05) if right else int(W * 0.05)
+    y0 = int(H * 0.05) if H > W else int(W * 0.025)
+    layer = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    g = ImageDraw.Draw(layer)
+    g.rounded_rectangle((x0 + 5, y0 + 7, x0 + bw + 5, y0 + bh + 7), radius=bh // 3, fill=(0, 0, 0, 120))
+    g.rounded_rectangle((x0, y0, x0 + bw, y0 + bh), radius=bh // 3, fill=(229, 30, 52, 255),
+                        outline=(255, 214, 90, 255), width=max(4, W // 180))
+    im = Image.alpha_composite(im, layer)
+    ImageDraw.Draw(im).text((x0 + px - l, y0 + py - t), text, font=f, fill=(255, 255, 255),
+                            stroke_width=max(2, W // 400), stroke_fill=(120, 0, 10))
+    return im.convert("RGB")
+
+
+def _cover_logo_save(img, logo, W, portrait, out_jpg, left=False, badge=""):
+    """Channel logo top-right (part badge in the other corner), then save the cover."""
     from PIL import Image
+    img = _part_badge(img, badge, right=left is True)
     if logo and Path(logo).exists():
         img = img.convert("RGBA")
         lg = Image.open(logo).convert("RGBA")
@@ -2902,9 +2952,9 @@ def render_art_cover(art, title, out_jpg, portrait=False, logo=None, suffix=""):
         img.alpha_composite(Image.new("RGBA", (W, H - bottom), (10, 4, 0, 215)), (0, bottom))
     img = img.convert("RGB")
     if portrait:
-        _gold_title(img, title, int(W * 0.9), W // 2, int(H * 0.71), 3, int(W * 0.13), suffix)
+        _gold_title(img, title, int(W * 0.9), W // 2, int(H * 0.71), 3, int(W * 0.13), "")   # the part number goes in the corner badge
     else:
-        _gold_title(img, title, int(W * 0.92), W // 2, int(H * 0.8), 2, int(H * 0.14), suffix)
+        _gold_title(img, title, int(W * 0.92), W // 2, int(H * 0.8), 2, int(H * 0.14), "")   # the part number goes in the corner badge
     if logo and Path(logo).exists():
         img = img.convert("RGBA")
         lg = Image.open(logo).convert("RGBA")
@@ -2913,6 +2963,7 @@ def render_art_cover(art, title, out_jpg, portrait=False, logo=None, suffix=""):
         m = int(W * 0.025)
         img.alpha_composite(lg, (W - lw - m, m))
         img = img.convert("RGB")
+    img = _part_badge(img, suffix)
     img.save(out_jpg, "JPEG", quality=90)
     return Path(out_jpg)
 

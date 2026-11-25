@@ -15,7 +15,7 @@ from flask import Flask, jsonify, redirect, render_template, request, send_file
 
 import telegram
 
-from dub import (tight_spans, voice_lengths, WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segments, configure_tts, frame_layout, render_frames,
+from dub import (tight_spans, voice_lengths, fix_dangling, WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segments, configure_tts, frame_layout, render_frames,
                  frame_caption_y,
                  footage, speech_spans, char_spans, keep_most, trim_copy, picture_area,
                  add_outro_tail, caption_y, normalize_logo, render_captions, sample_frames, video_size, write_srt,
@@ -1211,7 +1211,7 @@ def _transcribe_and_translate(jid, job):
         # whole sentences (a line cut in two was rushed, stopped dead, then went on): longer pieces
         # (word-timed pieces: joined over a short breath into one sentence, but at most ~7 s so
         # a line the voice says faster never leaves more than ~3 s of the actor talking alone)
-        utter = merge_segments(segs, max_gap=1.2, max_len=7.0)
+        utter = fix_dangling(merge_segments(segs, max_gap=1.2, max_len=7.0), near=3.0)   # "…抓的 你"|"對…" → whole sentences
         try:                             # 🎯 onto the real talking: in sync, and the true speaking time
             sw = JOBS / job["id"] / "audio.wav"
             utter, moved = snap_to_speech(utter, speech_regions(sw if sw.exists() else wav))
