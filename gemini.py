@@ -318,7 +318,10 @@ SHORT_RULE = """
   Every line must still make sense with the lines before and after it.
 - REAL BURMESE ONLY: words every Burmese viewer uses in daily speech. Never translate English slang / idioms word by
   word or coin a word ("overpowered" ≠ "တာဝါလွန်", "out of this world" ≠ "ကမ္ဘာပြင်ပ") — say what it MEANS
-  ("တော်လိုက်တာဗျာ", "အရမ်းကို တော်တာပဲ"). If unsure a word exists, use a plainer one."""
+  ("တော်လိုက်တာဗျာ", "အရမ်းကို တော်တာပဲ"). If unsure a word exists, use a plainer one.
+- KEEP JOKES FUNNY: a joke, pun or silly line (comedies!) must stay funny in Burmese — say it the way a Burmese
+  person would joke, with the same punch, not a flat literal version nobody laughs at. A pun that cannot cross
+  over becomes a Burmese joke of the same kind that fits the scene."""
 
 
 GENDER_RULE = """
@@ -556,7 +559,10 @@ def write_comments(pauses, api_key, describe=False, batch=25, cast=""):
                  "friend teasing the characters — e.g. \"ရှဲ့ယွင်ကတော့ လက်ဖက်ရည်သောက်ရင်း ရိုက်နေသလိုပဲ အေးဆေးပဲဗျာ\", "
                  "\"လူဆိုးကြီး ခုနက အာလူးကြော်ခဲ့တာ အခုတော့ မြေကြီးနဲ့ နမ်းသွားပြီ\", \"ပြေးတာကတော့ မြန်လိုက်တာ၊ "
                  "အပြေးပြိုင်ပွဲ ဝင်ရင် ဆုရမှာ\". Everyday Burmese jokes only, never rude, never about the body; "
-                 "no jokes in sad, death or romantic scenes. The rest stay plain story-telling.")
+                 "no jokes in sad, death or romantic scenes. The rest stay plain story-telling. "
+                 "If the film is a COMEDY (the lines around the pauses are silly, jokey, people tease each other), "
+                 "joke MUCH more: about every other remark, playful all the way like a funny friend — a comedy "
+                 "recap should make people laugh.")
         if cast:
             base += ("\n\nTHE CHARACTERS (Burmese names — use them): \n" + cast + "\nSay WHO does what by NAME, "
                      "like a recap narrator: \"ရှဲ့ယွင်နဲ့ ဓားသမားကြီး ချနေကြပါပြီ၊ ရှဲ့ယွင်က ဓားနဲ့ ခုတ်လိုက်တယ်\", "
@@ -742,7 +748,8 @@ Rules:
 - A LITTLE HUMOUR (people love it): now and then (about one beat in four or five) add a light joke, like a
   friend teasing the characters ("လူဆိုးကြီး ခုနက အာလူးကြော်ခဲ့တာ အခုတော့ မြေကြီးနဲ့ နမ်းသွားပြီ", "ပြေးတာကတော့
   မြန်လိုက်တာ၊ အပြေးပြိုင်ပွဲ ဝင်ရင် ဆုရမှာ"). Everyday Burmese jokes only, never rude, never about the body; no
-  jokes in sad, death or romantic scenes. The story always comes first.
+  jokes in sad, death or romantic scenes. The story always comes first. If the film is a COMEDY (silly, jokey
+  lines, people teasing each other), joke MUCH more — about every other beat, playful all the way.
 - IT IS A FICTIONAL FILM, NOT NEWS: tell it as a film's story ("ဒီဇာတ်ကားထဲမှာ…", "ရုပ်ရှင်ထဲမှာ…").
   When real people, real teams/clubs, companies, countries, diseases, wars or historical events appear, say
   they are in the film, so nobody takes it as real-world news. Never say it really happened unless the film
