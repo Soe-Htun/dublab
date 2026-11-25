@@ -552,6 +552,11 @@ def write_comments(pauses, api_key, describe=False, batch=25, cast=""):
                      "lines are ONE long scene without talk (a fight, a chase, a journey): tell it as it unfolds — "
                      "each remark goes on from the previous one (what happens next, who is winning, the danger), "
                      "never repeating it.")
+        base += ("\n\nA LITTLE HUMOUR (people love it): about one remark in three or four may joke lightly, like a "
+                 "friend teasing the characters — e.g. \"ရှဲ့ယွင်ကတော့ လက်ဖက်ရည်သောက်ရင်း ရိုက်နေသလိုပဲ အေးဆေးပဲဗျာ\", "
+                 "\"လူဆိုးကြီး ခုနက အာလူးကြော်ခဲ့တာ အခုတော့ မြေကြီးနဲ့ နမ်းသွားပြီ\", \"ပြေးတာကတော့ မြန်လိုက်တာ၊ "
+                 "အပြေးပြိုင်ပွဲ ဝင်ရင် ဆုရမှာ\". Everyday Burmese jokes only, never rude, never about the body; "
+                 "no jokes in sad, death or romantic scenes. The rest stay plain story-telling.")
         if cast:
             base += ("\n\nTHE CHARACTERS (Burmese names — use them): \n" + cast + "\nSay WHO does what by NAME, "
                      "like a recap narrator: \"ရှဲ့ယွင်နဲ့ ဓားသမားကြီး ချနေကြပါပြီ၊ ရှဲ့ယွင်က ဓားနဲ့ ခုတ်လိုက်တယ်\", "
@@ -734,6 +739,10 @@ Rules:
   so the dance scene is not shown. Jump straight to the next story scene.
 """ + NAME_RULE + """
 - {extra}
+- A LITTLE HUMOUR (people love it): now and then (about one beat in four or five) add a light joke, like a
+  friend teasing the characters ("လူဆိုးကြီး ခုနက အာလူးကြော်ခဲ့တာ အခုတော့ မြေကြီးနဲ့ နမ်းသွားပြီ", "ပြေးတာကတော့
+  မြန်လိုက်တာ၊ အပြေးပြိုင်ပွဲ ဝင်ရင် ဆုရမှာ"). Everyday Burmese jokes only, never rude, never about the body; no
+  jokes in sad, death or romantic scenes. The story always comes first.
 - IT IS A FICTIONAL FILM, NOT NEWS: tell it as a film's story ("ဒီဇာတ်ကားထဲမှာ…", "ရုပ်ရှင်ထဲမှာ…").
   When real people, real teams/clubs, companies, countries, diseases, wars or historical events appear, say
   they are in the film, so nobody takes it as real-world news. Never say it really happened unless the film
@@ -1332,7 +1341,11 @@ Under each frame is what is SAID there (the Burmese voice the teaser will play w
 picture AND words together: prefer a moment whose line grabs attention on its own — a threat, a shocking
 reveal, a confession, a desperate cry, a fierce argument, a mysterious question, a big laugh — WITH the main
 character and something happening on screen. Avoid ordinary chat ("ဟုတ်ကဲ့", greetings, instructions) and
-frames with nothing said and nothing happening. Think like a TikTok editor: would a stranger stop scrolling?"""
+frames with nothing said and nothing happening. A REALLY FUNNY moment makes a great opener too — a comic
+reaction on screen, or a line that is truly funny (the narrator's own jokes are among the lines, e.g. "လူဆိုးကြီး
+အခုတော့ မြေကြီးနဲ့ နမ်းသွားပြီ") over a picture that shows it: pick it over plain action when it would make a
+stranger laugh. A weak or so-so joke is NOT a hook — then pick the most gripping moment as usual.
+Think like a TikTok editor: would a stranger stop scrolling?"""
 
 
 def pick_hook(jpegs, api_key, said=None):

@@ -1338,13 +1338,13 @@ def _write_comments(job, api_key, utter=None, video=None):
             except Exception as e:  # noqa: BLE001 - the transcript's pauses then
                 jlog(job, f"quiet check skipped: {str(e)[:100]}")
         if every_pause:
-            # ⚔️ a long scene without talk (a fight, a chase…): a line every ~10 s, each from its own
-            # picture — the narrator follows the action instead of one remark and then silence
+            # ⚔️ a long scene without talk (a fight, a chase…): a line every ~6 s, each from its own
+            # picture — the narrator tells the action as it goes, no stopping in between
             split = []
             for a, b, i in gaps:
-                n = max(1, int((b - a + 1.5) // 11.5))
-                w = (b - a - 1.5 * (n - 1)) / n
-                split += [(a + k * (w + 1.5), a + k * (w + 1.5) + w, i) for k in range(n)]
+                n = max(1, int((b - a + 0.6) // 6.6))
+                w = (b - a - 0.6 * (n - 1)) / n
+                split += [(a + k * (w + 0.6), a + k * (w + 0.6) + w, i) for k in range(n)]
             gaps = split
         if not gaps:
             jlog(job, "🎙️ no quiet pauses long enough for narrator remarks")

@@ -3148,11 +3148,11 @@ def char_spans(utterances, keep_gap=10.0, tail=7.0, pad=1.0):
     return [tuple(x) for x in out]
 
 
-def tight_spans(talk, total, pause=0.4, head=0.25, long=10.0, long_keep=0.15, long_min=5.0, long_max=6.0):
+def tight_spans(talk, total, pause=0.4, head=0.25, long=10.0, long_keep=0.6, long_min=10.0, long_max=16.0):
     """🎬 Recap cut: talk is what matters, the voice goes on all the way. Every stretch without
     talk keeps only `pause` s after the line before it and `head` s before the next one (a
-    jump cut, no silent wait); a long one (`long` s+: a fight, a chase) keeps `long_min`–
-    `long_max` s of itself for one narrator remark (it fills ~85% of it: no wait over ~3 s). A line's end should be where the BURMESE
+    jump cut, no silent wait); a long one (`long` s+: a fight, a chase) stays — up to `long_max` s
+    of it — while the narrator tells it line after line ("X နဲ့ Y ချနေကြတယ်…"). A line's end should be where the BURMESE
     voice ends (it often runs past the actor). [(start, end)] to keep."""
     talk = sorted((max(0.0, u["start"]), min(total, u["end"])) for u in talk)
     merged = []
