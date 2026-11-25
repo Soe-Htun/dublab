@@ -661,6 +661,33 @@ def _synthesize_once(text, voice, out_path):
         raise err
 
 
+def line_audio_path(tmpdir, u, voice):
+    """Where a voiced line is kept. ▶️ A resume (or the recap cut, which voices lines first to
+    know their length) reuses it only for the SAME line: text + voice + speed (by number alone,
+    a re-cut film played old lines' audio for new ones)."""
+    import hashlib
+    h = hashlib.md5(f"{u.get('voice') or voice}|{SPEAK_SPEED:.2f}|{u['text']}".encode()).hexdigest()[:12]
+    return Path(tmpdir) / f"u_{h}.mp3"
+
+
+def voice_lengths(utterances, voice, tmpdir, progress=None):
+    """Voice every line now (kept for build_dub_track) and return how long each one speaks."""
+    from concurrent.futures import ThreadPoolExecutor
+    done = [0]
+
+    def one(u):
+        out = line_audio_path(tmpdir, u, voice)
+        if not (out.exists() and out.stat().st_size > 0):
+            synthesize(u["text"], u.get("voice") or voice, out)
+        done[0] += 1
+        if progress:
+            progress(done[0], len(utterances))
+        return probe_duration(out)
+
+    with ThreadPoolExecutor(max(1, int(os.environ.get("DUBLAB_TTS_WORKERS") or 8))) as ex:
+        return list(ex.map(one, utterances))
+
+
 def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=None,
                     intro=None):
     """TTS each utterance, time-fit into its slot, mix into one dub track.
@@ -694,12 +721,8 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=N
     done_lock = threading.Lock()
     n = len(utterances)
 
-    import hashlib
-
-    def _key(i):            # ▶️ resume reuses a voiced line only when it is the SAME line (text + voice):
-        u = utterances[i]   # by number alone, a re-cut film played old lines' audio for new ones
-        h = hashlib.md5(f"{u.get('voice') or voice}|{u['text']}".encode()).hexdigest()[:10]
-        return tmpdir / f"u{i}_{h}.mp3"
+    def _key(i):
+        return line_audio_path(tmpdir, utterances[i], voice)
 
     def _path(i):           # recap mode hands in narration it already voiced
         return Path(utterances[i].get("audio") or _key(i))
@@ -735,13 +758,14 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=N
     for i, u in enumerate(utterances):
         tts_dur = durs[i]
         slot = max(u["end"] - u["start"], 0.5)
+        if i + 1 < len(utterances):   # the voice may run on into the quiet before the next line: sped up only
+            # when it would reach that line (squeezed into the actor's own short slot it rushed, then went silent)
+            slot = max(slot, min(utterances[i + 1]["start"] - u["start"] - 0.15, slot + 4.0))
         ratio = tts_dur / slot
         # lines are already at SPEAK_SPEED: cap the extra so the total stays ≤ MAX_ATEMPO
         atempo = 1.0 if ratio <= 1.0 else min(ratio, max(1.0, MAX_ATEMPO / SPEAK_SPEED))
-        if ratio < 1.0 and SPEAK_SPEED > 1.0:
-            # plenty of room: back towards the voice's own pace (not sped up) — fills more of the
-            # actor's talking, fewer silent mouths
-            atempo = max(ratio, 1.0 / SPEAK_SPEED)
+        # plenty of room: the line stays at the speed chosen in Settings (slowing it back to the
+        # TTS's own pace undid a chosen 1.3x); the recap cut already ends the picture where the voice ends
         fitted = tts_dur / atempo
         start = max(u["start"] + lead, cursor)
         plan.append((_path(i), atempo, start))
@@ -3073,11 +3097,12 @@ def char_spans(utterances, keep_gap=10.0, tail=7.0, pad=1.0):
     return [tuple(x) for x in out]
 
 
-def tight_spans(talk, total, pause=2.5, head=0.4, long=20.0, long_keep=0.25, long_max=20.0):
-    """🎬 Recap cut: talk is what matters. Every stretch without talk keeps only `pause` s
-    after the line before it and `head` s before the next one (no wait over ~3 s); a long
-    one (`long` s+: a fight, a chase) keeps a quarter of itself (at most `long_max` s) for
-    the narrator to talk over. [(start, end)] to keep."""
+def tight_spans(talk, total, pause=0.4, head=0.25, long=10.0, long_keep=0.15, long_min=5.0, long_max=6.0):
+    """🎬 Recap cut: talk is what matters, the voice goes on all the way. Every stretch without
+    talk keeps only `pause` s after the line before it and `head` s before the next one (a
+    jump cut, no silent wait); a long one (`long` s+: a fight, a chase) keeps `long_min`–
+    `long_max` s of itself for one narrator remark (it fills ~85% of it: no wait over ~3 s). A line's end should be where the BURMESE
+    voice ends (it often runs past the actor). [(start, end)] to keep."""
     talk = sorted((max(0.0, u["start"]), min(total, u["end"])) for u in talk)
     merged = []
     for a, b in talk:
@@ -3088,11 +3113,12 @@ def tight_spans(talk, total, pause=2.5, head=0.4, long=20.0, long_keep=0.25, lon
     keep, prev = [], 0.0
     for a, b in merged + [[total, total]]:
         gap = a - prev
-        if gap > pause + head + 0.5:
+        if gap > pause + head + 0.3:
             hold = pause
             if gap >= long:
-                hold = max(pause, min(long_max, gap * long_keep))
-            keep.append((prev + hold, a - head))          # this part of the pause goes
+                hold = min(gap - head, max(long_min, min(long_max, gap * long_keep)))
+            if prev + hold < a - head:
+                keep.append((prev + hold, a - head))          # this part of the pause goes
         prev = max(prev, b)
     spans, t = [], 0.0
     for c0, c1 in keep:

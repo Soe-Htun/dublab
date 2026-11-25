@@ -15,7 +15,7 @@ from flask import Flask, jsonify, redirect, render_template, request, send_file
 
 import telegram
 
-from dub import (tight_spans, WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segments, configure_tts, frame_layout, render_frames,
+from dub import (tight_spans, voice_lengths, WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segments, configure_tts, frame_layout, render_frames,
                  frame_caption_y,
                  footage, speech_spans, char_spans, keep_most, trim_copy, picture_area,
                  add_outro_tail, caption_y, normalize_logo, render_captions, sample_frames, video_size, write_srt,
@@ -24,7 +24,8 @@ from dub import (tight_spans, WHISPER_MODELS, set_speak_speed, build_dub_track, 
                  has_audio_stream, has_video_stream, is_supported_url, merge_segments,
                  build_recap_video, make_covers, mux, run, separate_vocals, beat_footage, trim_silence, frames_every, cut_ranges, mosaic_video, edit_video, fiction_notice, synthesize, speech_regions, snap_to_speech, fit_cues_to_speech, probe_duration, probe_url, separate_music, split_points, YouTubeBlocked, line_genders, mix_comments, NARRATOR_VOICE,
                  split_video, transcribe)
-from gemini import (TTS_CPS, RateLimited, draw_cover, find_caption_band, find_logos, find_movie_bounds, pick_cover_frames, pick_hook, thumb_is_good, translate_lines,
+import gemini   # gemini.TTS_CPS follows the voice speed chosen in Settings (a copy imported once never did)
+from gemini import (RateLimited, draw_cover, find_caption_band, find_logos, find_movie_bounds, pick_cover_frames, pick_hook, thumb_is_good, translate_lines,
                     write_cover_scene, write_intro, write_recap, write_title, movie_name,
                     transcribe_burmese, write_cast, write_posts, find_sensitive, analyze_warning, check_covers, write_comments, game_highlights)
 
@@ -1307,7 +1308,8 @@ def _write_comments(job, api_key, utter=None, video=None):
     utter = utter if every_pause else (job.get("utter") or [])
     utter = [u for u in utter if (u.get("text") or "").strip()]
     if every_pause and job.get("char_voice"):   # the Burmese voice ends sooner than the line: the quiet after it counts
-        utter = [{**u, "end": min(u["end"], u["start"] + len(u["text"]) / TTS_CPS + 0.4)} for u in utter]
+        utter = [{**u, "end": u["start"] + u["vdur"] + 0.3 if u.get("vdur") else
+                  min(u["end"], u["start"] + len(u["text"]) / gemini.TTS_CPS + 0.4)} for u in utter]
     job["comments"] = []
     try:
         if every_pause:
@@ -1349,7 +1351,7 @@ def _write_comments(job, api_key, utter=None, video=None):
             return
         pauses = [{"before": [u["text"] for u in utter[max(0, i - 2):i + 1]],
                    "after": [u["text"] for u in utter[i + 1:i + 3]],
-                   "max": max(12, int((b - a) * TTS_CPS * 0.85))} for a, b, i in gaps]
+                   "max": max(12, int((b - a) * gemini.TTS_CPS * 0.85))} for a, b, i in gaps]
         if every_pause and video:
             from concurrent.futures import ThreadPoolExecutor
             from dub import sample_frames
@@ -1466,7 +1468,7 @@ def _write_recap(job, utter, lang, api_key):
                      "text": b["say"][:MAX_LINE],
                      "orig": " ".join(u["text"] for u in utter[b["from"]:b["to"] + 1])[:300]}
                     for b in beats]
-    est = sum(len(u["text"]) for u in job["utter"]) / TTS_CPS / 60
+    est = sum(len(u["text"]) for u in job["utter"]) / gemini.TTS_CPS / 60
     jlog(job, f"recap: {len(beats)} beats · ~{est:.1f} min of narration (need {job['recap']}+)"
               + ("" if est >= job["recap"] else " ⚠️ still short"))
 
@@ -1516,7 +1518,7 @@ def _recap_cut(job, voice_name):
     return out, new, total
 
 
-def _condense(job, src, utter):
+def _condense(job, src, utter, voice=None):
     """The film with its long stretches without speech (songs, dances, montages,
     credits) cut out, and the lines moved onto the new timeline. Kept as long as
     at least 60% of the film remains."""
@@ -1537,9 +1539,23 @@ def _condense(job, src, utter):
         except Exception as e:  # noqa: BLE001 - the transcript alone then
             jlog(job, f"speech check skipped: {str(e)[:100]}")
         spans = keep_most(talk, job["total"], keep=0.85)
-    elif char:   # 🎬 recap: talk is what matters — stretches without talk go (from 6 s up, longest first)
-        # until ~70% is left; a short pause keeps 3 s, a long fight a quarter with the narrator on it
-        spans = tight_spans([u for u in utter if (u.get("text") or "").strip()], job["total"])
+    elif char:   # 🎬 recap: talk is what matters — every pause is cut to ~1 s (a jump cut), a long
+        # fight / chase keeps 5–8 s with one narrator remark on it
+        # A line lasts as long as its BURMESE voice (at the speed chosen in Settings): the lines are voiced
+        # first to know it — the actor still talking after the voice ends keeps under ½ s, then a jump cut
+        said = [u for u in utter if (u.get("text") or "").strip()]
+        try:
+            jlog(job, f"🎙️ voicing {len(said)} lines first, so the cut follows the Burmese voice "
+                      f"(speed {_settings['speak_speed']:.2f}x)…")
+            lens = voice_lengths(said, voice or VOICES[job["direction"]][job["voice"]], job["dir"],
+                                 lambda i, n: _sp(job, i / max(n, 1)))
+        except Exception as e:  # noqa: BLE001 - the length estimated from the text then
+            jlog(job, f"voice lengths estimated ({str(e)[:80]})")
+            lens = [len(u["text"]) / gemini.TTS_CPS for u in said]
+        for u, vd in zip(said, lens):
+            u["vdur"] = round(vd, 2)
+        spans = tight_spans([{"start": u["start"], "end": u["start"] + max(vd, min(u["end"] - u["start"], vd + 0.4)) + 0.1}
+                             for u, vd in zip(said, lens)], job["total"])
     else:
         spans = speech_spans(utter, pad=1.5, join=8.0)
     kept = sum(b - a for a, b in spans)
@@ -1596,7 +1612,7 @@ def _voice_and_mux(job):
             jlog(job, "demucs not installed — background music skipped "
                       "(pip install demucs)")
     if job.get("condense") or job.get("char_voice") or job.get("orig_audio"):   # long stretches without talk go
-        src, utter = _condense(job, src, utter)
+        src, utter = _condense(job, src, utter, voice_name)
     if (job.get("char_voice") or job.get("orig_audio")) and job.get("commentary") and not job.get("comments_cut"):
         _write_comments(job, os.environ.get("GEMINI_API_KEY"), utter, src)   # 🗣️ talk all the way
     if not job.get("recap") and not job.get("orig_audio"):
