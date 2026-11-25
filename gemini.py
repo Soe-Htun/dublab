@@ -606,6 +606,12 @@ Write ONE catchy Burmese title for the video cover, like "မှော်မျ�
 Rules:
 - Burmese only, 2–6 words, at most about 25 characters.
 - About the main hook of the story; no spoilers of the ending.
+- Say it the way Burmese viewers say it — the well-known word for the idea, never a word-by-word description:
+  X-ray eyes = "ဖောက်ထွင်းမြင်" (NOT "ပစ္စည်းအထဲမြင်"), so "ဖောက်ထွင်းမြင်နိုင်သော ကောင်လေး", not
+  "ပစ္စည်းအထဲမြင်နိုင်သော မှော်မျက်လုံး". Often best named after the hero: "ကောင်လေး", "ကောင်မလေး",
+  "သူဌေးသား", "ဆင်းရဲသား", "ဓားသမား"…
+- Never a title that can be read in a bad or sexual way (NOT "မိန်းမတွေကို လာထိတဲ့ ဓားပြခေါင်းဆောင်" — say
+  what the hero does: "ဓားပြခေါင်းဆောင်ကို လက်စားချေမယ့် ကောင်လေး").
 - No channel names, no hashtags, no emojis, no quotes, no punctuation at the end.
 - Write Burmese in Myanmar script only — never Thai, Chinese or any other script inside Burmese words.
 - Output only the title."""
