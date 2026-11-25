@@ -3378,6 +3378,12 @@ def game_edit(src, out, music=None, cut=True, slowmo=True, logo=None, logo_size=
             if sum(b - a for a, b in m) >= min_len:
                 merged = m
                 break
+        else:
+            # too few fights for a 1-minute highlight: the whole match, but still without the
+            # dead / shop / base screens (it used to keep everything, respawn waits included)
+            whole = strip([[0.0, total]])
+            if sum(b - a for a, b in whole) >= min(min_len, total * 0.5):
+                merged = whole
         if bad and log:
             log(f"🎮 {sum(y - x for x, y in bad):.0f}s of dead / shop / base / menu screens left out")
     # 🏆 the highlight ends on the VICTORY / DEFEAT banner: nothing after it (stats, MVP, lobby…),
