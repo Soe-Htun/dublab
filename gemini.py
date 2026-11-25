@@ -321,7 +321,11 @@ SHORT_RULE = """
   ("တော်လိုက်တာဗျာ", "အရမ်းကို တော်တာပဲ"). If unsure a word exists, use a plainer one.
 - KEEP JOKES FUNNY: a joke, pun or silly line (comedies!) must stay funny in Burmese — say it the way a Burmese
   person would joke, with the same punch, not a flat literal version nobody laughs at. A pun that cannot cross
-  over becomes a Burmese joke of the same kind that fits the scene."""
+  over becomes a Burmese joke of the same kind that fits the scene. In a COMEDY, ordinary lines between characters
+  may be said in a playful, cheeky, teasing Burmese way too — "you're bad at cards" → not a flat "မင်း ဖဲရိုက်တာ
+  မတော်ဘူး" but a tease like "မင်း ဖဲရိုက်ဖို့ ပါရမီ ပါမလာပါဘူး၊ ငယ်ပါသေးတယ်"; "don't be scared" → "မကြောက်ပါနဲ့
+  မမြဝင်းရယ်" (familiar Burmese teasing phrases) — never jokes about how much someone eats — the SAME meaning, same who-says-what-to-whom, nothing added to the story; just funnier wording.
+  Not in serious, sad or romantic moments, and never in a film that is not a comedy."""
 
 
 GENDER_RULE = """
