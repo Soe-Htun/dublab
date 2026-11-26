@@ -283,7 +283,7 @@ async function tkTgStatus() {
   try {
     const s = await (await fetch('/api/tiktok/telegram/status?key=' + encodeURIComponent(key))).json();
     tkTgSay(s.msg || '');
-    if (s.state !== 'sending' && tkPoll) { clearInterval(tkPoll); tkPoll = null; loadTikTok(); }
+    if (s.state !== 'sending' && tkPoll) { clearInterval(tkPoll); tkPoll = null; loadTikTok(); $('#tk-scan').click(); }
   } catch (e) { /* next tick */ }
 }
 $('#tk-scan').addEventListener('click', async () => {
@@ -292,19 +292,57 @@ $('#tk-scan').addEventListener('click', async () => {
     const r = await fetch(`/api/tiktok/telegram?days=${$('#tk-days').value}&key=` + encodeURIComponent(key));
     const j = await r.json();
     if (!r.ok) { tkTgSay('⚠️ ' + (j.error || 'မရဘူး')); btn.disabled = false; return; }
-    tkTgSay(j.films.length ? '' : 'ဗီဒီယို မတွေ့ဘူး');
-    $('#tk-films').innerHTML = j.films.map((f, i) => `
-      <div class="tgline tkfilm" data-i="${i}">
-        <b>${esc(f.title)}</b> · part ${f.parts.length} ခု (${esc(f.parts.map(p => p.label).join(', '))})<br>
-        part <select class="tkfrom">${f.parts.map(p => `<option value="${p.n}">${esc(p.label)}</option>`).join('')}</select> ကနေ
-        <button class="ghost tksend">📤 draft ပို့မယ်</button>
-      </div>`).join('');
+    tkTgSay(j.films.length ? '' : 'ပို့စရာ ဇာတ်ကား မရှိဘူး');
+    const extra = [j.finished ? `✅ ${j.finished} ကား အကုန် ပို့ပြီး (စာရင်းက ဖယ်ထား)` : '',
+                   j.hidden ? `🙈 ${j.hidden} ကား ဝှက်ထား · <a href="#" id="tk-unhide">ပြန်ပြမယ်</a>` : ''].filter(Boolean).join(' · ');
+    $('#tk-films').innerHTML = j.films.map((f, i) => {
+      const next = Math.min(f.done + 1, f.parts.length), left = f.parts.length - f.done;
+      const opts = f.parts.map(p => `<option value="${p.n}"${p.n === next ? ' selected' : ''}>${esc(p.label)}</option>`).join('');
+      return `<div class="tkfilm" data-i="${i}">
+        <div class="tkhead"><b>${esc(f.title)}</b><span class="dim">part ${f.parts.length} ခု${f.done ? ` · ✅ ${f.done} ထိ ပို့ပြီး` : ''}
+          <button class="tkhide" title="စာရင်းက ဖယ်မယ်">✕</button></span></div>
+        ${left <= 0 ? '<p class="dim">✅ အကုန် ပို့ပြီးပြီ</p>' : `
+        <div class="tkpick">
+          <label>part <select class="tkfrom">${opts}</select> ကနေ</label>
+          <label><input type="number" class="tkcount" min="1" max="50" value="${Math.min(5, left)}"> ခု</label>
+          <button class="ghost tksend">📤 draft ပို့မယ်</button>
+        </div>
+        <p class="dim tkrange"></p>`}
+      </div>`;
+    }).join('') + (extra ? `<p class="dim tkextra">${extra}</p>` : '');
+    document.querySelectorAll('.tkhide').forEach(b => b.addEventListener('click', async () => {
+      const f = j.films[+b.closest('.tkfilm').dataset.i];
+      await fetch('/api/tiktok/telegram/hide?key=' + encodeURIComponent(key), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: f.title, hidden: true }),
+      }).catch(() => {});
+      b.closest('.tkfilm').remove();
+    }));
+    const un = $('#tk-unhide');
+    if (un) un.addEventListener('click', async e => {
+      e.preventDefault();
+      await fetch('/api/tiktok/telegram/hide?key=' + encodeURIComponent(key), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: '*' }),
+      }).catch(() => {});
+      $('#tk-scan').click();
+    });
+    const range = row => {
+      const f = j.films[+row.dataset.i], from = +row.querySelector('.tkfrom').value;
+      const pick = f.parts.filter(p => p.n >= from).slice(0, Math.max(1, +row.querySelector('.tkcount').value || 1));
+      row.querySelector('.tkrange').textContent = pick.length ? `→ part ${pick[0].label} – ${pick[pick.length - 1].label} (${pick.length} ခု)` : '';
+      return pick;
+    };
+    document.querySelectorAll('.tkfilm').forEach(row => {
+      if (!row.querySelector('.tkfrom')) return;
+      range(row);
+      row.querySelector('.tkfrom').addEventListener('change', () => range(row));
+      row.querySelector('.tkcount').addEventListener('input', () => range(row));
+    });
     document.querySelectorAll('.tksend').forEach(b => b.addEventListener('click', async () => {
-      const row = b.closest('.tkfilm'), f = j.films[+row.dataset.i], from = +row.querySelector('.tkfrom').value;
-      const n = f.parts.filter(p => p.n >= from).length;
-      if (!(await askConfirm({ title: `${f.title} — part ${n} ခု draft ပို့မလား?`, icon: 'upload', message: 'Telegram ကနေ ယူပြီး TikTok draft ထဲ ပို့မယ်' }))) return;
+      const row = b.closest('.tkfilm'), f = j.films[+row.dataset.i], pick = range(row);
+      if (!pick.length) return;
+      if (!(await askConfirm({ title: `${f.title} — part ${pick[0].label}–${pick[pick.length - 1].label} (${pick.length} ခု) draft ပို့မလား?`, icon: 'upload', message: 'Telegram ကနေ ယူပြီး TikTok draft ထဲ ပို့မယ်' }))) return;
       const r2 = await fetch('/api/tiktok/telegram?key=' + encodeURIComponent(key), {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: f.title, from }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: f.title, from: pick[0].n, count: pick.length }),
       });
       const j2 = await r2.json().catch(() => ({}));
       if (!r2.ok) { tkTgSay('⚠️ ' + (j2.error || 'မရဘူး')); return; }

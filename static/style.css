@@ -282,3 +282,17 @@ button.gear{padding:0;cursor:pointer;font:inherit}
 .postsbox { margin: 0 0 14px; }
 .postsbox-head { margin: 4px 0 10px; }
 .postitem p { white-space: pre-wrap; margin: 0; line-height: 1.7; }
+
+/* 📱 TikTok drafts from Telegram */
+.tkfilm{border:1px solid var(--card-br);border-radius:14px;padding:12px 14px;margin-top:10px;background:var(--card)}
+.tkhead{display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap}
+.tkpick{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px}
+.tkpick label{display:flex;gap:6px;align-items:center}
+.tkpick select,.tkpick input,#tk-days{background:rgba(255,255,255,.06);color:var(--txt);border:1px solid var(--card-br);
+  border-radius:10px;padding:8px 10px;font:inherit}
+.tkpick input{width:4.5em}
+.tkpick .ghost{width:auto;margin:0;padding:9px 16px;flex:1;min-width:150px;text-align:center}
+.tkrange{margin:8px 0 0}
+.tkhide{background:none;border:none;color:var(--dim);cursor:pointer;font-size:15px;padding:0 0 0 8px}
+.tkhide:hover{color:var(--txt)}
+.tkextra{margin-top:10px}

@@ -3196,9 +3196,46 @@ def tiktok_tg_list():
         vids = telegram.sent_videos(chat, days=max(1, min(14, int(request.args.get("days") or 3))))
     except Exception as e:  # noqa: BLE001
         return jsonify(error=str(e)[:200]), 400
-    _tk_tg["films"] = _tg_groups(vids)
-    return jsonify(films=[{"title": f["title"], "parts": [{"n": p["n"], "label": p["label"]} for p in f["parts"]]}
-                          for f in _tk_tg["films"]], state=_tk_tg["state"], msg=_tk_tg["msg"])
+    # remembered films (a film seen once stays until all its parts went, even past the scan window)
+    store = _settings.setdefault("tiktok_tg_films", {})
+    for f in _tg_groups(vids):
+        old = store.get(f["title"]) or {"parts": [], "date": 0}
+        parts = {p["label"]: {"label": p["label"], "id": p["id"]} for p in old["parts"]}
+        parts.update({p["label"]: {"label": p["label"], "id": p["id"]} for p in f["parts"]})
+        merged = _tg_groups([{"id": p["id"], "caption": f"{f['title']} - {p['label']}", "date": 0, "size": 0}
+                             for p in parts.values()])
+        store[f["title"]] = {"parts": [{"n": p["n"], "label": p["label"], "id": p["id"]}
+                                       for p in (merged[0]["parts"] if merged else [])],
+                             "date": max(old.get("date", 0), f["date"]), "hidden": old.get("hidden", False)}
+    done = _settings.get("tiktok_tg_done") or {}          # film title → last part number sent to drafts
+    for t in list(store):                                  # finished and over a month old: forgotten
+        if int(done.get(t) or 0) >= len(store[t]["parts"]) and time.time() - store[t]["date"] > 30 * 86400:
+            store.pop(t)
+    _save_settings()
+    films = sorted(({"title": t, "done": int(done.get(t) or 0), "date": f["date"], "parts": f["parts"]}
+                    for t, f in store.items() if not f.get("hidden")), key=lambda f: -f["date"])
+    _tk_tg["films"] = [{"title": f["title"], "parts": f["parts"]} for f in films]
+    todo = [f for f in films if f["done"] < len(f["parts"])]
+    return jsonify(films=[{"title": f["title"], "done": f["done"],
+                           "parts": [{"n": p["n"], "label": p["label"]} for p in f["parts"]]} for f in todo],
+                   finished=len(films) - len(todo), hidden=sum(1 for f in store.values() if f.get("hidden")),
+                   state=_tk_tg["state"], msg=_tk_tg["msg"])
+
+
+@app.post("/api/tiktok/telegram/hide")
+def tiktok_tg_hide():
+    """Body {title, hidden}: leave a film out of the list (title "*": bring every hidden one back)."""
+    if not _admin_ok():
+        return jsonify(error="not found"), 404
+    data = request.get_json(force=True, silent=True) or {}
+    store = _settings.setdefault("tiktok_tg_films", {})
+    if data.get("title") == "*":
+        for f in store.values():
+            f["hidden"] = False
+    elif data.get("title") in store:
+        store[data["title"]]["hidden"] = bool(data.get("hidden", True))
+    _save_settings()
+    return jsonify(ok=True)
 
 
 @app.post("/api/tiktok/telegram")
@@ -3213,7 +3250,8 @@ def tiktok_tg_send():
     if _tk_tg["state"] == "sending":
         return jsonify(error="တစ်ခု ပို့နေတုန်း — ပြီးမှ ထပ်နှိပ်ပါ"), 409
     start = int(data.get("from") or 1)
-    todo = [p for p in film["parts"] if p["n"] >= start]
+    count = max(1, min(50, int(data.get("count") or 5)))
+    todo = [p for p in film["parts"] if p["n"] >= start][:count]
 
     def run():
         tmp = JOBS / "_tiktok_tmp"
@@ -3232,8 +3270,10 @@ def tiktok_tg_send():
                     f.unlink(missing_ok=True)
                 sent += 1
                 _settings.setdefault("tiktok_log", []).append(time.time())
+                _settings.setdefault("tiktok_tg_done", {})[film["title"]] = p["n"]   # next time: from the part after
                 _save_settings()
-            _tk_tg.update(state="done", msg=f"✅ {film['title']}: part {len(todo)} ခု TikTok draft ထဲ ရောက်ပြီ")
+            _tk_tg.update(state="done", msg=f"✅ {film['title']}: part {todo[0]['label']}–{todo[-1]['label']} "
+                                            f"({len(todo)} ခု) TikTok draft ထဲ ရောက်ပြီ")
         except Exception as e:  # noqa: BLE001 - shown on the page
             msg = str(e)[:200]
             if "spam_risk" in msg or "too_many" in msg:
