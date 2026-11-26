@@ -14,6 +14,7 @@ from pathlib import Path
 from flask import Flask, jsonify, redirect, render_template, request, send_file
 
 import telegram
+import tiktok
 
 from dub import (tight_spans, voice_lengths, fix_dangling, join_fragments, add_cut_audio, WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segments, configure_tts, frame_layout, render_frames,
                  frame_caption_y,
@@ -458,7 +459,7 @@ for _old in JOBS.iterdir():
 
 # what a finished job needs to be shown again (history, after a restart)
 _META_KEYS = ("id", "name", "title_mm", "status", "stage", "pct", "error", "ext", "parts",
-              "part_times", "covers", "covers_tt", "tt", "cover_pick", "created", "owner", "recap", "tg", "url", "files_gone", "yt_child_id", "kind", "out_name", "fix_note", "fix_changed", "fix_appeal", "risk", "title_mm", "film_name", "episode", "orig_audio", "posts")
+              "part_times", "covers", "covers_tt", "tt", "cover_pick", "created", "owner", "recap", "tg", "url", "files_gone", "yt_child_id", "kind", "out_name", "fix_note", "fix_changed", "fix_appeal", "risk", "title_mm", "film_name", "episode", "orig_audio", "posts", "tk")
 
 
 def _save_meta(job):
@@ -498,7 +499,7 @@ def _load_saved_jobs():
         try:
             meta = json.loads(f.read_text())
             if meta.get("status") == "done" and time.time() - meta.get("created", 0) < (
-                    KEEP_SMALL if meta.get("files_gone") else TTL):
+                    KEEP_SMALL if meta.get("files_gone") or (meta.get("tk") or {}).get("want") else TTL):
                 meta["dir"] = f.parent
                 jobs.setdefault(meta["id"], meta)
             elif meta.get("status") in ("processing", "queued", "review"):
@@ -522,7 +523,8 @@ def sweep_old():
     for jid, job in list(jobs.items()):
         old = (now - job.get("failed_at", job["created"]) > RESUME_KEEP if job["status"] == "failed"
                else now - job["created"] > (KEEP_SMALL if job.get("files_gone") else TTL)
-               and job["status"] in ("done", "review"))
+               and job["status"] in ("done", "review")
+               and not (now - job["created"] < KEEP_SMALL and _tk_pending(job)))   # 📱 parts still for TikTok
         if old:
             shutil.rmtree(job["dir"], ignore_errors=True)
             jobs.pop(jid, None)
@@ -1675,11 +1677,30 @@ def _voice_and_mux(job):
         lead = 0.0
         if job.get("comments"):               # 🎙️ the narrator over the quiet pauses (film sound turned down)
             clips = []
-            for k, c in enumerate(job["comments"]):
+            from concurrent.futures import ThreadPoolExecutor
+            jlog(job, f"🎙️ voicing {len(job['comments'])} narrator remarks…")
+            done_n = [0]
+
+            def _voice(kc):                        # several at once (one by one: ~4 s each, 13 min for 200
+                k, c = kc                          # with nothing in the log — it looked stuck)
                 p = d / f"cm{k}.mp3"
                 try:
                     if not (p.exists() and p.stat().st_size > 0):
                         synthesize(c["text"], NARRATOR_VOICE, p)
+                except Exception as e:  # noqa: BLE001 - checked below
+                    jlog(job, f"remark {k + 1} skipped: {str(e)[:100]}")
+                done_n[0] += 1
+                if done_n[0] % 25 == 0:
+                    jlog(job, f"🎙️ narrator remarks {done_n[0]}/{len(job['comments'])}")
+                    _sp(job, done_n[0] / len(job["comments"]))
+
+            with ThreadPoolExecutor(int(os.environ.get("DUBLAB_TTS_WORKERS") or 6)) as ex:
+                list(ex.map(_voice, enumerate(job["comments"])))
+            for k, c in enumerate(job["comments"]):
+                p = d / f"cm{k}.mp3"
+                try:
+                    if not (p.exists() and p.stat().st_size > 0):
+                        continue
                     if probe_duration(p) <= (c["end"] - c["start"]) * 1.2:
                         clips.append((p, c["start"]))
                         cues.append((c["start"], c["start"] + probe_duration(p), c["text"]))
@@ -1951,6 +1972,7 @@ def _voice_and_mux(job):
     job.update(status="done", stage="done", pct=100)
     _save_meta(job)
     jlog(job, "done ✅")
+    _tk_enqueue(job)
     if job.get("telegram"):
         threading.Thread(target=_telegram_send, args=(job,), daemon=True).start()
     elif _should_preupload(job):
@@ -2953,13 +2975,16 @@ def _telegram_send(job):
         tg["state"] = "done"
         jlog(job, f"sent {len(outs)} file(s) to Telegram ({tg['how']})")
         if tg["how"] == "file":       # the videos are on Telegram now: free the Mac's disk
+            keep = {p for _, p in _tk_pending(job)}   # 📱 parts still waiting for TikTok drafts stay
             for path, _ in outs:      # (a "link" send still needs the file for the download link)
-                path.unlink(missing_ok=True)
+                if path not in keep:
+                    path.unlink(missing_ok=True)
             for f in job["dir"].glob("tg_thumb_*.jpg"):
                 f.unlink(missing_ok=True)
-            job["files_gone"] = True
+            job["files_gone"] = not keep
             tg["gone"] = True
-            jlog(job, "videos deleted from this computer (they are on Telegram)")
+            jlog(job, "videos deleted from this computer (they are on Telegram)"
+                 + (f" — {len(keep)} kept for TikTok drafts" if keep else ""))
         _save_meta(job)
     except Exception as e:  # noqa: BLE001 - shown in the UI
         tg.update(state="failed", error=str(e)[:300])
@@ -2993,6 +3018,308 @@ def telegram_job_status(jid):
     out["pre"] = pre.get("state", "")       # background upload: uploading / ready / failed
     out["pre_pct"] = pre.get("pct", 0)
     return jsonify(out)
+
+
+# ---------------- 📱 TikTok drafts: parts go to the owner's TikTok inbox ----------------
+# Each finished part is sent as a DRAFT (Content Posting API, scope video.upload); the owner
+# posts or schedules it in TikTok. TikTok allows only a few drafts waiting at a time, so a
+# background loop sends at most `tiktok_daily` a day, oldest film first, part after part —
+# job["tk"] = {"want": bool, "upto": n (parts 1..n done, also set by hand), "error": ""}.
+_tk_lock = threading.Lock()
+
+
+def _tk_parts(job):
+    """The TikTok (9:16) files of a job, in part order: [(part number, path)]."""
+    outs = _outputs(job)
+    picked = [(i + 1, p) for i, (p, _) in enumerate(outs)
+              if not job.get("tt") or _out_kind(job, i + 1)[0] == "covers_tt"]
+    return [(n, p) for n, (_, p) in enumerate(picked, 1)]
+
+
+def _tk_pending(job):
+    tk = job.get("tk") or {}
+    if not tk.get("want") or job.get("status") != "done":
+        return []
+    return [(n, p) for n, p in _tk_parts(job) if n > tk.get("upto", 0)]
+
+
+def _tk_token():
+    tok, changed = tiktok.fresh(_settings.get("tiktok_token"))
+    if changed:
+        _settings["tiktok_token"] = tok
+        _save_settings()
+    return tok["access_token"]
+
+
+def _tk_sent_today():
+    now = time.time()
+    log = [t for t in _settings.get("tiktok_log") or [] if now - t < 86400]
+    _settings["tiktok_log"] = log
+    return len(log)
+
+
+def _tk_send_next():
+    """One part to TikTok drafts when the day's quota allows. True when one went."""
+    if not (tiktok.configured() and _settings.get("tiktok_token") and _settings.get("tiktok_auto", True)):
+        return False
+    cap = int(_settings.get("tiktok_daily") or 0)     # 0 = no cap of our own: every part right away
+    if cap and _tk_sent_today() >= cap:               # (the owner closes the laptop after the dub)
+        return False
+    for job in sorted(jobs.values(), key=lambda j: j.get("created", 0)):
+        todo = _tk_pending(job)
+        if not todo:
+            continue
+        n, path = todo[0]
+        tk = job["tk"]
+        if not path.exists():
+            tk["error"] = f"part {n} ဖိုင် မရှိတော့ဘူး (ဖျက်ပြီးသား)"
+            continue
+        try:
+            jlog(job, f"📱 sending part {n} to TikTok drafts…")
+            tiktok.upload_draft(_tk_token(), path)
+        except tiktok.TikTokError as e:
+            tk["error"] = str(e)[:200]
+            if "spam_risk" in str(e) or "too_many" in str(e):    # TikTok's own limit on waiting drafts
+                tk["error"] = ("TikTok က draft အများကြီး မစောင့်ခိုင်းဘူး — ရှိပြီးသား draft တွေ post/ဖျက်ပြီးရင် "
+                               "ကျန်တာ အလိုလို ဆက်ပို့မယ်")
+            jlog(job, f"TikTok draft failed: {e}")
+            _save_meta(job)
+            return False                      # (too many waiting drafts, expired login…): try later
+        tk.update(upto=n, error="", last=time.time())
+        _settings.setdefault("tiktok_log", []).append(time.time())
+        _save_settings()
+        jlog(job, f"📱 part {n} is in TikTok drafts — open TikTok to post or schedule it")
+        if (job.get("tg") or {}).get("state") == "done" and (job.get("tg") or {}).get("how") == "file":
+            path.unlink(missing_ok=True)      # on Telegram and TikTok now: free the disk
+            if not _tk_pending(job):
+                job["files_gone"] = True
+        _save_meta(job)
+        return True
+    return False
+
+
+def _tk_loop():
+    while True:
+        try:
+            with _tk_lock:
+                while _tk_send_next():
+                    pass
+        except Exception as e:  # noqa: BLE001 - the loop must live on
+            print(f"[tiktok] {e}")
+        time.sleep(600)
+
+
+def _tk_enqueue(job):
+    """A finished owner's job: its parts wait for TikTok drafts (when TikTok is connected)."""
+    if (job.get("owner") and job.get("kind") != "fix" and _settings.get("tiktok_token")
+            and _settings.get("tiktok_auto", True) and "tk" not in job):
+        job["tk"] = {"want": True, "upto": 0, "error": ""}
+        _save_meta(job)
+        threading.Thread(target=_tk_send_all, daemon=True).start()
+
+
+def _tk_send_all():
+    """Every waiting part, one after another, right now (the laptop may close after the dub)."""
+    with _tk_lock:
+        try:
+            while _tk_send_next():
+                pass
+        except Exception as e:  # noqa: BLE001
+            print(f"[tiktok] {e}")
+
+
+threading.Thread(target=_tk_loop, daemon=True, name="tiktok").start()
+
+
+@app.get("/api/tiktok")
+def tiktok_state():
+    if not _admin_ok():
+        return jsonify(error="not found"), 404
+    queue = []
+    for job in sorted(jobs.values(), key=lambda j: j.get("created", 0)):
+        tk = job.get("tk")
+        if not tk or job.get("status") != "done":
+            continue
+        total = len(_tk_parts(job))
+        queue.append({"id": job["id"], "title": job.get("title_mm") or job.get("name") or job["id"],
+                      "total": total, "upto": tk.get("upto", 0), "want": tk.get("want", False),
+                      "error": tk.get("error", ""),
+                      "missing": sum(1 for n, p in _tk_parts(job) if n > tk.get("upto", 0) and not p.exists())})
+    return jsonify(configured=tiktok.configured(), connected=bool(_settings.get("tiktok_token")),
+                   user=_settings.get("tiktok_user", ""), auto=_settings.get("tiktok_auto", True),
+                   daily=int(_settings.get("tiktok_daily") or 0), today=_tk_sent_today(),
+                   redirect=tiktok.redirect_uri(), queue=queue)
+
+
+_PART_RE = re.compile(r"^(.*?)\s+-\s+(End|\d+(?:/(?:\d+|End))?)\s*$", re.I)
+
+
+def _tg_groups(vids):
+    """Telegram videos → films: [{"title", "parts": [{"n", "id", "label"}]}], part order."""
+    films = {}
+    for v in vids:
+        head = (v["caption"].splitlines() or [""])[0]
+        head = re.sub(r"^[📱📺🎬]\s*\S*\s*", "", head).strip() if head[:1] in "📱📺🎬" else head
+        m = _PART_RE.match(head)
+        title, label = (m.group(1).strip(), m.group(2)) if m else (head or "(no title)", "1")
+        if v["caption"].startswith("📺"):
+            continue                                   # the YouTube (16:9) copy: not for TikTok
+        f = films.setdefault(title, {"title": title, "parts": [], "date": 0})
+        f["date"] = max(f["date"], v["date"])
+        if any(p["label"] == label for p in f["parts"]):
+            continue                                   # the same part sent twice: the newest counts
+        f["parts"].append({"id": v["id"], "label": label, "size": v["size"]})
+    out = []
+    for f in films.values():
+        def key(p):
+            lab = p["label"].split("/")[-1]
+            return 10 ** 6 if lab.lower() == "end" else int(lab) if lab.isdigit() else 0
+        f["parts"].sort(key=lambda p: (p["label"].split("/")[0] if "/" in p["label"] else "", key(p)))
+        for n, part in enumerate(f["parts"], 1):
+            part["n"] = n
+        out.append(f)
+    return sorted(out, key=lambda f: -f["date"])
+
+
+_tk_tg = {"state": "", "msg": "", "films": []}
+
+
+@app.get("/api/tiktok/telegram")
+def tiktok_tg_list():
+    """📥 Films the bot sent in the last ?days= days, split into parts (to send to TikTok drafts)."""
+    if not _admin_ok():
+        return jsonify(error="not found"), 404
+    chat = _settings.get("telegram_chat_id")
+    if not chat or not telegram.big_available():
+        return jsonify(error="Telegram bot + TELEGRAM_API_ID / HASH လိုတယ်"), 400
+    try:
+        vids = telegram.sent_videos(chat, days=max(1, min(14, int(request.args.get("days") or 3))))
+    except Exception as e:  # noqa: BLE001
+        return jsonify(error=str(e)[:200]), 400
+    _tk_tg["films"] = _tg_groups(vids)
+    return jsonify(films=[{"title": f["title"], "parts": [{"n": p["n"], "label": p["label"]} for p in f["parts"]]}
+                          for f in _tk_tg["films"]], state=_tk_tg["state"], msg=_tk_tg["msg"])
+
+
+@app.post("/api/tiktok/telegram")
+def tiktok_tg_send():
+    """Body {title, from}: parts from..last of that film: Telegram → this Mac → TikTok drafts."""
+    if not _admin_ok():
+        return jsonify(error="not found"), 404
+    data = request.get_json(force=True, silent=True) or {}
+    film = next((f for f in _tk_tg["films"] if f["title"] == data.get("title")), None)
+    if not film:
+        return jsonify(error="ဇာတ်ကား မတွေ့ဘူး — 🔎 ပြန်ရှာပါ"), 404
+    if _tk_tg["state"] == "sending":
+        return jsonify(error="တစ်ခု ပို့နေတုန်း — ပြီးမှ ထပ်နှိပ်ပါ"), 409
+    start = int(data.get("from") or 1)
+    todo = [p for p in film["parts"] if p["n"] >= start]
+
+    def run():
+        tmp = JOBS / "_tiktok_tmp"
+        tmp.mkdir(exist_ok=True)
+        _tk_tg.update(state="sending", msg="")
+        sent = 0
+        try:
+            for p in todo:
+                _tk_tg["msg"] = f"{film['title']} part {p['label']}: Telegram ကနေ ယူနေတယ်… ({sent}/{len(todo)})"
+                f = tmp / f"tg_{p['id']}.mp4"
+                telegram.download_video(_settings["telegram_chat_id"], p["id"], f)
+                _tk_tg["msg"] = f"{film['title']} part {p['label']}: TikTok draft ပို့နေတယ်… ({sent}/{len(todo)})"
+                try:
+                    tiktok.upload_draft(_tk_token(), f)
+                finally:
+                    f.unlink(missing_ok=True)
+                sent += 1
+                _settings.setdefault("tiktok_log", []).append(time.time())
+                _save_settings()
+            _tk_tg.update(state="done", msg=f"✅ {film['title']}: part {len(todo)} ခု TikTok draft ထဲ ရောက်ပြီ")
+        except Exception as e:  # noqa: BLE001 - shown on the page
+            msg = str(e)[:200]
+            if "spam_risk" in msg or "too_many" in msg:
+                msg = "TikTok က draft အများကြီး မစောင့်ခိုင်းဘူး — ရှိပြီးသား draft တွေ post ပြီးမှ ကျန်တာ ပို့ပါ"
+            _tk_tg.update(state="failed", msg=f"⚠️ {sent}/{len(todo)} ခု ပို့ပြီး — {msg}")
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify(ok=True, count=len(todo))
+
+
+@app.get("/api/tiktok/telegram/status")
+def tiktok_tg_status():
+    if not _admin_ok():
+        return jsonify(error="not found"), 404
+    return jsonify(state=_tk_tg["state"], msg=_tk_tg["msg"])
+
+
+@app.get("/tiktok/login")
+def tiktok_login():
+    if not _admin_ok():
+        return "not found", 404
+    if not tiktok.configured():
+        return "TIKTOK_CLIENT_KEY / TIKTOK_CLIENT_SECRET (.env) and NGROK_DOMAIN are needed", 400
+    return redirect(tiktok.login_url())
+
+
+@app.get("/tiktok/callback")
+def tiktok_callback():
+    page = ("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'>"
+            "<body style='font-family:sans-serif;background:#08080f;color:#f2f2f8;padding:40px;text-align:center'>"
+            "<h2>{}</h2><p>{}</p></body>")
+    if request.args.get("error"):
+        return page.format("❌ TikTok", request.args.get("error_description") or request.args["error"]), 400
+    if not tiktok.check_state(request.args.get("state")):
+        return page.format("❌ Link expired", "Settings မှာ Connect TikTok ကို ပြန်နှိပ်ပါ"), 400
+    try:
+        tok = tiktok.exchange_code(request.args.get("code") or "")
+        user = tiktok.user_info(tok["access_token"])
+    except tiktok.TikTokError as e:
+        return page.format("❌ TikTok", str(e)[:200]), 400
+    _settings.update(tiktok_token=tok, tiktok_user=user.get("display_name") or tok.get("open_id", ""))
+    _save_settings()
+    return page.format(f"✅ TikTok connected — {_settings['tiktok_user']}",
+                       "ဒီ tab ကို ပိတ်ပြီး DubLab Settings ကို ပြန်သွားလို့ရပါပြီ")
+
+
+@app.post("/api/tiktok/settings")
+def tiktok_settings():
+    if not _admin_ok():
+        return jsonify(error="not found"), 404
+    data = request.get_json(force=True, silent=True) or {}
+    if "auto" in data:
+        _settings["tiktok_auto"] = bool(data["auto"])
+    if "daily" in data:
+        _settings["tiktok_daily"] = max(0, min(50, int(data.get("daily") or 0)))
+    _save_settings()
+    return jsonify(ok=True)
+
+
+@app.post("/api/tiktok/disconnect")
+def tiktok_disconnect():
+    if not _admin_ok():
+        return jsonify(error="not found"), 404
+    _settings.pop("tiktok_token", None)
+    _settings.pop("tiktok_user", None)
+    _save_settings()
+    return jsonify(ok=True)
+
+
+@app.post("/api/jobs/<jid>/tiktok")
+def tiktok_job(jid):
+    """Body {upto: n} (parts 1..n are already on TikTok) and/or {want: bool}."""
+    if not _admin_ok():
+        return jsonify(error="not found"), 404
+    job = jobs.get(jid)
+    if not job:
+        return jsonify(error="job မတွေ့ဘူး"), 404
+    data = request.get_json(force=True, silent=True) or {}
+    tk = job.setdefault("tk", {"want": True, "upto": 0, "error": ""})
+    if "upto" in data:
+        tk["upto"] = max(0, min(len(_tk_parts(job)), int(data.get("upto") or 0)))
+    if "want" in data:
+        tk["want"] = bool(data["want"])
+    tk["error"] = ""
+    _save_meta(job)
+    return jsonify(ok=True, tk=tk)
 
 
 _MODE_TAG = {"recap": "မြန်မာ Recap", "orig": "မြန်မာစာတန်း", "dub": "မြန်မာ အသံ"}

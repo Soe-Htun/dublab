@@ -230,6 +230,94 @@ $('#tg-disconnect').addEventListener('click', async () => {
 });
 loadTelegram();
 
+// ---- 📱 TikTok drafts: Connect once (TikTok login through the ngrok address), then parts go to drafts ----
+function tkSay(html) { const m = $('#tk-msg'); m.innerHTML = html; m.hidden = false; }
+async function loadTikTok() {
+  let s;
+  try { s = await (await fetch('/api/tiktok?key=' + encodeURIComponent(key))).json(); } catch (e) { return; }
+  if (!s.configured) {
+    $('#tk-line').innerHTML = '⚠️ <code>.env</code> ထဲမှာ TIKTOK_CLIENT_KEY / TIKTOK_CLIENT_SECRET / TIKTOK_REDIRECT_URI လိုတယ်';
+    $('#tk-connect').hidden = true; return;
+  }
+  $('#tk-line').innerHTML = s.connected
+    ? `✅ <b>${esc(s.user)}</b> · ၂၄ နာရီအတွင်း draft <b>${s.today}</b> ခု ပို့ပြီး`
+    : 'မချိတ်ရသေးဘူး — Connect နှိပ်ပြီး TikTok မှာ Allow လုပ်ပါ';
+  $('#tk-connect').hidden = s.connected;
+  $('#tk-disconnect').hidden = !s.connected;
+  $('#tk-autorow').hidden = !s.connected;
+  $('#tk-tg').hidden = !s.connected;
+  $('#tk-auto').checked = !!s.auto;
+  $('#tk-queue').innerHTML = (s.queue || []).map(q => `
+    <div class="tgline tkrow" data-id="${esc(q.id)}">
+      <b>${esc(q.title)}</b> — part <input type="number" class="tkupto" min="0" max="${q.total}" value="${q.upto}" style="width:4em"> / ${q.total} ထိ TikTok မှာ ရှိပြီး
+      ${q.upto >= q.total ? '✅' : `→ နောက် <b>part ${q.upto + 1}</b>`}
+      ${q.missing ? ` · ⚠️ ဖိုင် ${q.missing} ခု ဖျက်ပြီးသား` : ''}
+      ${q.error ? `<br><span class="dim">⚠️ ${esc(q.error)}</span>` : ''}
+    </div>`).join('');
+  document.querySelectorAll('.tkupto').forEach(inp => inp.addEventListener('change', async () => {
+    const id = inp.closest('.tkrow').dataset.id;
+    await fetch(`/api/jobs/${id}/tiktok?key=` + encodeURIComponent(key), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upto: +inp.value }),
+    }).catch(() => {});
+    loadTikTok();
+  }));
+}
+$('#tk-connect').addEventListener('click', () => {
+  window.open('/tiktok/login?key=' + encodeURIComponent(key), '_blank', 'noopener');
+  tkSay('TikTok login tab မှာ Allow နှိပ်ပြီးရင် ဒီစာမျက်နှာ ပြန်လာပါ');
+});
+$('#tk-disconnect').addEventListener('click', async () => {
+  if (!(await askConfirm({ title: 'TikTok ကို ဖြုတ်မလား?', icon: 'unplug', message: 'ပြန်ချိတ်ရင် login ပြန်ဝင်ရမယ်' }))) return;
+  await fetch('/api/tiktok/disconnect?key=' + encodeURIComponent(key), { method: 'POST' }).catch(() => {});
+  loadTikTok();
+});
+$('#tk-auto').addEventListener('change', async () => {
+  await fetch('/api/tiktok/settings?key=' + encodeURIComponent(key), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auto: $('#tk-auto').checked }),
+  }).catch(() => {});
+});
+// 📥 parts the bot already sent to Telegram (deleted from this Mac): Telegram → TikTok drafts
+function tkTgSay(t) { const m = $('#tk-tgmsg'); m.textContent = t; m.hidden = !t; }
+let tkPoll = null;
+async function tkTgStatus() {
+  try {
+    const s = await (await fetch('/api/tiktok/telegram/status?key=' + encodeURIComponent(key))).json();
+    tkTgSay(s.msg || '');
+    if (s.state !== 'sending' && tkPoll) { clearInterval(tkPoll); tkPoll = null; loadTikTok(); }
+  } catch (e) { /* next tick */ }
+}
+$('#tk-scan').addEventListener('click', async () => {
+  const btn = $('#tk-scan'); btn.disabled = true; tkTgSay('🔎 ရှာနေတယ်…'); $('#tk-films').innerHTML = '';
+  try {
+    const r = await fetch(`/api/tiktok/telegram?days=${$('#tk-days').value}&key=` + encodeURIComponent(key));
+    const j = await r.json();
+    if (!r.ok) { tkTgSay('⚠️ ' + (j.error || 'မရဘူး')); btn.disabled = false; return; }
+    tkTgSay(j.films.length ? '' : 'ဗီဒီယို မတွေ့ဘူး');
+    $('#tk-films').innerHTML = j.films.map((f, i) => `
+      <div class="tgline tkfilm" data-i="${i}">
+        <b>${esc(f.title)}</b> · part ${f.parts.length} ခု (${esc(f.parts.map(p => p.label).join(', '))})<br>
+        part <select class="tkfrom">${f.parts.map(p => `<option value="${p.n}">${esc(p.label)}</option>`).join('')}</select> ကနေ
+        <button class="ghost tksend">📤 draft ပို့မယ်</button>
+      </div>`).join('');
+    document.querySelectorAll('.tksend').forEach(b => b.addEventListener('click', async () => {
+      const row = b.closest('.tkfilm'), f = j.films[+row.dataset.i], from = +row.querySelector('.tkfrom').value;
+      const n = f.parts.filter(p => p.n >= from).length;
+      if (!(await askConfirm({ title: `${f.title} — part ${n} ခု draft ပို့မလား?`, icon: 'upload', message: 'Telegram ကနေ ယူပြီး TikTok draft ထဲ ပို့မယ်' }))) return;
+      const r2 = await fetch('/api/tiktok/telegram?key=' + encodeURIComponent(key), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: f.title, from }),
+      });
+      const j2 = await r2.json().catch(() => ({}));
+      if (!r2.ok) { tkTgSay('⚠️ ' + (j2.error || 'မရဘူး')); return; }
+      tkTgSay('📤 စပို့နေပြီ…');
+      if (!tkPoll) tkPoll = setInterval(tkTgStatus, 3000);
+    }));
+  } catch (e) { tkTgSay('⚠️ မရဘူး'); }
+  btn.disabled = false;
+});
+loadTikTok();
+tkTgStatus();
+setInterval(() => { if (!document.hidden) loadTikTok(); }, 30000);
+
 load();
 setInterval(() => { if (!document.hidden) load(); }, 30000);
 

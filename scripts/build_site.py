@@ -43,9 +43,11 @@ def main():
         f'<title>{name}</title><style>{css}</style><main><section class="card">'
         f'<h2>{name}</h2><p><a href="/terms/">Terms of Service</a> · '
         f'<a href="/privacy/">Privacy Policy</a></p></section></main></html>', encoding="utf-8")
-    for f in (ROOT / "site_static").glob("*"):
+    for f in (ROOT / "site_static").rglob("*"):     # (sub-folders too: tiktok/callback/)
         if f.is_file() and f.name != ".gitkeep":
-            shutil.copy2(f, OUT / f.name)
+            dest = OUT / f.relative_to(ROOT / "site_static")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, dest)
     print(f"built {OUT.relative_to(ROOT)}/ (contact: {'set' if email else 'none'}, name: {name})")
 
 

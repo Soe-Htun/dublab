@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connecting TikTok…</title>
+<body style="font-family:system-ui,sans-serif;background:#08080f;color:#f2f2f8;padding:40px;text-align:center">
+<h2>Connecting TikTok…</h2>
+<p id="m">Sending you back to the uploader on this computer.</p>
+<script>
+  // TikTok sends ?code=…&state=… here (a public https page); the uploader itself runs on
+  // this computer, so the login code is handed on to it — nothing is stored on this site.
+  var port = localStorage.getItem('dublabPort') || '8092';
+  var to = 'http://127.0.0.1:' + port + '/tiktok/callback' + location.search;
+  document.getElementById('m').innerHTML += '<br><br>If nothing happens, <a style="color:#22d3ee" href="' + to + '">click here</a>.';
+  location.replace(to);
+</script>
+</body></html>

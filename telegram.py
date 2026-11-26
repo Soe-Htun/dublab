@@ -431,3 +431,59 @@ def download_video(chat_id, msg_id, dest, progress=None):
             raise
         except Exception as e:  # noqa: BLE001
             raise TelegramError(str(e)[:300]) from None
+
+
+def sent_videos(chat_id, days=3):
+    """📥 The videos in the owner's chat with the bot from the last `days` days (what the bot
+    sent: finished parts with their "Title - 3" caption), newest first:
+    [{"id", "caption", "date", "size", "duration"}]. Bots can't read a chat's history, so
+    messages are fetched by id, going back from the newest one."""
+    import asyncio
+    import time as _t
+    from telethon.tl.types import PeerUser
+    probe = send_message(chat_id, "🔎 …")           # the newest message id in this chat
+    top = int(probe.get("message_id") or 0)
+    try:
+        _call("deleteMessage", {"chat_id": chat_id, "message_id": top})
+    except TelegramError:
+        pass
+    since = _t.time() - days * 86400
+
+    async def run():
+        client = _client()
+        await client.start(bot_token=token())
+        out = []
+        try:
+            try:
+                peer = await client.get_input_entity(chat_id)
+            except ValueError:
+                peer = await client.get_input_entity(PeerUser(chat_id))
+            hi, empty = top - 1, 0
+            while hi > 0 and empty < 3:
+                ids = list(range(hi, max(0, hi - 100), -1))
+                msgs = await client.get_messages(peer, ids=ids)
+                old = 0
+                for m in msgs:
+                    if not m:
+                        continue
+                    if m.date.timestamp() < since:
+                        old += 1
+                        continue
+                    v = getattr(m, "video", None) or (m.document if m.document and str(
+                        getattr(m.document, "mime_type", "")).startswith("video/") else None)
+                    if v and m.out:                   # sent by the bot
+                        dur = 0
+                        for a in getattr(v, "attributes", []) or []:
+                            dur = int(getattr(a, "duration", 0) or dur)
+                        out.append({"id": m.id, "caption": (m.message or "").strip(), "date": int(m.date.timestamp()),
+                                    "size": int(getattr(v, "size", 0) or 0), "duration": dur})
+                if old and old >= sum(1 for m in msgs if m) * 0.9:
+                    break                              # this batch is older than `days`
+                empty = empty + 1 if not any(msgs) else 0
+                hi -= 100
+        finally:
+            await client.disconnect()
+        return out
+
+    with _big_lock:
+        return asyncio.run(run())
