@@ -91,6 +91,10 @@ try:
             _settings[_k] = _saved[_k]
     if isinstance(_saved.get("telegram_token"), str):   # set on the admin page
         telegram.set_token(_saved["telegram_token"])
+    for _k, _t in (("tiktok_token", dict), ("tiktok_user", str), ("tiktok_auto", bool), ("tiktok_daily", int),
+                   ("tiktok_log", list), ("tiktok_tg_done", dict), ("tiktok_tg_films", dict)):
+        if isinstance(_saved.get(_k), _t):          # 📱 TikTok login + what was sent (kept over restarts)
+            _settings[_k] = _saved[_k]
     if isinstance(_saved.get("telegram_chat_id"), int):
         _settings["telegram_chat_id"] = _saved["telegram_chat_id"]
         _settings["telegram_chat_name"] = str(_saved.get("telegram_chat_name") or "")[:80]
