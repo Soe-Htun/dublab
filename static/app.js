@@ -98,6 +98,8 @@ $('#go').addEventListener('click', () => {
   const music = $('#musicchk') && $('#musicchk').checked;        // 🎵 a Burmese song + typewriter lyrics
   fd.append('music', music ? '1' : '0');
   if (music && $('#musicphoto').files[0]) fd.append('music_photo', $('#musicphoto').files[0]);
+  if (music) fd.append('music_lyrics', ($('#musiclyrics').value || '').trim());
+  if (music) fd.append('music_title', ($('#musictitle').value || '').trim());
   try { localStorage.setItem('dublab_split', split); } catch (e) {}
   fd.append('logo', $('#logochk') && $('#logochk').checked ? '1' : '0');
   fd.append('telegram', !$('#tgrow').hidden && $('#tgchk').checked ? '1' : '0');

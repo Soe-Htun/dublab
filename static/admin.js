@@ -246,6 +246,9 @@ async function loadTikTok() {
   $('#tk-disconnect').hidden = !s.connected;
   $('#tk-autorow').hidden = !s.connected;
   $('#tk-tg').hidden = !s.connected;
+  $('#tk-moderow').hidden = !s.connected;
+  document.querySelectorAll('input[name="tkmode"]').forEach(r => { r.checked = r.value === s.mode; });
+  $('#tk-reconnect').hidden = !(s.mode === 'private' && !s.can_post);
   $('#tk-auto').checked = !!s.auto;
   $('#tk-queue').innerHTML = (s.queue || []).map(q => `
     <div class="tgline tkrow" data-id="${esc(q.id)}">
@@ -271,6 +274,12 @@ $('#tk-disconnect').addEventListener('click', async () => {
   await fetch('/api/tiktok/disconnect?key=' + encodeURIComponent(key), { method: 'POST' }).catch(() => {});
   loadTikTok();
 });
+document.querySelectorAll('input[name="tkmode"]').forEach(r => r.addEventListener('change', async () => {
+  await fetch('/api/tiktok/settings?key=' + encodeURIComponent(key), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: r.value }),
+  }).catch(() => {});
+  loadTikTok();
+}));
 $('#tk-auto').addEventListener('change', async () => {
   await fetch('/api/tiktok/settings?key=' + encodeURIComponent(key), {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auto: $('#tk-auto').checked }),

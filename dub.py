@@ -2218,6 +2218,7 @@ def download_url(url, job_dir, max_mb):
         import json as _json
         keep = {k: info.get(k) for k in ("extractor_key", "channel", "uploader", "channel_is_verified",
                                          "channel_follower_count", "license", "title", "categories")}
+        keep["description"] = (info.get("description") or "")[:6000]   # 🎵 song uploads often carry the lyrics
         (Path(job_dir) / "src_info.json").write_text(_json.dumps(keep, ensure_ascii=False))
     except Exception:  # noqa: BLE001 - only a note
         pass

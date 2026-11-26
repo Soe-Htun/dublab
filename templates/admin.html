@@ -126,14 +126,19 @@
   </section>
 
   <section class="card" id="tkcard">
-    <h2>📱 TikTok drafts</h2>
+    <h2>📱 TikTok</h2>
     <p class="note left">ဗီဒီယိုပြီးတာနဲ့ part အားလုံးကို ခင်ဗျား TikTok ရဲ့ <b>draft</b> ထဲ ချက်ချင်း ပို့ပေးမယ်။ TikTok app မှာ ဖွင့်ပြီး caption ထည့်၊ cover ရွေး၊ post / schedule လုပ်ပါ။</p>
     <p class="tgline" id="tk-line">–</p>
     <div class="tgbtns">
       <button class="ghost" id="tk-connect">🔗 Connect TikTok</button>
       <button class="ghost danger" id="tk-disconnect" hidden>Disconnect</button>
     </div>
-    <label class="setrow" id="tk-autorow" hidden><input type="checkbox" id="tk-auto"> ပြီးတဲ့ ဗီဒီယိုတိုင်း TikTok draft ကို အလိုအလျောက် ပို့မယ်</label>
+    <div class="tkmode" id="tk-moderow" hidden>
+      <label><input type="radio" name="tkmode" value="private"> 📌 <b>Profile မှာ Only me + caption</b> <span class="dim">— caption / #tags ပါပြီးသား၊ Everyone ပြောင်းရုံပဲ</span></label>
+      <label><input type="radio" name="tkmode" value="draft"> 📥 <b>Inbox draft</b> <span class="dim">— caption မပါ၊ inbox ကနေ တစ်ခုချင်း ဖွင့်ရ</span></label>
+      <p class="note left" id="tk-reconnect" hidden>⚠️ Only me + caption အတွက် TikTok ခွင့်ပြုချက် အသစ် လိုတယ် — <b>Disconnect</b> → <b>Connect TikTok</b> ပြန်လုပ်ပါ</p>
+    </div>
+    <label class="tkauto" id="tk-autorow" hidden><input type="checkbox" id="tk-auto"> ပြီးတဲ့ ဗီဒီယိုတိုင်း TikTok draft ကို အလိုအလျောက် ပို့မယ်</label>
     <div id="tk-queue"></div>
     <div id="tk-tg" hidden>
       <h3>📥 Telegram ထဲက ဗီဒီယိုတွေကို draft ပို့မယ်</h3>

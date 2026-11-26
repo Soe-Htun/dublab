@@ -142,7 +142,7 @@ def _keys(first):
 _turn = __import__("itertools").count()
 
 
-def _call(prompt, api_key, max_tokens=8192, images=None):
+def _call(prompt, api_key, max_tokens=8192, images=None, search=False):
     """images: optional [(label, jpeg bytes)] sent after the prompt, each
     preceded by its label so the model can refer to it. Calls take turns over
     GEMINI_API_KEYS (each key has its own per-minute limit, so parallel calls
@@ -155,7 +155,7 @@ def _call(prompt, api_key, max_tokens=8192, images=None):
         if _spent.get(key) == today:
             continue
         try:
-            return _call_one(prompt, key, max_tokens, images)
+            return _call_one(prompt, key, max_tokens, images, search)
         except RateLimited as e:
             last = e
             if not e.daily:
@@ -189,7 +189,7 @@ def _say_wait(msg):
             pass
 
 
-def _call_one(prompt, api_key, max_tokens=8192, images=None):
+def _call_one(prompt, api_key, max_tokens=8192, images=None, search=False):
     models = [MODEL] + [m for m in FALLBACK_MODELS if m != MODEL]
     parts = [{"text": prompt}]
     for item in images or []:          # (label, bytes) JPEGs, or (label, bytes, mime) e.g. audio
@@ -205,6 +205,8 @@ def _call_one(prompt, api_key, max_tokens=8192, images=None):
             "safetySettings": [{"category": c, "threshold": "BLOCK_NONE"} for c in (
                 "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH",
                 "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT")]}
+    if search:                         # 🔎 Google Search grounding (e.g. a song's real lyrics)
+        body["tools"] = [{"google_search": {}}]
     limited = 0
     attempt = 0
     loc_wait = 0
@@ -858,6 +860,93 @@ for mumbled bits (leave them out). Skip instrumental parts. Like:
 Output only such lines."""
 
 
+FIND_LYRICS_PROMPT = """Find the real, complete LYRICS of this Burmese (Myanmar) song by searching the web:
+{title}
+(the title may also name the singer, e.g. "တေးဆို-…"). Use only lyrics you actually found on a web page for THIS
+song — never write or guess lyrics yourself. Answer with the lyrics only, one sung line per line, in Myanmar script,
+in the order they are sung (no title, no singer, no notes). If you did not find this song's lyrics, answer exactly
+NOT_FOUND."""
+
+
+def _search_once(prompt, api_key, timeout=60):
+    """One Gemini call with Google Search, no waiting and retrying: web search has its own small
+    quota (on the free tier it often answers 429 at once) — "" then, so a job never waits minutes."""
+    body = {"contents": [{"parts": [{"text": prompt}]}], "tools": [{"google_search": {}}],
+            "generationConfig": {"maxOutputTokens": 4096, "temperature": 0.2}}
+    for key in _keys(api_key)[:2]:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent?key={key}"
+        try:
+            req = urllib.request.Request(url, data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=timeout, context=_SSL) as r:
+                data = json.loads(r.read().decode())
+            parts = ((data.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
+            return "".join(p.get("text", "") for p in parts)
+        except Exception as e:  # noqa: BLE001 - next key, then give up
+            print(f"[gemini] web search skipped: {str(e)[:120]}")
+    return ""
+
+
+def find_lyrics(title, api_key):
+    """🔎 A song's lyrics from the web (Gemini + Google Search), or "" when not found."""
+    if not (title or "").strip():
+        return ""
+    raw = _search_once(FIND_LYRICS_PROMPT.format(title=title.strip()[:150]), api_key)
+    text = (raw or "").strip()
+    if not text or "NOT_FOUND" in text[:40]:
+        return ""
+    lines = [ln.strip(" -*•") for ln in text.splitlines() if ln.strip()]
+    mm = sum(1 for c in "".join(lines) if "\u1000" <= c <= "\u109f")
+    if len(lines) < 4 or mm < 40:                   # not Burmese lyrics: don't trust it
+        return ""
+    return "\n".join(lines)
+
+
+DESC_LYRICS_PROMPT = """Below is the description of a video of a Burmese (Myanmar) song: {title}
+If it contains the song's LYRICS, copy them out exactly (one sung line per line, Myanmar script, in order),
+leaving out everything that is not lyrics (titles, credits, links, hashtags, notes). If it has no lyrics, answer
+exactly NOT_FOUND.
+
+DESCRIPTION:
+{desc}"""
+
+
+def lyrics_from_description(desc, title, api_key):
+    """📝 The lyrics many song uploads put in their description, or ""."""
+    mm = sum(1 for c in desc or "" if "\u1000" <= c <= "\u109f")
+    if mm < 60:
+        return ""
+    try:
+        raw = _call(DESC_LYRICS_PROMPT.replace("{title}", title or "").replace("{desc}", desc[:6000]),
+                    api_key, max_tokens=4096)
+    except Exception:  # noqa: BLE001
+        return ""
+    lines = [ln.strip(" -*•") for ln in raw.strip().splitlines() if ln.strip()]
+    if not lines or "NOT_FOUND" in lines[0] or len(lines) < 4:
+        return ""
+    joined = "\n".join(lines)
+    # only lines really in the description (nothing made up)
+    kept = [ln for ln in lines if ln.replace(" ", "") in desc.replace(" ", "")]
+    return "\n".join(kept) if len(kept) >= max(4, len(lines) * 0.7) else ""
+
+
+ALIGN_LYRICS_PROMPT = """This audio is a {length:.0f}-second piece of a BURMESE (Myanmar) song (the singing voice, music taken
+out where possible). Write down the lines that are ACTUALLY SUNG in this piece, with the time each starts (from 0
+at the start of this piece).
+Below are the song's lyrics as a REFERENCE only: this singer (often a live or cover performance) may skip lines,
+repeat some, change words, or sing a different order. Follow the SINGING, not the reference:
+- a line sung as in the reference → write it with the reference's words and spelling;
+- a line sung differently → write what is really sung (the reference only helps with spelling);
+- reference lines that are not sung → leave them out; lines sung that are not in the reference → write them too;
+- a repeated chorus is written again each time it is sung; leave out instrumental parts.
+Like:
+00:12|<the sung line>
+Output only such lines.
+
+REFERENCE LYRICS:
+{lyrics}"""
+
+
 def transcribe_burmese(chunks, api_key, log=None, prompt=None):
     """Whisper can't write Burmese (it gave lines like "වවවව…"), so Gemini listens
     instead. chunks: [(start_seconds, length_seconds, mp3 bytes)].
@@ -868,7 +957,7 @@ def transcribe_burmese(chunks, api_key, log=None, prompt=None):
     def one(ch):
         t0, length, mp3 = ch
         try:
-            raw = _call((prompt or TRANSCRIBE_PROMPT).format(length=length), api_key, max_tokens=8192,
+            raw = _call((prompt or TRANSCRIBE_PROMPT).replace("{length:.0f}", f"{length:.0f}"), api_key, max_tokens=8192,
                         images=[("Audio:", mp3, "audio/mp3")])
         except (RuntimeError, Blocked) as e:
             errors.append(e)

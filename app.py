@@ -92,7 +92,8 @@ try:
     if isinstance(_saved.get("telegram_token"), str):   # set on the admin page
         telegram.set_token(_saved["telegram_token"])
     for _k, _t in (("tiktok_token", dict), ("tiktok_user", str), ("tiktok_auto", bool), ("tiktok_daily", int),
-                   ("tiktok_log", list), ("tiktok_tg_done", dict), ("tiktok_tg_films", dict)):
+                   ("tiktok_log", list), ("tiktok_tg_done", dict), ("tiktok_tg_films", dict),
+                   ("tiktok_mode", str)):
         if isinstance(_saved.get(_k), _t):          # 📱 TikTok login + what was sent (kept over restarts)
             _settings[_k] = _saved[_k]
     if isinstance(_saved.get("telegram_chat_id"), int):
@@ -975,7 +976,7 @@ def _game_job(job):
 def _music_job(job):
     """🎵 A Burmese song with typewriter lyrics (Gemini listens to the singing). With the
     owner's photo: a music-player frame (only the song's sound); without: the song's own video."""
-    from gemini import LYRICS_PROMPT
+    from gemini import ALIGN_LYRICS_PROMPT, LYRICS_PROMPT, find_lyrics, lyrics_from_description
     from dub import render_music_video
     d = job["dir"]
     src = d / ("input" + job["ext"])
@@ -1009,12 +1010,35 @@ def _music_job(job):
     except Exception as e:  # noqa: BLE001 - the full mix then
         jlog(job, f"voice separation skipped: {str(e)[:100]}")
     job.update(stage="transcribe", pct=35)
-    jlog(job, "🎤 Gemini is writing down the lyrics…")
     segs = job.get("segs")
     if not segs:
+        # 📝 the REAL lyrics first (pasted by the owner, else found on the web by the song's title):
+        # Gemini then only times them against the singing — written down by ear they came out wrong
+        lyrics = (job.get("music_lyrics") or "").strip()
+        if lyrics:
+            jlog(job, f"📝 using the pasted lyrics ({len(lyrics.splitlines())} lines)")
+        if not lyrics and (d / "src_info.json").exists():     # the upload's own description
+            try:
+                info = json.loads((d / "src_info.json").read_text())
+                lyrics = lyrics_from_description(info.get("description") or "", job.get("name") or "", key)
+            except Exception:  # noqa: BLE001
+                lyrics = ""
+            if lyrics:
+                jlog(job, f"📝 lyrics found in the video's description ({len(lyrics.splitlines())} lines)")
+        if not lyrics:
+            song = job.get("music_title") or job.get("name") or ""   # the name typed by the owner first
+            jlog(job, f"🔎 looking up the lyrics of “{song[:80]}” on the web…")
+            lyrics = find_lyrics(song, key)
+            if not lyrics and job.get("music_title") and job.get("name"):
+                lyrics = find_lyrics(job["name"], key)              # then the video's own title
+            jlog(job, f"📝 lyrics found on the web ({len(lyrics.splitlines())} lines) — timing them to the singing"
+                 if lyrics else "lyrics not found on the web — Gemini writes them down by ear (may have mistakes; "
+                                "paste the lyrics next time for exact words)")
+        prompt = ALIGN_LYRICS_PROMPT.replace("{lyrics}", lyrics) if lyrics else LYRICS_PROMPT
+        jlog(job, "🎤 Gemini is timing the lyrics…" if lyrics else "🎤 Gemini is writing down the lyrics…")
         try:
             segs = transcribe_burmese(burmese_chunks(listen, piece=180), key, lambda i, n: _sp(job, i / max(n, 1)),
-                                      prompt=LYRICS_PROMPT)
+                                      prompt=prompt)
         except RuntimeError as e:
             if "empty response" not in str(e):
                 raise ValueError(str(e)[:300]) from None
@@ -2332,7 +2356,9 @@ def create_job():
                      "game_meme": request.form.get("game_meme", "0") == "1",
                      "game_hero": re.sub(r"[^\w .'-]", "", request.form.get("game_hero") or "")[:30]}
                     if request.form.get("game") == "1" else {}),
-                 **({"kind": "music", "recap": 0, "split": 0, "orig_audio": False}
+                 **({"kind": "music", "recap": 0, "split": 0, "orig_audio": False,
+                     "music_lyrics": (request.form.get("music_lyrics") or "").strip()[:8000],
+                     "music_title": re.sub(r"\s+", " ", request.form.get("music_title") or "").strip()[:80]}
                     if request.form.get("music") == "1" else {}), "cover": cover, "logo": logo, "name": name,
                  "recap": recap,
                  "tg_src": tg_msg,
@@ -3174,6 +3200,24 @@ def _tk_token():
     return tok["access_token"]
 
 
+def _tk_caption(job, n, total):
+    """The TikTok caption of part n: "Title - 3" + the TikTok text + tags (as sent to Telegram)."""
+    from dub import part_suffix
+    p = job.get("posts") or {}
+    head = ((job.get("title_mm") or job.get("name") or "") +
+            (part_suffix(n, total, job.get("episode")) if total > 1 else "")).strip()
+    return (head + ("\n" + p["tiktok"].strip() if p.get("tiktok") else "")).strip()
+
+
+def _tk_push(path, caption):
+    """To TikTok the chosen way (Settings): "private" = on the profile as Only me with its caption;
+    "draft" = to the TikTok inbox (no caption — TikTok doesn't take one there). Returns (publish_id, mode)."""
+    mode = _settings.get("tiktok_mode") or "private"
+    if mode == "private":
+        return tiktok.post_private(_tk_token(), path, caption), mode
+    return tiktok.upload_draft(_tk_token(), path), mode
+
+
 def _tk_sent_today():
     now = time.time()
     log = [t for t in _settings.get("tiktok_log") or [] if now - t < 86400]
@@ -3198,20 +3242,26 @@ def _tk_send_next():
             tk["error"] = f"part {n} ဖိုင် မရှိတော့ဘူး (ဖျက်ပြီးသား)"
             continue
         try:
-            jlog(job, f"📱 sending part {n} to TikTok drafts…")
-            tiktok.upload_draft(_tk_token(), path)
+            jlog(job, f"📱 sending part {n} to TikTok…")
+            pid, mode = _tk_push(path, _tk_caption(job, n, len(_tk_parts(job))))
+            threading.Thread(target=_tk_check, args=(job, n, pid), daemon=True).start()
         except tiktok.TikTokError as e:
             tk["error"] = str(e)[:200]
-            if "spam_risk" in str(e) or "too_many" in str(e):    # TikTok's own limit on waiting drafts
-                tk["error"] = ("TikTok က draft အများကြီး မစောင့်ခိုင်းဘူး — ရှိပြီးသား draft တွေ post/ဖျက်ပြီးရင် "
+            if "pending_share" in str(e):              # TikTok's own limit on waiting drafts
+                tk["error"] = ("TikTok က draft အများကြီး မစောင့်ခိုင်းဘူး — inbox ထဲက draft တွေ post/ဖျက်ပြီးရင် "
                                "ကျန်တာ အလိုလို ဆက်ပို့မယ်")
+            elif "spam_risk" in str(e) or "too_many" in str(e):  # posts a day
+                tk["error"] = "TikTok က ဒီနေ့ တင်ခွင့် ပြည့်သွားပြီ — မနက်ဖြန် ကျန်တာ အလိုလို ဆက်ပို့မယ်"
+            elif "scope" in str(e).lower() or "unauthorized" in str(e).lower():
+                tk["error"] = "Only me + caption အတွက် TikTok ကို Disconnect → Connect ပြန်လုပ်ပါ (ခွင့်ပြုချက် အသစ်)"
             jlog(job, f"TikTok draft failed: {e}")
             _save_meta(job)
             return False                      # (too many waiting drafts, expired login…): try later
         tk.update(upto=n, error="", last=time.time())
         _settings.setdefault("tiktok_log", []).append(time.time())
         _save_settings()
-        jlog(job, f"📱 part {n} is in TikTok drafts — open TikTok to post or schedule it")
+        jlog(job, f"📱 part {n} sent — " + ("on your profile as Only me, with its caption: switch it to Everyone"
+                                             if mode == "private" else "in your TikTok inbox as a draft"))
         if (job.get("tg") or {}).get("state") == "done" and (job.get("tg") or {}).get("how") == "file":
             path.unlink(missing_ok=True)      # on Telegram and TikTok now: free the disk
             if not _tk_pending(job):
@@ -3219,6 +3269,23 @@ def _tk_send_next():
         _save_meta(job)
         return True
     return False
+
+
+def _tk_check(job, n, pid):
+    """Did TikTok really put the part in the inbox? (it accepted 12 uploads and showed 7)"""
+    st = ""
+    for wait in (20, 40, 60):
+        time.sleep(wait)
+        try:
+            st = tiktok.draft_status(_tk_token(), pid)
+        except Exception as e:  # noqa: BLE001
+            st = f"status check failed: {e}"
+        if st in ("SEND_TO_USER_INBOX", "PUBLISH_COMPLETE", "FAILED"):
+            break
+    job.setdefault("tk", {}).setdefault("status", {})[str(n)] = st
+    jlog(job, f"📱 part {n}: TikTok says {st or 'no answer'}"
+         + (" ✅ (in your TikTok inbox)" if st == "SEND_TO_USER_INBOX" else ""))
+    _save_meta(job)
 
 
 def _tk_loop():
@@ -3271,6 +3338,8 @@ def tiktok_state():
     return jsonify(configured=tiktok.configured(), connected=bool(_settings.get("tiktok_token")),
                    user=_settings.get("tiktok_user", ""), auto=_settings.get("tiktok_auto", True),
                    daily=int(_settings.get("tiktok_daily") or 0), today=_tk_sent_today(),
+                   mode=_settings.get("tiktok_mode") or "private",
+                   can_post="video.publish" in ((_settings.get("tiktok_token") or {}).get("scope") or ""),
                    redirect=tiktok.redirect_uri(), queue=queue)
 
 
@@ -3291,7 +3360,7 @@ def _tg_groups(vids):
         f["date"] = max(f["date"], v["date"])
         if any(p["label"] == label for p in f["parts"]):
             continue                                   # the same part sent twice: the newest counts
-        f["parts"].append({"id": v["id"], "label": label, "size": v["size"]})
+        f["parts"].append({"id": v["id"], "label": label, "size": v["size"], "caption": v["caption"][:2000]})
     out = []
     for f in films.values():
         def key(p):
@@ -3323,11 +3392,12 @@ def tiktok_tg_list():
     store = _settings.setdefault("tiktok_tg_films", {})
     for f in _tg_groups(vids):
         old = store.get(f["title"]) or {"parts": [], "date": 0}
-        parts = {p["label"]: {"label": p["label"], "id": p["id"]} for p in old["parts"]}
-        parts.update({p["label"]: {"label": p["label"], "id": p["id"]} for p in f["parts"]})
+        parts = {p["label"]: {"label": p["label"], "id": p["id"], "caption": p.get("caption", "")} for p in old["parts"]}
+        parts.update({p["label"]: {"label": p["label"], "id": p["id"], "caption": p.get("caption", "")} for p in f["parts"]})
+        caps = {p["id"]: p["caption"] for p in parts.values()}
         merged = _tg_groups([{"id": p["id"], "caption": f"{f['title']} - {p['label']}", "date": 0, "size": 0}
                              for p in parts.values()])
-        store[f["title"]] = {"parts": [{"n": p["n"], "label": p["label"], "id": p["id"]}
+        store[f["title"]] = {"parts": [{"n": p["n"], "label": p["label"], "id": p["id"], "caption": caps.get(p["id"], "")}
                                        for p in (merged[0]["parts"] if merged else [])],
                              "date": max(old.get("date", 0), f["date"]), "hidden": old.get("hidden", False)}
     done = _settings.get("tiktok_tg_done") or {}          # film title → last part number sent to drafts
@@ -3386,17 +3456,19 @@ def tiktok_tg_send():
                 _tk_tg["msg"] = f"{film['title']} part {p['label']}: Telegram ကနေ ယူနေတယ်… ({sent}/{len(todo)})"
                 f = tmp / f"tg_{p['id']}.mp4"
                 telegram.download_video(_settings["telegram_chat_id"], p["id"], f)
-                _tk_tg["msg"] = f"{film['title']} part {p['label']}: TikTok draft ပို့နေတယ်… ({sent}/{len(todo)})"
+                _tk_tg["msg"] = f"{film['title']} part {p['label']}: TikTok ကို ပို့နေတယ်… ({sent}/{len(todo)})"
                 try:
-                    tiktok.upload_draft(_tk_token(), f)
+                    _tk_push(f, p.get("caption") or f"{film['title']} - {p['label']}")
                 finally:
                     f.unlink(missing_ok=True)
                 sent += 1
                 _settings.setdefault("tiktok_log", []).append(time.time())
                 _settings.setdefault("tiktok_tg_done", {})[film["title"]] = p["n"]   # next time: from the part after
                 _save_settings()
+            where = ("Profile မှာ Only me (caption ပါ) — Everyone ပြောင်းပါ" if (_settings.get("tiktok_mode") or "private") == "private"
+                     else "TikTok inbox ထဲ draft အဖြစ်")
             _tk_tg.update(state="done", msg=f"✅ {film['title']}: part {todo[0]['label']}–{todo[-1]['label']} "
-                                            f"({len(todo)} ခု) TikTok draft ထဲ ရောက်ပြီ")
+                                            f"({len(todo)} ခု) — {where}")
         except Exception as e:  # noqa: BLE001 - shown on the page
             msg = str(e)[:200]
             if "spam_risk" in msg or "too_many" in msg:
@@ -3452,6 +3524,8 @@ def tiktok_settings():
         _settings["tiktok_auto"] = bool(data["auto"])
     if "daily" in data:
         _settings["tiktok_daily"] = max(0, min(50, int(data.get("daily") or 0)))
+    if data.get("mode") in ("draft", "private"):
+        _settings["tiktok_mode"] = data["mode"]
     _save_settings()
     return jsonify(ok=True)
 

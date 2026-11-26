@@ -21,7 +21,7 @@ from pathlib import Path
 
 AUTH_URL = "https://www.tiktok.com/v2/auth/authorize/"
 API = "https://open.tiktokapis.com/v2"
-SCOPES = "user.info.basic,video.upload"
+SCOPES = "user.info.basic,video.upload,video.publish"
 CHUNK = 10 * 1024 * 1024          # TikTok takes 5–64 MB chunks (the last one may be bigger)
 
 
@@ -162,15 +162,30 @@ def user_info(access_token):
 
 def upload_draft(access_token, path, progress=None):
     """Send one video file to the account's TikTok inbox as a draft. Returns publish_id."""
+    return _send(access_token, path, f"{API}/post/publish/inbox/video/init/", {}, progress)
+
+
+def post_private(access_token, path, caption, progress=None):
+    """📌 Post one video straight to the profile as "Only me" (an unaudited app may only post
+    privately) WITH its caption and #tags; the owner just switches it to Everyone. Returns publish_id."""
+    info = _post(f"{API}/post/publish/creator_info/query/", {}, token=access_token).get("data") or {}
+    opts = info.get("privacy_level_options") or ["SELF_ONLY"]
+    level = "SELF_ONLY" if "SELF_ONLY" in opts else opts[0]
+    return _send(access_token, path, f"{API}/post/publish/video/init/", {"post_info": {
+        "title": (caption or "")[:2000], "privacy_level": level,
+        "disable_duet": False, "disable_comment": False, "disable_stitch": False}}, progress)
+
+
+def _send(access_token, path, init_url, extra, progress=None):
     path = Path(path)
     size = path.stat().st_size
     if size <= CHUNK:
         chunk, count = size, 1
     else:
         chunk, count = CHUNK, size // CHUNK       # the last chunk takes the rest (≤ 2×CHUNK)
-    init = _post(f"{API}/post/publish/inbox/video/init/", {
-        "source_info": {"source": "FILE_UPLOAD", "video_size": size,
-                        "chunk_size": chunk, "total_chunk_count": count}}, token=access_token)
+    init = _post(init_url, {**extra, "source_info": {"source": "FILE_UPLOAD", "video_size": size,
+                                                     "chunk_size": chunk, "total_chunk_count": count}},
+                 token=access_token)
     data = init.get("data") or {}
     url, pid = data.get("upload_url"), data.get("publish_id")
     if not url or not pid:
