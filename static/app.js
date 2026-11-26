@@ -95,6 +95,9 @@ $('#go').addEventListener('click', () => {
   fd.append('game_music', $('#gamemusicchk') && $('#gamemusicchk').checked ? '1' : '0');
   fd.append('game_meme', $('#gamememechk') && $('#gamememechk').checked ? '1' : '0');
   fd.append('game_hero', ($('#gamehero_in') && $('#gamehero_in').value || '').trim());
+  const music = $('#musicchk') && $('#musicchk').checked;        // 🎵 a Burmese song + typewriter lyrics
+  fd.append('music', music ? '1' : '0');
+  if (music && $('#musicphoto').files[0]) fd.append('music_photo', $('#musicphoto').files[0]);
   try { localStorage.setItem('dublab_split', split); } catch (e) {}
   fd.append('logo', $('#logochk') && $('#logochk').checked ? '1' : '0');
   fd.append('telegram', !$('#tgrow').hidden && $('#tgchk').checked ? '1' : '0');
@@ -699,9 +702,11 @@ function syncRecap() {
   setRecapLen(recapLen);
 }
 // recap / no recap are radios: either one changing re-syncs everything
-['#recapchk', '#fullchk', '#gamechk'].forEach((id) => $(id).addEventListener('change', () => {
+['#recapchk', '#fullchk', '#gamechk', '#musicchk'].forEach((id) => $(id).addEventListener('change', () => {
   syncRecap(); syncOrig(); try { syncYtMode(); partsNote(); } catch (e) { /* not ready */ }
   if ($('#gameopts')) $('#gameopts').hidden = !$('#gamechk').checked;
+  if ($('#musicopts')) $('#musicopts').hidden = !$('#musicchk').checked;
+  if ($('#musicchk').checked) setSplit('0');          // 🎵 one song = one video
   // 🖼️ title: on for a recap, off for the plain video (can still be changed by hand)
   $('#titlechk').checked = $('#recapchk').checked;
   $('#covertitle_in').hidden = !$('#titlechk').checked; $('#eprow').hidden = !$('#titlechk').checked;
@@ -865,3 +870,9 @@ syncYtMode();
     xhr.send(fd);
   });
 })();
+
+// 🎵 music photo: show which one was picked
+if ($('#musicphoto')) $('#musicphoto').addEventListener('change', () => {
+  const f = $('#musicphoto').files[0];
+  $('#musicphotonote').textContent = f ? `✅ ${f.name} — music player ပုံစံ` : 'ပုံ မထည့်ရင် မူရင်း ဗီဒီယို + သီချင်းစာသား';
+});

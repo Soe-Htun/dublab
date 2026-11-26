@@ -848,7 +848,17 @@ piece. Skip music, songs and silence. One line per spoken sentence, like:
 Output only such lines."""
 
 
-def transcribe_burmese(chunks, api_key, log=None):
+LYRICS_PROMPT = """This audio is a {length:.0f}-second piece of a BURMESE (Myanmar) SONG (the singing voice, music taken
+out where possible). Write down the LYRICS exactly as sung, in Burmese (Myanmar script), with the time each line
+starts, from 0 at the start of this piece. One sung line (a phrase of a few seconds) per output line; a repeated
+chorus is written again each time it is sung. Correct Burmese spelling, real words only — never invent words
+for mumbled bits (leave them out). Skip instrumental parts. Like:
+00:12|မင်းမရှိတဲ့ ညတွေမှာ
+00:17|ကိုယ်တစ်ယောက်တည်း လွမ်းနေမိတယ်
+Output only such lines."""
+
+
+def transcribe_burmese(chunks, api_key, log=None, prompt=None):
     """Whisper can't write Burmese (it gave lines like "වවවව…"), so Gemini listens
     instead. chunks: [(start_seconds, length_seconds, mp3 bytes)].
     Returns [{start, end, text}] on the film's timeline."""
@@ -858,7 +868,7 @@ def transcribe_burmese(chunks, api_key, log=None):
     def one(ch):
         t0, length, mp3 = ch
         try:
-            raw = _call(TRANSCRIBE_PROMPT.format(length=length), api_key, max_tokens=8192,
+            raw = _call((prompt or TRANSCRIBE_PROMPT).format(length=length), api_key, max_tokens=8192,
                         images=[("Audio:", mp3, "audio/mp3")])
         except (RuntimeError, Blocked) as e:
             errors.append(e)

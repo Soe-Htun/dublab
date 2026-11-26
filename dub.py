@@ -1,5 +1,7 @@
 """Dubbing pipeline: extract audio -> transcribe -> translate -> TTS -> mux."""
+import math
 import os
+import shutil
 import re
 import subprocess
 from pathlib import Path
@@ -354,6 +356,11 @@ def _transcribe(wav, lang_hint, progress, name, title="", words=False):
             lang_hint = _vote_language(wav, name, title=title)
         except Exception as e:  # noqa: BLE001 - fall back to whisper's own guess
             print(f"[whisper] language vote failed: {e}")
+    if (lang_hint or "")[:2] == "my":
+        # 🇲🇲 Burmese: whisper can't write it (junk text) and Gemini listens to it afterwards anyway —
+        # transcribing a 2-hour film first only cost ~20 minutes
+        print("[whisper] Burmese speech — skipped (Gemini transcribes it)")
+        return [], "my"
     if _use_mlx():
         try:
             out = _transcribe_mlx(wav, lang_hint, progress, name, words)
@@ -3777,3 +3784,316 @@ def build_recap_video(src, clips, out_mp4, tmp, progress=None):
     import shutil as _sh
     _sh.rmtree(tmp, ignore_errors=True)
     return probe_duration(out_mp4)
+
+
+# ---------------- 🎵 Music mode: a Burmese song with typewriter lyrics ----------------
+_MM_BASE = re.compile(r"[က-ဪဿ-၉၌-၏ၐ-ၕၚ-ၝၡၥၦ"
+                      r"ၮ-ၰၵ-ႁႎ]")
+
+
+def _mm_units(text):
+    """Burmese text → what one keystroke shows: a letter with its marks (and a stacked
+    letter after ္ stays with it), so the typing never shows a mark on its own."""
+    units = []
+    for ch in text:
+        if units and (not _MM_BASE.match(ch) or units[-1].endswith("္")) and ch != " " \
+                and not units[-1].endswith(" "):
+            units[-1] += ch
+        else:
+            units.append(ch)
+    return units
+
+
+def music_lyric_frames(segs, total, out_dir, width=1080, size=66, max_w=940):
+    """🎤 Typewriter lyrics: each line appears a letter at a time (white, soft pink glow,
+    a blinking-free cursor), stays until the next line. Returns (ffconcat list, strip height)."""
+    from PIL import Image, ImageDraw, ImageFilter
+    out_dir = Path(out_dir)
+    out_dir.mkdir(exist_ok=True)
+    font = _caption_font(size)
+    line_h = int(size * 1.8)
+    strip_h = line_h * 2 + 40
+    probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+
+    def w_of(s):
+        if not s:
+            return 0
+        b = _tbbox(probe, (0, 0), s, font)
+        return b[2] - b[0]
+
+    def layout(text):                        # wrapped at spaces (never inside a word), ≤2 lines, as units
+        rows = [""]
+        for word in text.split():
+            trial = (rows[-1] + " " + word).strip()
+            if w_of(trial) > max_w and rows[-1] and len(rows) < 2:
+                rows.append(word)
+            else:
+                rows[-1] = trial
+        return [_mm_units(r) for r in rows]
+
+    def draw(lines, shown, cursor):
+        img = Image.new("RGBA", (width, strip_h), (0, 0, 0, 0))
+        glow = Image.new("RGBA", (width, strip_h), (0, 0, 0, 0))
+        dg, dt = ImageDraw.Draw(glow), ImageDraw.Draw(img)
+        y0 = (strip_h - line_h * len(lines)) // 2
+        left = shown
+        end = None
+        for i, ln in enumerate(lines):
+            full = "".join(ln)
+            x = (width - w_of(full)) // 2
+            part = "".join(ln[:max(0, min(len(ln), left))])
+            left -= len(ln)
+            y = y0 + i * line_h + line_h // 2
+            if part:
+                _tdraw(dg, (x, y - size // 2 - 6), part, font, fill=(236, 72, 153, 255),
+                       stroke_width=6, stroke_fill=(236, 72, 153, 255))
+                _tdraw(dt, (x, y - size // 2 - 6), part, font, fill=(255, 255, 255, 255),
+                       stroke_width=2, stroke_fill=(40, 0, 30, 255))
+            if part or end is None:
+                end = (x + w_of(part), y)
+            if left <= 0:
+                break
+        img = Image.alpha_composite(glow.filter(ImageFilter.GaussianBlur(9)), img)
+        if cursor and end:
+            ImageDraw.Draw(img).rounded_rectangle((end[0] + 8, end[1] - size // 2, end[0] + 14, end[1] + size // 2),
+                                                  radius=3, fill=(255, 255, 255, 235))
+        return img
+
+    blank = out_dir / "blank.png"
+    Image.new("RGBA", (width, strip_h), (0, 0, 0, 0)).save(blank)
+    items, t, n = [], 0.0, 0
+    for k, s in enumerate(segs):
+        a = max(t, float(s["start"]))
+        b = min(float(s["end"]), float(segs[k + 1]["start"]) if k + 1 < len(segs) else total)
+        if b - a < 0.3 or not (s.get("text") or "").strip():
+            continue
+        if a > t + 0.01:
+            items.append((blank, a - t))
+        lines = layout(s["text"].strip())
+        total_u = sum(len(ln) for ln in lines)
+        step = min(0.11, (b - a) * 0.65 / max(1, total_u))        # typed in at most ~2/3 of the line
+        tt = a
+        for u in range(1, total_u + 1):
+            p = out_dir / f"l{n}.png"
+            draw(lines, u, True).save(p)
+            n += 1
+            dur = step if u < total_u else 0.0
+            if u == total_u:
+                break
+            items.append((p, dur))
+            tt += dur
+        p = out_dir / f"l{n}.png"                                 # the whole line, cursor gone
+        draw(lines, total_u, False).save(p)
+        n += 1
+        items.append((p, max(0.05, b - tt)))
+        t = b
+    if total > t:
+        items.append((blank, total - t))
+    items.append((blank, 1.0))
+    lst = out_dir / "lyrics.txt"
+    with open(lst, "w") as fh:
+        fh.write("ffconcat version 1.0\n")
+        for p, dur in items:
+            if dur > 0:
+                fh.write(f"file '{p.name}'\nduration {dur:.3f}\n")
+        fh.write(f"file '{items[-1][0].name}'\n")
+    return lst, strip_h
+
+
+def _music_player_art(photo, out_dir, total, logo=None, W=1080, H=1920):
+    """The still parts of the player: background (the photo blurred, a glass card, buttons,
+    progress track, the song's length), the round photo, the bar gradient + gaps, the
+    progress fill, its knob and a patch hiding the fill left of the track. Returns a dict."""
+    from PIL import Image, ImageDraw, ImageFilter, ImageOps, ImageFont
+    out_dir = Path(out_dir)
+    out_dir.mkdir(exist_ok=True)
+    src = Image.open(photo).convert("RGB")
+    bg = ImageOps.fit(src, (W, H)).filter(ImageFilter.GaussianBlur(70))
+    bg = Image.blend(bg, Image.new("RGB", (W, H), (8, 6, 14)), 0.72).convert("RGBA")
+    shade = Image.new("L", (W, H), 0)                         # vignette
+    ImageDraw.Draw(shade).ellipse((-W * 0.4, -H * 0.15, W * 1.4, H * 1.15), fill=255)
+    shade = shade.filter(ImageFilter.GaussianBlur(160))
+    bg = Image.composite(bg, Image.new("RGBA", (W, H), (0, 0, 0, 255)), shade)
+    d = ImageDraw.Draw(bg)
+    cx, D, cy = W // 2, 600, 560
+    card = Image.new("RGBA", (W, H), (0, 0, 0, 0))            # frosted glass card behind the player
+    ImageDraw.Draw(card).rounded_rectangle((70, 180, W - 70, 1330), radius=56, fill=(255, 255, 255, 18),
+                                           outline=(255, 255, 255, 40), width=2)
+    bg = Image.alpha_composite(bg, card)
+    d = ImageDraw.Draw(bg)
+    ring = Image.new("RGBA", (W, H), (0, 0, 0, 0))            # glowing gradient ring around the photo
+    rd = ImageDraw.Draw(ring)
+    for k in range(360):
+        f = (math.sin(math.radians(k)) + 1) / 2
+        col = (int(236 * f + 34 * (1 - f)), int(72 * f + 211 * (1 - f)), int(153 * f + 238 * (1 - f)), 255)
+        rd.arc((cx - D // 2 - 14, cy - D // 2 - 14, cx + D // 2 + 14, cy + D // 2 + 14), k, k + 1.5, fill=col, width=8)
+    bg = Image.alpha_composite(bg, ring.filter(ImageFilter.GaussianBlur(10)))
+    bg = Image.alpha_composite(bg, ring)
+    d = ImageDraw.Draw(bg)
+    # buttons
+    by = 1205
+    def heart(x, y, s, c):
+        d.ellipse((x - s, y - s * 0.6, x, y + s * 0.4), fill=c)
+        d.ellipse((x, y - s * 0.6, x + s, y + s * 0.4), fill=c)
+        d.polygon([(x - s * 0.97, y), (x + s * 0.97, y), (x, y + s * 1.1)], fill=c)
+    heart(cx - 300, by - 6, 26, (244, 63, 94))
+    for sgn in (-1, 1):
+        bx = cx + sgn * 155
+        tri = ([(bx - 14, by - 18), (bx - 14, by + 18), (bx + 14, by)] if sgn > 0
+               else [(bx + 14, by - 18), (bx + 14, by + 18), (bx - 14, by)])
+        d.polygon(tri, fill="white")
+        bar = bx + sgn * 18
+        d.rectangle((bar - 3, by - 18, bar + 3, by + 18), fill="white")
+    d.ellipse((cx - 64, by - 64, cx + 64, by + 64), fill="white")
+    d.rounded_rectangle((cx - 21, by - 26, cx - 8, by + 26), radius=3, fill=(20, 16, 30))
+    d.rounded_rectangle((cx + 8, by - 26, cx + 21, by + 26), radius=3, fill=(20, 16, 30))
+    d.ellipse((cx + 274, by - 26, cx + 326, by + 26), outline="white", width=4)
+    d.line((cx + 300, by - 14, cx + 300, by + 14), fill="white", width=4)
+    d.line((cx + 286, by, cx + 314, by), fill="white", width=4)
+    # progress track + the song's length
+    px0, px1, py = 200, W - 200, 1085
+    d.rounded_rectangle((px0, py - 4, px1, py + 4), radius=4, fill=(255, 255, 255, 70))
+    lat = ImageFont.truetype(next(p for p in _LATIN_FONTS if Path(p).exists()), 30)
+    d.text((px1, py + 24), f"{int(total // 60)}:{int(total % 60):02d}", font=lat, fill=(200, 200, 210), anchor="ra")
+    if logo and Path(logo).exists():
+        lg = Image.open(logo).convert("RGBA")
+        lg.thumbnail((140, 140))
+        bg.alpha_composite(lg, (W - 180, 40))
+    bg_p = out_dir / "bg.png"
+    bg.convert("RGB").save(bg_p)
+    # the round photo (turns slowly like a record)
+    face = ImageOps.fit(src, (D, D), centering=(0.5, 0.35)).convert("RGBA")
+    m = Image.new("L", (D * 3, D * 3), 0)
+    ImageDraw.Draw(m).ellipse((0, 0, D * 3, D * 3), fill=255)
+    face.putalpha(m.resize((D, D), Image.LANCZOS))
+    disc = out_dir / "disc.png"
+    face.save(disc)
+    # sound bars: gradient (pink → cyan) and the gaps between bars
+    n_bars, bw, gap, bh = 24, 16, 9, 120
+    bars_w = n_bars * (bw + gap) - gap
+    grad = Image.new("RGBA", (bars_w, bh))
+    for x in range(bars_w):
+        f = x / max(1, bars_w - 1)
+        ImageDraw.Draw(grad).line((x, 0, x, bh), fill=(int(236 + (34 - 236) * f), int(72 + (211 - 72) * f),
+                                                       int(153 + (238 - 153) * f), 255))
+    grad_p = out_dir / "grad.png"
+    grad.save(grad_p)
+    stripes = Image.new("L", (bars_w, bh), 0)
+    for i in range(n_bars):
+        x = i * (bw + gap)
+        ImageDraw.Draw(stripes).rounded_rectangle((x, 0, x + bw - 1, bh), radius=7, fill=255)
+    str_p = out_dir / "stripes.png"
+    stripes.save(str_p)
+    L = px1 - px0
+    fill = Image.new("RGBA", (L, 8))
+    for x in range(L):
+        f = x / max(1, L - 1)
+        ImageDraw.Draw(fill).line((x, 0, x, 8), fill=(int(34 + 202 * f), int(211 - 139 * f), int(238 - 85 * f), 255))
+    fill_p = out_dir / "fill.png"
+    fill.save(fill_p)
+    patch = bg.crop((0, py - 6, px0, py + 6))
+    patch_p = out_dir / "patch.png"
+    patch.convert("RGB").save(patch_p)
+    knob = Image.new("RGBA", (40, 40), (0, 0, 0, 0))
+    ImageDraw.Draw(knob).ellipse((6, 6, 34, 34), fill=(255, 255, 255, 255))
+    knob = Image.alpha_composite(knob.filter(ImageFilter.GaussianBlur(4)), knob)
+    knob_p = out_dir / "knob.png"
+    knob.save(knob_p)
+    # elapsed time, one picture a second
+    items = []
+    for s in range(int(total) + 1):
+        im = Image.new("RGBA", (120, 44), (0, 0, 0, 0))
+        ImageDraw.Draw(im).text((0, 4), f"{s // 60}:{s % 60:02d}", font=lat, fill=(200, 200, 210))
+        p = out_dir / f"t{s}.png"
+        im.save(p)
+        items.append(p)
+    tl = out_dir / "timer.txt"
+    with open(tl, "w") as fh:
+        fh.write("ffconcat version 1.0\n")
+        for p in items:
+            fh.write(f"file '{p.name}'\nduration 1.0\n")
+        fh.write(f"file '{items[-1].name}'\n")
+    return {"bg": bg_p, "disc": disc, "disc_xy": (cx - D // 2, cy - D // 2), "grad": grad_p, "stripes": str_p,
+            "bars_xy": (cx - bars_w // 2, 1020 - bh), "bars_size": (bars_w, bh), "n_bars": n_bars,
+            "fill": fill_p, "patch": patch_p, "knob": knob_p, "track": (px0, px1, py), "timer": tl,
+            "timer_xy": (px0, py + 24), "lyrics_y": 1400}
+
+
+def render_music_video(src, segs, out, photo=None, logo=None, blur=None, log=None):
+    """🎵 A Burmese song as a 9:16 video with typewriter lyrics.
+    photo given: a music-player frame (the photo round and turning, sound bars dancing to
+    the song, a moving progress bar) — the original video is not shown, only its sound.
+    No photo: the song's own video (blurred copy behind it), the lyrics under it; `blur`
+    {bottom, height} hides lyrics already burned into it. Returns the video's length."""
+    out = Path(out)
+    tmp = out.with_name("music_tmp")
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir()
+    total = probe_duration(src)
+    W, H = 1080, 1920
+    if photo:
+        lyr, strip_h = music_lyric_frames(segs, total, tmp / "lyr")
+    else:                                       # the video as it is: lyrics sized to its own width
+        vw, vh = video_size(src)
+        vw, vh = vw // 2 * 2, vh // 2 * 2
+        lyr, strip_h = music_lyric_frames(segs, total, tmp / "lyr", width=vw,
+                                          size=max(28, int(min(vw, vh) * 0.06)), max_w=int(vw * 0.88))
+    hw = _has_encoder("h264_videotoolbox")
+    enc = (["-c:v", "h264_videotoolbox", "-b:v", "6000k"] if hw else ["-c:v", "libx264", "-crf", "20", "-preset", "veryfast"])
+    T = f"{total:.3f}"
+    if photo:
+        art = _music_player_art(photo, tmp / "art", total, logo)
+        px0, px1, py = art["track"]
+        L = px1 - px0
+        bw, bh = art["bars_size"]
+        ins = ["-i", str(src),
+               "-loop", "1", "-framerate", "25", "-t", T, "-i", str(art["bg"]),
+               "-loop", "1", "-framerate", "25", "-t", T, "-i", str(art["disc"]),
+               "-loop", "1", "-framerate", "25", "-t", T, "-i", str(art["grad"]),
+               "-loop", "1", "-framerate", "25", "-t", T, "-i", str(art["stripes"]),
+               "-loop", "1", "-framerate", "25", "-t", T, "-i", str(art["fill"]),
+               "-loop", "1", "-framerate", "25", "-t", T, "-i", str(art["patch"]),
+               "-loop", "1", "-framerate", "25", "-t", T, "-i", str(art["knob"]),
+               "-f", "concat", "-safe", "0", "-i", str(lyr),
+               "-f", "concat", "-safe", "0", "-i", str(art["timer"])]
+        dx, dy = art["disc_xy"]
+        bx, by = art["bars_xy"]
+        fc = [f"[0:a]asplit[aout][avis]",
+              f"[avis]aformat=channel_layouts=mono,volume=4,showfreqs=s={art['n_bars']}x{bh}:mode=bar:ascale=log:"
+              f"fscale=log:win_size=1024:rate=25:colors=white,format=gray,scale={bw}:{bh}:flags=neighbor[bars0]",
+              "[4:v]format=gray[str]", "[bars0][str]blend=all_mode=multiply:shortest=1[mask]",
+              "[3:v]format=rgba[gr]", "[gr][mask]alphamerge[bars]",
+              "[2:v]format=rgba,rotate=a='t*0.25':c=none:ow=iw:oh=ih[disc]",
+              f"[1:v][disc]overlay={dx}:{dy}[a]",
+              f"[a][bars]overlay={bx}:{by}:shortest=1[b]",
+              f"[b][5:v]overlay=x='{px0}-{L}+{L}*t/{T}':y={py - 4}[c]",
+              f"[c][6:v]overlay=0:{py - 6}[d]",
+              f"[d][7:v]overlay=x='{px0}+{L}*t/{T}-20':y={py - 20}[e]",
+              f"[9:v]format=rgba[tm]", f"[e][tm]overlay={art['timer_xy'][0]}:{art['timer_xy'][1]}:eof_action=pass[f]",
+              f"[8:v]format=rgba[ly]", f"[f][ly]overlay=0:{art['lyrics_y']}:eof_action=pass,format=yuv420p[v]"]
+    else:                                       # 🎞️ the song's own video, untouched size, lyrics on it
+        ins = ["-i", str(src), "-f", "concat", "-safe", "0", "-i", str(lyr)]
+        steps, cur = [f"[0:v]scale={vw}:{vh},setsar=1[v0]"], "v0"
+        ly = int(vh * 0.95) - strip_h               # near the bottom
+        if blur:                              # lyrics already on the video: blurred out, ours go there
+            b0, bh0 = float(blur["bottom"]), float(blur["height"])
+            steps += [f"[{cur}]split[m][bb]",
+                      f"[bb]crop=iw:ih*{bh0:.4f}:0:ih*{1 - b0 - bh0:.4f},boxblur=luma_radius='min(h/4,20)':luma_power=3[bz]",
+                      f"[m][bz]overlay=0:H*{1 - b0 - bh0:.4f}[bl]"]
+            cur = "bl"
+            ly = min(ly, int(vh * (1 - b0 - bh0 / 2)) - strip_h // 2)
+        if logo and Path(logo).exists():
+            ins += ["-i", str(logo)]
+            lw = max(60, int(vw * 0.12))
+            steps += [f"[2:v]scale={lw}:-1,format=rgba[lg]", f"[{cur}][lg]overlay=W-w-{int(vw * 0.03)}:{int(vw * 0.03)}[lo]"]
+            cur = "lo"
+        steps += ["[1:v]format=rgba[ly]", f"[{cur}][ly]overlay=0:{max(0, ly)}:eof_action=pass,format=yuv420p[v]"]
+        fc = steps
+    cmd = ["ffmpeg", "-y", "-v", "error", *ins, "-filter_complex", ";".join(fc), "-map", "[v]",
+           "-map", "[aout]" if photo else "0:a:0", *enc, "-r", "25", "-c:a", "aac", "-b:a", "192k",
+           "-t", T, "-movflags", "+faststart", str(out)]
+    if log:
+        log(f"🎵 rendering the {'player' if photo else 'video'} with typewriter lyrics…")
+    run(cmd)
+    shutil.rmtree(tmp, ignore_errors=True)
+    return probe_duration(out)

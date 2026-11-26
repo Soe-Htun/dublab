@@ -48,7 +48,7 @@ SETTINGS_FILE = BASE / "settings.json"
 MAX_MINUTES_LIMIT = 180
 OUTRO_MAX = 200   # chars
 AI_COVER = (os.environ.get("DUBLAB_AI_COVER") or "0") == "1"   # AI-drawn cover (needs a paid Gemini key); off = photo collage
-SPLIT_CHOICES = (0, 3, 5, 10, 15, 20)
+SPLIT_CHOICES = (0, 5, 10, 15, 20)   # (3-min parts dropped: too many parts for a recap)
 OWNER_MAX_MINUTES = int(os.environ.get("DUBLAB_OWNER_MAX_MINUTES") or 240)   # owner: 4 h   # minutes per part; 0 = one video
 CHANNEL_MAX = 60
 # channel logo burned into the video corner (uploaded on the admin page)
@@ -597,6 +597,8 @@ def process_job(jid):
             _fix_job(job)
         elif job.get("kind") == "game":
             _game_job(job)
+        elif job.get("kind") == "music":
+            _music_job(job)
         elif job.get("phase") == 2:
             _voice_and_mux(job)
         else:
@@ -966,6 +968,82 @@ def _game_job(job):
     job.update(status="done", stage="done", pct=100)
     _save_meta(job)
     jlog(job, "done ✅")
+    if job.get("telegram"):
+        threading.Thread(target=_telegram_send, args=(job,), daemon=True).start()
+
+
+def _music_job(job):
+    """🎵 A Burmese song with typewriter lyrics (Gemini listens to the singing). With the
+    owner's photo: a music-player frame (only the song's sound); without: the song's own video."""
+    from gemini import LYRICS_PROMPT
+    from dub import render_music_video
+    d = job["dir"]
+    src = d / ("input" + job["ext"])
+    if job.get("url") and not src.exists():
+        job.update(stage="download", pct=2)
+        jlog(job, "downloading video from link…")
+        download_url(job["url"], d, max_mb())
+    if job.get("tg_src") and not src.exists():
+        job.update(stage="download", pct=2)
+        jlog(job, "downloading video from Telegram…")
+        telegram.download_video(_settings.get("telegram_chat_id"), job["tg_src"], src, lambda f: None)
+    key = os.environ.get("GEMINI_API_KEY")
+    if not key:
+        raise RuntimeError("server config missing (GEMINI_API_KEY)")
+    job["total"] = probe_duration(src)
+    if job["total"] > 15 * 60:
+        raise ValueError("Music mode က သီချင်း တစ်ပုဒ်စာ (၁၅ မိနစ်အောက်) ပဲ ရတယ်")
+    job.update(stage="audio", pct=10)
+    jlog(job, "🎵 music mode: finding the singing voice…")
+    wav = d / "audio.wav"
+    if not wav.exists():
+        extract_audio(src, wav)
+    listen = wav
+    try:                                        # the voice alone: lyrics heard far better than over the music
+        voc = separate_vocals(src, d, lambda f: _sp(job, f))
+        if voc:
+            listen = d / "vocals16.wav"
+            run(["ffmpeg", "-y", "-v", "error", "-i", str(voc), "-ac", "1", "-ar", "16000", str(listen)])
+            shutil.rmtree(d / "sep", ignore_errors=True)
+            (d / "orig_stereo.wav").unlink(missing_ok=True)
+    except Exception as e:  # noqa: BLE001 - the full mix then
+        jlog(job, f"voice separation skipped: {str(e)[:100]}")
+    job.update(stage="transcribe", pct=35)
+    jlog(job, "🎤 Gemini is writing down the lyrics…")
+    segs = job.get("segs")
+    if not segs:
+        try:
+            segs = transcribe_burmese(burmese_chunks(listen, piece=180), key, lambda i, n: _sp(job, i / max(n, 1)),
+                                      prompt=LYRICS_PROMPT)
+        except RuntimeError as e:
+            if "empty response" not in str(e):
+                raise ValueError(str(e)[:300]) from None
+            segs = []                           # Gemini heard no singing
+        for i, sg in enumerate(segs):           # a sung line lasts until the next one (≤ 8 s)
+            nxt = segs[i + 1]["start"] if i + 1 < len(segs) else job["total"]
+            sg["end"] = round(max(sg["start"] + 1.0, min(nxt - 0.15, sg["start"] + 8.0)), 2)
+        job["segs"] = segs
+    if not segs:
+        raise ValueError("သီချင်းစာသား မကြားရဘူး (တီးလုံးသက်သက်လား?)")
+    jlog(job, f"🎤 {len(segs)} lyric lines")
+    write_srt([(s["start"], s["end"], s["text"]) for s in segs], d / "captions.srt")
+    photo = next(iter(sorted(d.glob("music_photo.*"))), None)
+    blur = None
+    if not photo and job.get("blur"):
+        blur = _find_blur(job, src, "_v" if video_size(src)[1] > video_size(src)[0] else "")
+    job.update(stage="mux", pct=70)
+    logo = LOGO_FILE if job.get("logo") and LOGO_FILE.exists() else None
+    job["total"] = render_music_video(src, segs, d / "dubbed.mp4", photo=photo, logo=logo, blur=blur,
+                                      log=lambda m: jlog(job, m))
+    src.unlink(missing_ok=True)
+    for f in ("audio.wav", "vocals16.wav"):
+        (d / f).unlink(missing_ok=True)
+    if job.get("telegram"):
+        job["tg"] = {"state": "sending", "error": "", "pct": 0}
+    job.update(status="done", stage="done", pct=100)
+    _save_meta(job)
+    jlog(job, "done ✅")
+    _tk_enqueue(job)
     if job.get("telegram"):
         threading.Thread(target=_telegram_send, args=(job,), daemon=True).start()
 
@@ -1567,7 +1645,7 @@ def _condense(job, src, utter, voice=None):
         spans = speech_spans(utter, pad=1.5, join=8.0)
     kept = sum(b - a for a, b in spans)
     total = job["total"]
-    if not spans or kept < total * (0.15 if char else 0.6) or kept > total * 0.97:
+    if not spans or kept < total * (0.15 if char else 0.6) or kept > total * (0.92 if orig else 0.97):
         jlog(job, "keeping the whole film (little to leave out)")
         return src, utter
     job.update(stage="recap", pct=55)
@@ -1578,9 +1656,26 @@ def _condense(job, src, utter, voice=None):
     def prog(i, n):
         job.update(pct=55 + int(5 * i / max(n, 1)))
         _sp(job, i / max(n, 1))
-    new_total = build_recap_video(src, [(a, b - a) for a, b in spans], out, job["dir"] / "clips", prog)
-    if orig:              # 🔊 the film's own voices stay: the cut needs its sound (the picture-only cut had none)
-        add_cut_audio(src, spans, out)
+    # ▶️ a resume reuses the finished cut of the very same spans (it took ~10 min, and every
+    # server restart made it again — then the music removal after it, ~25 min more)
+    mark = job["dir"] / "condensed.spans.json"
+    sig = json.dumps([[round(a, 2), round(b, 2)] for a, b in spans] + [bool(orig)])
+    reuse = False
+    try:
+        reuse = out.exists() and mark.exists() and mark.read_text() == sig and (
+            not orig or "audio" in run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+                                        "-of", "csv=p=0", str(out)]).stdout)
+    except Exception:  # noqa: BLE001 - cut again
+        reuse = False
+    if reuse:
+        new_total = probe_duration(out)
+        jlog(job, "▶️ the cut from before is reused")
+    else:
+        mark.unlink(missing_ok=True)
+        new_total = build_recap_video(src, [(a, b - a) for a, b in spans], out, job["dir"] / "clips", prog)
+        if orig:          # 🔊 the film's own voices stay: the cut needs its sound (the picture-only cut had none)
+            add_cut_audio(src, spans, out)
+        mark.write_text(sig)
     starts, t = [], 0.0
     for a, b in spans:
         starts.append((a, b, t))
@@ -1601,6 +1696,10 @@ def _condense(job, src, utter, voice=None):
         job["comments"] = cm
     job["total"] = new_total
     return out, moved
+
+
+class _Reused(Exception):
+    """A step's result from before a restart is used again."""
 
 
 def _voice_and_mux(job):
@@ -1652,8 +1751,15 @@ def _voice_and_mux(job):
         if job.get("no_music"):
             # 🎵 the film's background music taken out (voices kept): copyrighted songs
             # under the dialogue are what TikTok / YouTube flag
-            jlog(job, "removing the background music (voices kept)…")
+            if (d / "orig_voice.m4a").exists() and (d / "orig_voice.src").exists() and \
+                    (d / "orig_voice.src").read_text() == f"{src.name}:{src.stat().st_size}":
+                dub_wav = d / "orig_voice.m4a"            # ▶️ done before the restart (~25 min): reused
+                jlog(job, "▶️ background music removal from before is reused")
+            else:
+                jlog(job, "removing the background music (voices kept)…")
             try:
+                if dub_wav.name == "orig_voice.m4a":
+                    raise _Reused()
                 def mprog(f):
                     _sp(job, f)
                     jlog(job, f"removing the music… {int(f * 100)}%")
@@ -1661,11 +1767,14 @@ def _voice_and_mux(job):
                 if voc:
                     run(["ffmpeg", "-y", "-v", "error", "-i", str(voc), "-c:a", "aac", "-b:a", "160k", str(d / "orig_voice.m4a")])
                     dub_wav = d / "orig_voice.m4a"
+                    (d / "orig_voice.src").write_text(f"{src.name}:{src.stat().st_size}")
                     shutil.rmtree(d / "sep", ignore_errors=True)
                     (d / "orig_stereo.wav").unlink(missing_ok=True)
                     jlog(job, "background music removed")
                 else:
                     jlog(job, "music removal not available (demucs missing) — original sound kept")
+            except _Reused:
+                pass
             except Exception as e:  # noqa: BLE001 - the original sound is still fine
                 jlog(job, f"music removal failed ({str(e)[:150]}) — original sound kept")
         if dub_wav.name == "orig_audio.mka" and not dub_wav.exists():
@@ -2117,7 +2226,7 @@ def create_job():
         split = int(request.form.get("split") or 0)
     except ValueError:
         split = 0
-    split = split if split in SPLIT_CHOICES else 0
+    split = 5 if split == 3 else split if split in SPLIT_CHOICES else 0   # an old page still sending 3
     blur = request.form.get("blur", "0") == "1"
     censor = request.form.get("censor", "0") == "1"      # 🫣 hide blood / nudity (only when ticked)
     want_posts = request.form.get("posts") == "1"        # 📝 upload texts to Telegram (off unless ticked)
@@ -2219,7 +2328,9 @@ def create_job():
                      "game_slow": request.form.get("game_slow", "1") == "1",
                      "game_meme": request.form.get("game_meme", "0") == "1",
                      "game_hero": re.sub(r"[^\w .'-]", "", request.form.get("game_hero") or "")[:30]}
-                    if request.form.get("game") == "1" else {}), "cover": cover, "logo": logo, "name": name,
+                    if request.form.get("game") == "1" else {}),
+                 **({"kind": "music", "recap": 0, "split": 0, "orig_audio": False}
+                    if request.form.get("music") == "1" else {}), "cover": cover, "logo": logo, "name": name,
                  "recap": recap,
                  "tg_src": tg_msg,
                  "id": jid, "telegram": send_tg, "owner": _admin_ok(),
@@ -2227,6 +2338,11 @@ def create_job():
                  "yt_full": yt_full and not orig_audio, "orig_audio": orig_audio, "want_posts": want_posts and send_tg, "censor": censor, "episode": episode,
                  "recap_auto": recap_auto and not orig_audio, "no_music": no_music,
                  "created": time.time()}
+    ph = request.files.get("music_photo")
+    if request.form.get("music") == "1" and ph and ph.filename:      # 🖼️ the player frame's photo
+        pext = os.path.splitext(ph.filename)[1].lower()
+        if pext in (".jpg", ".jpeg", ".png", ".webp"):
+            ph.save(d / f"music_photo{pext}")
     jlog(jobs[jid], "uploaded " + re.sub(r"[\r\n]", " ", label)[:160])
     with lock:
         queue.append(jid)
