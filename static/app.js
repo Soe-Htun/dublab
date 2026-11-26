@@ -156,6 +156,10 @@ function showProgress(jid) {
       $('#barfill').style.width = j.pct + '%';
       const vli = document.querySelector('#stages li[data-s="voice"]');
       if (vli && j.orig) vli.hidden = true;            // 🔊 original sound (also after a refresh)
+      // the step running now is always shown (music removal, captions…): with it hidden, no ring
+      // turned and the page looked stuck
+      const now = document.querySelector(`#stages li[data-s="${j.stage}"]`);
+      if (now && now.hidden && j.kind !== 'fix') now.hidden = false;
       if (j.kind === 'fix') document.querySelectorAll('#stages li').forEach((li) => {
         li.hidden = !['fixcheck', 'fixing'].includes(li.dataset.s);
       });

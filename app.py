@@ -1756,6 +1756,7 @@ def _voice_and_mux(job):
                 dub_wav = d / "orig_voice.m4a"            # ▶️ done before the restart (~25 min): reused
                 jlog(job, "▶️ background music removal from before is reused")
             else:
+                job.update(stage="music")                  # (the page shows this step turning)
                 jlog(job, "removing the background music (voices kept)…")
             try:
                 if dub_wav.name == "orig_voice.m4a":
@@ -1777,6 +1778,8 @@ def _voice_and_mux(job):
                 pass
             except Exception as e:  # noqa: BLE001 - the original sound is still fine
                 jlog(job, f"music removal failed ({str(e)[:150]}) — original sound kept")
+            finally:
+                job.update(stage="voice")
         if dub_wav.name == "orig_audio.mka" and not dub_wav.exists():
             run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-vn", "-map", "0:a:0", "-c:a", "copy", str(dub_wav)])
         cues = [(u["start"], u["end"], u["text"]) for u in utter if (u.get("text") or "").strip()]
