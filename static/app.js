@@ -876,7 +876,15 @@ syncYtMode();
 })();
 
 // 🎵 music photo: show which one was picked
-if ($('#musicphoto')) $('#musicphoto').addEventListener('change', () => {
-  const f = $('#musicphoto').files[0];
-  $('#musicphotonote').textContent = f ? `✅ ${f.name} — music player ပုံစံ` : 'ပုံ မထည့်ရင် မူရင်း ဗီဒီယို + သီချင်းစာသား';
-});
+function musicPhotoView() {
+  const f = $('#musicphoto').files[0], img = $('#musicthumb');
+  if (img.src) { URL.revokeObjectURL(img.src); img.removeAttribute('src'); }
+  img.hidden = !f; $('#musicclear').hidden = !f;
+  if (f) img.src = URL.createObjectURL(f);
+  $('#musicpick').textContent = f ? '🔄 ပုံ ပြောင်းမယ်' : '🖼️ ပုံ ရွေးမယ်';
+  $('#musicphotonote').textContent = f ? 'music player ပုံစံ (ပုံ အဝိုင်း လည်နေ၊ အသံ bar တွေ ကနေ)' : 'ပုံ မထည့်ရင် မူရင်း ဗီဒီယို + သီချင်းစာသား';
+}
+if ($('#musicphoto')) {
+  $('#musicphoto').addEventListener('change', musicPhotoView);
+  $('#musicclear').addEventListener('click', () => { $('#musicphoto').value = ''; musicPhotoView(); });
+}

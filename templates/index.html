@@ -174,7 +174,12 @@
     </label>
     <div id="musicopts" class="subopts" hidden>
       <label class="checkrow"><span>🖼️ <b>ပုံ</b> <span class="dim">(မထည့်လည်း ရ) — ထည့်ရင် music player ပုံစံ (ပုံ အဝိုင်း လည်နေ၊ အသံ bar တွေ ကနေ)၊ မူရင်း ဗီဒီယိုကို မပြဘဲ အသံပဲ ယူမယ်</span></span></label>
-      <input type="file" id="musicphoto" accept="image/jpeg,image/png,image/webp">
+      <div class="mphoto">
+        <input type="file" id="musicphoto" accept="image/jpeg,image/png,image/webp" hidden>
+        <img id="musicthumb" alt="" hidden>
+        <label for="musicphoto" class="ghost mphoto-btn" id="musicpick">🖼️ ပုံ ရွေးမယ်</label>
+        <button type="button" class="mphoto-x" id="musicclear" title="ပုံ ဖယ်မယ်" hidden>✕</button>
+      </div>
       <p class="note left dim" id="musicphotonote">ပုံ မထည့်ရင် မူရင်း ဗီဒီယို + သီချင်းစာသား</p>
     </div>
     <h2>၄ · ✂️ အပိုင်းခွဲမယ်</h2>
