@@ -296,3 +296,8 @@ button.gear{padding:0;cursor:pointer;font:inherit}
 .tkhide{background:none;border:none;color:var(--dim);cursor:pointer;font-size:15px;padding:0 0 0 8px}
 .tkhide:hover{color:var(--txt)}
 .tkextra{margin-top:10px}
+.tkscan{display:flex;gap:10px;align-items:stretch;margin-top:12px}
+.tkdays{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;color:var(--dim)}
+.tkscan #tk-days{align-self:stretch;min-width:70px;padding:0 10px;font-size:14px;font-weight:600;color:var(--txt);
+  border:1.5px solid var(--card-br);border-radius:12px}
+.tkscan .ghost{margin:0;flex:1}
