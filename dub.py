@@ -3694,6 +3694,29 @@ def trim_silence(path):
         tmp.unlink(missing_ok=True)
 
 
+def add_cut_audio(src, spans, video):
+    """🔊 The film's own sound for a picture-only cut (build_recap_video makes no audio:
+    a recap gets the AI voice later): the same (start, end) spans of src's audio, joined
+    and put under `video` in place. A Burmese film keeping its own voices had none."""
+    video = Path(video)
+    aud = video.with_name(video.stem + "_a.m4a")
+    fc, groups = [], []
+    for g in range(0, len(spans), 80):            # a few hundred trims: joined in groups, then once more
+        part = spans[g:g + 80]
+        for i, (a, b) in enumerate(part):
+            fc.append(f"[0:a]atrim={a:.3f}:{b:.3f},asetpts=PTS-STARTPTS[a{g + i}]")
+        fc.append("".join(f"[a{g + i}]" for i in range(len(part))) + f"concat=n={len(part)}:v=0:a=1[g{g}]")
+        groups.append(f"[g{g}]")
+    fc.append("".join(groups) + f"concat=n={len(groups)}:v=0:a=1[a]")
+    run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-filter_complex", ";".join(fc), "-map", "[a]",
+         "-c:a", "aac", "-b:a", "160k", str(aud)])
+    tmp = video.with_name(video.stem + "_av.mp4")
+    run(["ffmpeg", "-y", "-v", "error", "-i", str(video), "-i", str(aud), "-map", "0:v", "-map", "1:a",
+         "-c", "copy", "-shortest", "-movflags", "+faststart", str(tmp)])
+    tmp.replace(video)
+    aud.unlink(missing_ok=True)
+
+
 def build_recap_video(src, clips, out_mp4, tmp, progress=None):
     """clips: [(source_start, duration)] in order. Each is cut (re-encoded,
     no audio, same size/fps so they join cleanly) and the pieces joined.

@@ -1,4 +1,5 @@
 """Gemini REST client for dubbing-script translation (no SDK needed)."""
+import hashlib
 import json
 import os
 import re
@@ -29,7 +30,9 @@ PARALLEL = 6     # chunks translated at the same time (spread over the keys)
 NAME_RULE = """- CHARACTER NAMES: call each character by their REAL name from the film — the name the dialogue uses (or the
   title / description gives) — written in Burmese script the way Myanmar audiences would say it (e.g. Li Wei =
   လီဝေ, Zhang Min = ကျန်းမင်, Raju = ရာဂျူး, Min-ho = မင်ဟို). Keep it short and easy (a family name + given name may
-  be shortened to the given name). Never refer to a main character only as "ဒီကောင်လေး", "ဒီကောင်မလေး", "သူ", etc.
+  be shortened to the given name). A NICKNAME THAT IS A WORD (Cantonese 刀仔 "Little Knife", "Tiger", "Fatty") is
+  said the natural Burmese way — "ဓားလေး", "ကျားကြီး", "ဝဖိုင်" — never a stiff word-by-word piece like "ဓားစ";
+  a famous character keeps the name fans know (Ko Chun of God of Gamblers = ကိုချွန်း / ဖဲဘုရင်). Never refer to a main character only as "ဒီကောင်လေး", "ဒီကောင်မလေး", "သူ", etc.
   ONLY for a character whose name is never said (or cannot be made out) give a familiar Burmese name. Preferred
   names for those:
   young man / boy: ဂွေးတို, ကျော်ကြီး, စိုးကြီး, အောင်လေး
@@ -604,6 +607,13 @@ Below is the Burmese narration/dialogue of a video (it may be cut short).
 
 Write ONE catchy Burmese title for the video cover, like "မှော်မျက်လုံး ရသွားသူ" or
 "ရေခဲပင်လယ်က အသက်လုပွဲ" — short, dramatic, makes people click.
+What makes a Myanmar viewer stop scrolling (pick what fits the story — never a lie about it):
+- the underdog turned king: "ဆင်းရဲသားလို့ နှိမ်ခဲ့တဲ့ ကောင်လေးက သူဌေးသား အစစ်", "အမှိုက်ကောက်ကနေ ဖဲဘုရင် ဖြစ်လာသူ"
+- a special power or secret: "ဖောက်ထွင်းမြင်နိုင်သော ကောင်လေး", "သေပြီးမှ ပြန်ရှင်လာတဲ့ မင်းသမီး"
+- revenge / payback: "ဓားပြခေါင်းဆောင်ကို လက်စားချေမယ့် ကောင်လေး"
+- a shocking twist or question: "မင်္ဂလာဆောင်ညမှာ သတို့သမီး ပျောက်သွားတယ်", "ဘာလို့ သူ့ကို ဘယ်သူမှ မနိုင်တာလဲ"
+- a comedy: say the funny situation: "ဖဲဘုရင်ရဲ့ တပည့်လို့ ကြွားနေတဲ့ ကောင်လေး"
+Name the HERO and what is special about them; concrete beats vague ("ဇာတ်လမ်းကောင်း" says nothing).
 
 Rules:
 - Burmese only, 2–6 words, at most about 25 characters.
@@ -662,11 +672,16 @@ Original video title (may name the film): {name}
 Beginning of the Burmese narration:
 {story}
 
-Write, in natural Burmese (Myanmar script; film names may stay in their original form):
+Write, in natural SPOKEN Burmese like a friendly Myanmar recap channel ("…အကြောင်းကို ပြောပြပေးမှာပါ") — never
+stiff written Burmese (no "သည်", "၏", "ပါသည်", "ဤ", "သံစဉ်") — Myanmar script; film names may stay in their
+original form. The film's name: the Burmese name Myanmar viewers know it by or its English name ("God of
+Gamblers II" / "ဖဲဘုရင် ၂"), NEVER Chinese sounded out in Burmese letters ("ဒူရှယ်" for 賭俠 means nothing to them);
+character names the same way (a nickname said naturally: "ဓားလေး", not "ဓားစ"):
 - "tiktok": a TikTok / Facebook Reels caption: 1–2 short catchy lines that make people want to watch
   (a hook or question, no spoilers of the ending) that plainly says it is a film's story (start with
   "ရုပ်ရှင်ဇာတ်လမ်း:" or similar — never word it like real news), then the hashtags. Under 250 characters.
-- "youtube_title": a YouTube title under 90 characters: the cover title, plus the film's real name in
+- "youtube_title": a YouTube title under 90 characters that makes people click (the hero + the hook, a twist or a
+  question, no ending spoilers, never a lie): the cover title or a punchier version of it, plus the film's real name in
   brackets ONLY if that name appears in the original video title above — never invent or guess an
   English name. No clickbait lies, no ALL CAPS.
 - "youtube_desc": a YouTube description: 3–4 lines summing up the story's setup (no ending spoilers),
@@ -882,6 +897,9 @@ def transcribe_burmese(chunks, api_key, log=None):
     return segs
 
 
+_CAST_CACHE = {}
+
+
 def write_cast(lines, api_key, lang=None, max_chars=60000, title=""):
     """Burmese names for the characters, decided once for the whole film so
     every parallel recap section calls them the same."""
@@ -899,10 +917,16 @@ def write_cast(lines, api_key, lang=None, max_chars=60000, title=""):
                  "(from the cast list you know) written in Burmese letters — e.g. The Legend of Fei: Zhou Fei = "
                  "ကျိုးဖေး, Xie Yun = ရှဲ့ယွင်, Li Sheng = လီရှန်. Speech recognition garbles names: trust the real cast "
                  "names over the transcript's spelling. Every name fully in Burmese letters, never half Latin.\n")
+    ck = hashlib.md5(f"{prompt}|{lang}|{known}|{text}".encode()).hexdigest()
+    if ck in _CAST_CACHE:                         # the cover chooser asks again for the same film
+        return _CAST_CACHE[ck]
     raw = _call(prompt.format(lang=lang or "original language") + known + "\n\nTranscript:\n" + text,
                 api_key, max_tokens=2000)
     rows = [r.strip(" -*") for r in raw.strip().splitlines() if "=" in r]
-    return "\n".join(rows[:12])
+    _CAST_CACHE[ck] = "\n".join(rows[:12])
+    while len(_CAST_CACHE) > 20:
+        _CAST_CACHE.pop(next(iter(_CAST_CACHE)))
+    return _CAST_CACHE[ck]
 
 
 def write_recap(lines, minutes, api_key, lang=None, channel=None, min_minutes=0, log=None, prog=None, slack=5,
@@ -1299,11 +1323,19 @@ Never pick dark, blurry, black, fading, empty or unclear frames (furniture, wall
 landscape-only, logo, title, credit or text frames, and never frames with SUBTITLE text on them (any language). Apart from "action", a frame may appear in only one list."""
 
 
-def pick_cover_frames(jpegs, api_key):
-    """jpegs: [bytes]. Returns (hero indices, other indices, 2 or 4 photos); raises on failure."""
+def pick_cover_frames(jpegs, api_key, cast=""):
+    """jpegs: [bytes]. Returns (hero indices, other indices, 2 or 4 photos); raises on failure.
+    cast: the film's characters from its dialogue (most important first) — who the leads are."""
     data = {}
+    prompt = COVER_PROMPT.format(last=len(jpegs) - 1)
+    if cast:      # pictures alone: the man seen most was "main" and the villain "second" (God of Gamblers II:
+        # Andy Lau + a villain, Stephen Chow half hidden behind) — the story says who leads
+        prompt += ("\n\nTHE FILM'S CHARACTERS (from its dialogue, most important first):\n" + cast +
+                   "\nThe first two are the LEADS: find both in the frames (by their role, age, look and what "
+                   "they do) — one is \"hero\", the other \"second\" (two male leads, a comedy duo, buddies: the other "
+                   "lead is SECOND, never the villain). The villain is at most THIRD.")
     for attempt in range(2):          # the model's JSON is sometimes broken: ask once more
-        raw = _call(COVER_PROMPT.format(last=len(jpegs) - 1), api_key, max_tokens=2048,
+        raw = _call(prompt, api_key, max_tokens=2048,
                     images=[(f"Frame {i}:", b) for i, b in enumerate(jpegs)])
         m = re.search(r"\{.*\}", raw, re.S)
         try:

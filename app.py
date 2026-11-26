@@ -15,7 +15,7 @@ from flask import Flask, jsonify, redirect, render_template, request, send_file
 
 import telegram
 
-from dub import (tight_spans, voice_lengths, fix_dangling, join_fragments, WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segments, configure_tts, frame_layout, render_frames,
+from dub import (tight_spans, voice_lengths, fix_dangling, join_fragments, add_cut_audio, WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segments, configure_tts, frame_layout, render_frames,
                  frame_caption_y,
                  footage, speech_spans, char_spans, keep_most, trim_copy, picture_area,
                  add_outro_tail, caption_y, normalize_logo, render_captions, sample_frames, video_size, write_srt,
@@ -1573,6 +1573,8 @@ def _condense(job, src, utter, voice=None):
         job.update(pct=55 + int(5 * i / max(n, 1)))
         _sp(job, i / max(n, 1))
     new_total = build_recap_video(src, [(a, b - a) for a, b in spans], out, job["dir"] / "clips", prog)
+    if orig:              # 🔊 the film's own voices stay: the cut needs its sound (the picture-only cut had none)
+        add_cut_audio(src, spans, out)
     starts, t = [], 0.0
     for a, b in spans:
         starts.append((a, b, t))
@@ -1795,7 +1797,14 @@ def _voice_and_mux(job):
         # made before the mux so part 1's cover is also the picture under the intro
         try:
             key = os.environ.get("GEMINI_API_KEY")
-            chooser = (lambda shots: pick_cover_frames(shots, key)) if key else None
+            cast = job.get("cast_mm") or ""
+            if key and not cast and job.get("utter"):   # 👤 who the leads are (same call as the translation's: cached)
+                try:
+                    cast = write_cast(list(enumerate(u.get("orig") or u["text"] for u in job["utter"])), key,
+                                      LANG_NAMES.get(job.get("seg_lang") or "", job.get("seg_lang")), title=job.get("name") or "")
+                except Exception:  # noqa: BLE001 - pictures alone then
+                    cast = ""
+            chooser = (lambda shots: pick_cover_frames(shots, key, cast)) if key else None
             art = None
             if key and job.get("cover_scene"):
                 try:
