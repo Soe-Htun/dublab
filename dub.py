@@ -447,8 +447,10 @@ def line_genders(wav, utterances, min_frames=12):
     out = []
     for u in utterances:
         try:
-            g, f0 = detect_gender(wav, [u], max_speech=12.0)
-            out.append(g if f0 else None)
+            _, f0 = detect_gender(wav, [u], max_speech=12.0)
+            # only a clear pitch counts: a man shouting / laughing (comedies!) goes well over
+            # 165 Hz and got ရှင် lines; the unsure middle is left to the story (names, who's who)
+            out.append(None if not f0 else "male" if f0 < 175 else "female" if f0 >= 215 else None)
         except Exception:  # noqa: BLE001
             out.append(None)
     # one odd line inside a run of the other gender is usually a pitch mistake: smooth it
@@ -470,6 +472,8 @@ def comment_gaps(utterances, total, every=150.0, min_gap=3.5, first=45.0):
         if b - a >= min_gap and a >= first:
             gaps.append((a, b, i))
     if every <= 0:                       # 🗣️ every pause (character-voice: talk all the way like a recap)
+        if utterances and utterances[0]["start"] - 0.25 - max(first, 0.5) >= min_gap:
+            gaps.insert(0, (max(first, 0.5), utterances[0]["start"] - 0.25, -1))   # the quiet opening too
         return gaps
     out, t = [], first
     while t < total - 30:
@@ -502,6 +506,29 @@ def mix_comments(base_audio, clips, out, duck=0.25):
     fc.append("".join(labels) + f"amix=inputs={len(labels)}:duration=first:normalize=0[a]")
     run(["ffmpeg", "-y", "-v", "error", *ins, "-filter_complex", ";".join(fc), "-map", "[a]",
          "-c:a", "aac", "-b:a", "160k", str(out)])
+    return out
+
+
+def join_fragments(utts, short=1.6, gap=1.5, max_len=9.0):
+    """🧩 A piece under `short` s ("ညီအစ်ကိုတို့၊", "ခွဲမယ်၊") is half a sentence: joined to the
+    next piece (or else the one before) when close enough, so the voice says one whole
+    sentence instead of a stub, a jump cut, then the rest."""
+    out = [dict(u) for u in utts]
+    i = 0
+    while i < len(out):
+        u = out[i]
+        if u["end"] - u["start"] < short:
+            nx = out[i + 1] if i + 1 < len(out) else None
+            pv = out[i - 1] if i > 0 else None
+            if nx and nx["start"] - u["end"] <= gap and nx["end"] - u["start"] <= max_len:
+                nx.update(start=u["start"], text=u["text"] + " " + nx["text"])
+                out.pop(i)
+                continue
+            if pv and u["start"] - pv["end"] <= gap and u["end"] - pv["start"] <= max_len:
+                pv.update(end=u["end"], text=pv["text"] + " " + u["text"])
+                out.pop(i)
+                continue
+        i += 1
     return out
 
 
@@ -708,7 +735,7 @@ def voice_lengths(utterances, voice, tmpdir, progress=None):
 
 
 def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=None,
-                    intro=None):
+                    intro=None, max_extra=None):
     """TTS each utterance, time-fit into its slot, mix into one dub track.
 
     intro: spoken before the video starts. Everything after it moves later by
@@ -782,7 +809,8 @@ def build_dub_track(utterances, voice, tmpdir, total_dur, progress=None, outro=N
             slot = max(slot, min(utterances[i + 1]["start"] - u["start"] - 0.15, slot + 4.0))
         ratio = tts_dur / slot
         # lines are already at SPEAK_SPEED: cap the extra so the total stays ≤ MAX_ATEMPO
-        atempo = 1.0 if ratio <= 1.0 else min(ratio, max(1.0, MAX_ATEMPO / SPEAK_SPEED))
+        atempo = 1.0 if ratio <= 1.0 else min(ratio, max(1.0, MAX_ATEMPO / SPEAK_SPEED),
+                                               max_extra or 9.0)
         # plenty of room: the line stays at the speed chosen in Settings (slowing it back to the
         # TTS's own pace undid a chosen 1.3x); the recap cut already ends the picture where the voice ends
         fitted = tts_dur / atempo

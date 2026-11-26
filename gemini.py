@@ -335,7 +335,9 @@ from the story and the character names). Burmese words change with the speaker's
 - a woman ([F]) says ကျွန်မ (never ကျွန်တော်), ends politely with ရှင် / ရှင့် / နော် / ပါရှင် (never ဗျ, ဗျာ, ခင်ဗျာ, ခင်ဗျား);
 - a man ([M]) says ကျွန်တော်, ဗျ / ဗျာ / ခင်ဗျာ (never ကျွန်မ, ရှင်, ရှင့်);
 - casual ငါ / နင် / မင်း are fine for either when the scene is casual.
-Untagged and unsure: avoid the gendered words (use ငါ, or no pronoun, and ending like "…ပါ", "…နော်", "…လား").
+Untagged: work out from the story who is talking (the character's name, how others call them — အစ်ကို /
+ဦးလေး / ညီမ / အမ, what they did in the lines before) and use that sex's words; only when truly unsure avoid the
+gendered words (use ငါ, or no pronoun, and ending like "…ပါ", "…နော်", "…လား").
 Never copy the [F] / [M] tags into your answer."""
 
 

@@ -15,7 +15,7 @@ from flask import Flask, jsonify, redirect, render_template, request, send_file
 
 import telegram
 
-from dub import (tight_spans, voice_lengths, fix_dangling, WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segments, configure_tts, frame_layout, render_frames,
+from dub import (tight_spans, voice_lengths, fix_dangling, join_fragments, WHISPER_MODELS, set_speak_speed, build_dub_track, cleanup_segments, configure_tts, frame_layout, render_frames,
                  frame_caption_y,
                  footage, speech_spans, char_spans, keep_most, trim_copy, picture_area,
                  add_outro_tail, caption_y, normalize_logo, render_captions, sample_frames, video_size, write_srt,
@@ -1211,7 +1211,7 @@ def _transcribe_and_translate(jid, job):
         # whole sentences (a line cut in two was rushed, stopped dead, then went on): longer pieces
         # (word-timed pieces: joined over a short breath into one sentence, but at most ~7 s so
         # a line the voice says faster never leaves more than ~3 s of the actor talking alone)
-        utter = fix_dangling(merge_segments(segs, max_gap=1.2, max_len=7.0), near=3.0)   # "…抓的 你"|"對…" → whole sentences
+        utter = join_fragments(fix_dangling(merge_segments(segs, max_gap=1.2, max_len=7.0), near=3.0))   # "…抓的 你"|"對…" → whole sentences
         try:                             # 🎯 onto the real talking: in sync, and the true speaking time
             sw = JOBS / job["id"] / "audio.wav"
             utter, moved = snap_to_speech(utter, speech_regions(sw if sw.exists() else wav))
@@ -1338,11 +1338,12 @@ def _write_comments(job, api_key, utter=None, video=None):
             except Exception as e:  # noqa: BLE001 - the transcript's pauses then
                 jlog(job, f"quiet check skipped: {str(e)[:100]}")
         if every_pause:
-            # ⚔️ a long scene without talk (a fight, a chase…): a line every ~6 s, each from its own
-            # picture — the narrator tells the action as it goes, no stopping in between
+            # ⚔️ a long scene without talk (a fight, a chase…): a line every ~4½ s, each from its own
+            # picture — the narrator tells the action as it goes, no stopping in between (one line
+            # per ~12 s left 7–9 s of quiet: a remark is ~3–4 s spoken at 1.3x)
             split = []
             for a, b, i in gaps:
-                n = max(1, int((b - a + 0.6) // 6.6))
+                n = max(1, round((b - a + 0.6) / 5.1))
                 w = (b - a - 0.6 * (n - 1)) / n
                 split += [(a + k * (w + 0.6), a + k * (w + 0.6) + w, i) for k in range(n)]
             gaps = split
@@ -1712,7 +1713,10 @@ def _voice_and_mux(job):
                                key=lambda u: u["start"])
                 jlog(job, f"🎙️ {len(job['comments'])} narrator remarks added")
         dub_wav, cues, lead = build_dub_track(lines, voice_name, d, job["total"], tts_prog,
-                                              outro or None, intro or None)
+                                              outro or None, intro or None,
+                                              # recap: an even pace — a line squeezed up to 1.65x, then a pause,
+                                              # sounded "fast, stop, fast"; it may run ≤ ~½ s late instead
+                                              max_extra=1.12 if job.get("char_voice") else None)
     total = job["total"] + lead                 # the held first frame makes it longer
     write_srt(cues, d / "captions.srt")          # always offered as a download
 
