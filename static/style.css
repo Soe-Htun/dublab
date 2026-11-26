@@ -301,3 +301,7 @@ button.gear{padding:0;cursor:pointer;font:inherit}
 .tkscan #tk-days{align-self:stretch;min-width:70px;padding:0 10px;font-size:14px;font-weight:600;color:var(--txt);
   border:1.5px solid var(--card-br);border-radius:12px}
 .tkscan .ghost{margin:0;flex:1}
+/* dropdowns with their own arrow, a little in from the right edge */
+#tk-days,.tkpick select{-webkit-appearance:none;appearance:none;padding-right:38px !important;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%23c9c9d6' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 14px center;background-size:12px 8px;cursor:pointer}
