@@ -87,7 +87,7 @@ $('#go').addEventListener('click', () => {
   fd.append('split', split);
   const orig = $('#fullchk').checked;   // 🎞️ no recap = original sound + Burmese captions
   fd.append('orig_audio', orig ? '1' : '0');
-  fd.append('no_music', orig ? '1' : '0');   // 🎵 background music always taken out
+  fd.append('no_music', orig && $('#nomusicchk') && $('#nomusicchk').checked ? '1' : '0');   // 🎵 only when ticked (~25 min on a 2-hour film)
   fd.append('recap', $('#recapchk').checked && !orig ? recapLen : '0');
   fd.append('game', $('#gamechk') && $('#gamechk').checked ? '1' : '0');
   fd.append('game_cut', $('#gamecutchk') && $('#gamecutchk').checked ? '1' : '0');

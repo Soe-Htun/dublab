@@ -1303,25 +1303,29 @@ def separate_music(src_video, job_dir, chunk=300.0, progress=None):
              "-c:a", "pcm_s16le", str(p)])
         names.append(p)
     devices = _demucs_devices()
-    for i, p in enumerate(names):
+    # several pieces per demucs run: each run loads the model again (~10 s × 25 pieces on a 2-hour
+    # film); a run still does one piece at a time, so the memory stays what one piece needs
+    group = int(os.environ.get("DUBLAB_DEMUCS_GROUP") or 5)
+    for g in range(0, n, group):
+        batch = names[g:g + group]
         err = None
         for dev in list(devices):
             try:
                 run([sys.executable, "-m", "demucs", "--two-stems=vocals",
-                     "-n", "htdemucs", "-d", dev, "-o", str(sep), str(p)])
-                if (sep / "htdemucs" / p.stem / "no_vocals.wav").exists():
+                     "-n", "htdemucs", "-d", dev, "-o", str(sep), *map(str, batch)])
+                if all((sep / "htdemucs" / p.stem / "no_vocals.wav").exists() for p in batch):
                     err = None
                     break
                 err = RuntimeError("no output")
             except RuntimeError as e:
                 err = e
-            print(f"[demucs] {dev} failed on piece {i + 1}/{n}: {str(err)[-300:]}")
+            print(f"[demucs] {dev} failed on pieces {g + 1}–{g + len(batch)}/{n}: {str(err)[-300:]}")
             if dev != devices[-1]:
                 devices.remove(dev)        # don't try the failing device on every piece
         if err:
             raise RuntimeError(f"music separation failed: {err}")
         if progress:
-            progress((i + 1) / n)
+            progress(min(n, g + len(batch)) / n)
     out_dir = sep / "htdemucs" / "orig_stereo"
     out_dir.mkdir(parents=True, exist_ok=True)
     for stem in ("no_vocals", "vocals"):
