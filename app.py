@@ -3272,7 +3272,7 @@ def tiktok_callback():
     try:
         tok = tiktok.exchange_code(request.args.get("code") or "")
         user = tiktok.user_info(tok["access_token"])
-    except tiktok.TikTokError as e:
+    except Exception as e:  # noqa: BLE001 - shown on the page, never a bare 500
         return page.format("❌ TikTok", str(e)[:200]), 400
     _settings.update(tiktok_token=tok, tiktok_user=user.get("display_name") or tok.get("open_id", ""))
     _save_settings()

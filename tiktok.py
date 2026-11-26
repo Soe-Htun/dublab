@@ -12,6 +12,7 @@ production keys) and the redirect URI registered in the developer portal
 import json
 import os
 import secrets
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -26,6 +27,18 @@ CHUNK = 10 * 1024 * 1024          # TikTok takes 5–64 MB chunks (the last one 
 
 class TikTokError(RuntimeError):
     pass
+
+
+def _ssl_context():
+    """python.org's macOS Python has no CA certificates (CERTIFICATE_VERIFY_FAILED): certifi's."""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
+_SSL = _ssl_context()
 
 
 def client_key():
@@ -77,13 +90,15 @@ def _post(url, data=None, form=None, token=None, timeout=60):
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urllib.request.urlopen(req, timeout=timeout, context=_SSL) as r:
             out = json.loads(r.read().decode() or "{}")
     except urllib.error.HTTPError as e:
         try:
             out = json.loads(e.read().decode() or "{}")
         except ValueError:
             raise TikTokError(f"TikTok HTTP {e.code}") from None
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise TikTokError(f"can't reach TikTok: {e}") from None
     err = out.get("error")
     if isinstance(err, dict) and err.get("code") not in (None, "", "ok"):
         raise TikTokError(f"{err.get('code')}: {err.get('message') or ''}".strip())
@@ -95,10 +110,12 @@ def _post(url, data=None, form=None, token=None, timeout=60):
 def _get(url, token, timeout=30):
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urllib.request.urlopen(req, timeout=timeout, context=_SSL) as r:
             out = json.loads(r.read().decode() or "{}")
     except urllib.error.HTTPError as e:
         raise TikTokError(f"TikTok HTTP {e.code}") from None
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise TikTokError(f"can't reach TikTok: {e}") from None
     err = out.get("error") or {}
     if err.get("code") not in (None, "", "ok"):
         raise TikTokError(f"{err.get('code')}: {err.get('message') or ''}")
@@ -169,7 +186,7 @@ def upload_draft(access_token, path, progress=None):
                 "Content-Range": f"bytes {start}-{end}/{size}"})
             for attempt in range(3):
                 try:
-                    with urllib.request.urlopen(req, timeout=300) as r:
+                    with urllib.request.urlopen(req, timeout=300, context=_SSL) as r:
                         r.read()
                     break
                 except urllib.error.HTTPError as e:
