@@ -3810,8 +3810,8 @@ def _mm_units(text):
 
 
 def music_lyric_frames(segs, total, out_dir, width=1080, size=66, max_w=940):
-    """🎤 Typewriter lyrics: each line appears a letter at a time (white, soft pink glow,
-    a blinking-free cursor), stays until the next line. Returns (ffconcat list, strip height)."""
+    """🎤 Typewriter lyrics: each line appears a letter at a time (white, soft pink glow, no
+    cursor), stays until the next line. Returns (ffconcat list, strip height)."""
     from PIL import Image, ImageDraw, ImageFilter
     out_dir = Path(out_dir)
     out_dir.mkdir(exist_ok=True)
@@ -3880,7 +3880,7 @@ def music_lyric_frames(segs, total, out_dir, width=1080, size=66, max_w=940):
         tt = a
         for u in range(1, total_u + 1):
             p = out_dir / f"l{n}.png"
-            draw(lines, u, True).save(p)
+            draw(lines, u, False).save(p)               # (no cursor: the owner found it distracting)
             n += 1
             dur = step if u < total_u else 0.0
             if u == total_u:

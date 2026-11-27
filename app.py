@@ -1074,7 +1074,8 @@ def _music_job(job):
                                 "paste the lyrics next time for exact words)")
         # numbered reference lines (emoji / "uploaded by" lines out): Gemini answers with numbers,
         # the caption is the pasted words exactly — by ear it wrote "…မိကာသွား" for "…မေ့ကာသွား"
-        ref = [re.sub(r"[.…]+$", "", ln.strip()).strip() for ln in lyrics.splitlines()]
+        ref = [re.sub(r"[.…]+$", "", re.sub(r"[\u200b-\u200f\ufeff]", "", ln).strip()).strip()   # (zero-width marks out)
+               for ln in lyrics.splitlines()]
         ref = [ln for ln in ref if sum(1 for c in ln if "\u1000" <= c <= "\u109f") >= 2]
         numbered = "\n".join(f"{i}. {ln}" for i, ln in enumerate(ref, 1))
         prompt = LYRICS_PROMPT                  # by ear (its timing is right); the words are snapped below
@@ -1088,9 +1089,15 @@ def _music_job(job):
             segs = []                           # Gemini heard no singing
         if ref:                                 # the pasted words, word for word
             segs = _snap_lyrics(segs, ref)
-        for i, sg in enumerate(segs):           # a sung line lasts until the next one (≤ 8 s)
+        # 🎤 each line shows ~0.7 s BEFORE it is sung (karaoke: read it, then sing along) and stays
+        # until the next one shows (≤ 8 s)
+        lead = 0.7
+        for i, sg in enumerate(segs):
+            prev = segs[i - 1]["start"] if i else 0.0
+            sg["start"] = round(max(0.0, prev + 0.4 if i else 0.0, sg["start"] - lead), 2)
+        for i, sg in enumerate(segs):
             nxt = segs[i + 1]["start"] if i + 1 < len(segs) else job["total"]
-            sg["end"] = round(max(sg["start"] + 1.0, min(nxt - 0.15, sg["start"] + 8.0)), 2)
+            sg["end"] = round(max(sg["start"] + 1.0, min(nxt - 0.1, sg["start"] + 8.0 + lead)), 2)
         job["segs"] = segs
     if not segs:
         raise ValueError("သီချင်းစာသား မကြားရဘူး (တီးလုံးသက်သက်လား?)")
