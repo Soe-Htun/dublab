@@ -931,19 +931,19 @@ def lyrics_from_description(desc, title, api_key):
 
 
 ALIGN_LYRICS_PROMPT = """This audio is a {length:.0f}-second piece of a BURMESE (Myanmar) song (the singing voice, music taken
-out where possible). Write down the lines that are ACTUALLY SUNG in this piece, with the time each starts (from 0
-at the start of this piece).
-Below are the song's lyrics as a REFERENCE only: this singer (often a live or cover performance) may skip lines,
-repeat some, change words, or sing a different order. Follow the SINGING, not the reference:
-- a line sung as in the reference → write it with the reference's words and spelling;
-- a line sung differently → write what is really sung (the reference only helps with spelling);
-- reference lines that are not sung → leave them out; lines sung that are not in the reference → write them too;
-- a repeated chorus is written again each time it is sung; leave out instrumental parts.
+out where possible). Below are the song's lyrics, NUMBERED. Listen and say WHEN each line is sung, by its NUMBER:
+one output line per sung line, "time|#number" (time from 0 at the start of this piece). Do NOT write the words of a
+numbered line yourself — only its number (the words are taken from the list exactly as written).
+- the singer may skip lines, repeat lines or sing them in another order: give only what is really sung, in the order
+  sung (a repeated chorus = its number again, each time);
+- only for a sung line that matches NO numbered line, write the heard words instead of a number;
+- leave out instrumental parts.
 Like:
-00:12|<the sung line>
+00:12|#3
+00:17|#4
 Output only such lines.
 
-REFERENCE LYRICS:
+NUMBERED LYRICS:
 {lyrics}"""
 
 

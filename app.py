@@ -973,6 +973,44 @@ def _game_job(job):
         threading.Thread(target=_telegram_send, args=(job,), daemon=True).start()
 
 
+def _snap_lyrics(segs, ref):
+    """🎤 Lines Gemini wrote down by ear (good times, words often misheard) → the pasted lyrics'
+    words: each heard line becomes the run of 1–3 consecutive pasted lines that reads most like
+    it, looked for just after the last match first (songs go in order; a chorus may jump back)."""
+    import difflib
+    norm = lambda t: re.sub(r"[\s.,…၊။!?\-]+", "", t)
+    refn = [norm(r) for r in ref]
+    out, pos = [], 0
+    for sg in segs:
+        heard = norm(sg["text"])
+        if not heard:
+            continue
+        best, best_sc, best_end = None, 0.0, pos
+        for i in range(len(ref)):
+            for k in (1, 2, 3):
+                if i + k > len(ref):
+                    break
+                cand = "".join(refn[i:i + k])
+                sc = difflib.SequenceMatcher(None, heard, cand).ratio()
+                if i < pos - 1 or i > pos + 4:      # a jump (a chorus again…): only when clearly better
+                    sc -= 0.12
+                if sc > best_sc:
+                    best, best_sc, best_end = (i, k), sc, i + k
+        if best and best_sc >= 0.45:
+            i, k = best
+            out.append({**sg, "text": " ".join(ref[i:i + k])})
+            pos = best_end % len(ref)
+        else:
+            out.append(sg)                          # not in the pasted lyrics: as heard
+    merged = []                                     # one line heard in pieces → shown once
+    for sg in out:
+        if merged and sg["text"] == merged[-1]["text"] and sg["start"] - merged[-1]["start"] < 4.0:
+            merged[-1]["end"] = max(merged[-1].get("end", sg["start"]), sg.get("end", sg["start"]))
+            continue
+        merged.append(dict(sg))
+    return merged
+
+
 def _music_job(job):
     """🎵 A Burmese song with typewriter lyrics (Gemini listens to the singing). With the
     owner's photo: a music-player frame (only the song's sound); without: the song's own video."""
@@ -1034,7 +1072,12 @@ def _music_job(job):
             jlog(job, f"📝 lyrics found on the web ({len(lyrics.splitlines())} lines) — timing them to the singing"
                  if lyrics else "lyrics not found on the web — Gemini writes them down by ear (may have mistakes; "
                                 "paste the lyrics next time for exact words)")
-        prompt = ALIGN_LYRICS_PROMPT.replace("{lyrics}", lyrics) if lyrics else LYRICS_PROMPT
+        # numbered reference lines (emoji / "uploaded by" lines out): Gemini answers with numbers,
+        # the caption is the pasted words exactly — by ear it wrote "…မိကာသွား" for "…မေ့ကာသွား"
+        ref = [re.sub(r"[.…]+$", "", ln.strip()).strip() for ln in lyrics.splitlines()]
+        ref = [ln for ln in ref if sum(1 for c in ln if "\u1000" <= c <= "\u109f") >= 2]
+        numbered = "\n".join(f"{i}. {ln}" for i, ln in enumerate(ref, 1))
+        prompt = LYRICS_PROMPT                  # by ear (its timing is right); the words are snapped below
         jlog(job, "🎤 Gemini is timing the lyrics…" if lyrics else "🎤 Gemini is writing down the lyrics…")
         try:
             segs = transcribe_burmese(burmese_chunks(listen, piece=180), key, lambda i, n: _sp(job, i / max(n, 1)),
@@ -1043,6 +1086,8 @@ def _music_job(job):
             if "empty response" not in str(e):
                 raise ValueError(str(e)[:300]) from None
             segs = []                           # Gemini heard no singing
+        if ref:                                 # the pasted words, word for word
+            segs = _snap_lyrics(segs, ref)
         for i, sg in enumerate(segs):           # a sung line lasts until the next one (≤ 8 s)
             nxt = segs[i + 1]["start"] if i + 1 < len(segs) else job["total"]
             sg["end"] = round(max(sg["start"] + 1.0, min(nxt - 0.15, sg["start"] + 8.0)), 2)
@@ -1059,6 +1104,19 @@ def _music_job(job):
     logo = LOGO_FILE if job.get("logo") and LOGO_FILE.exists() else None
     job["total"] = render_music_video(src, segs, d / "dubbed.mp4", photo=photo, logo=logo, blur=blur,
                                       log=lambda m: jlog(job, m))
+    # 🖼️ the cover: the song's name typed by the owner (else the video's title) over its best frames
+    title = job.get("music_title") or job.get("my_title") or (job.get("name") or "")[:60]
+    job["title_mm"] = title
+    try:
+        out = d / "dubbed.mp4" if photo else src          # (the song's own frames, without our lyrics)
+        vw, vh = video_size(out)
+        chooser = (lambda shots: pick_cover_frames(shots, key)) if key and not photo else None
+        covers = make_covers(out, title, d, job["total"] * 0.1, job["total"] * 0.9, portrait=vh > vw,
+                             logo=logo, parts=1, chooser=chooser, log=lambda m: jlog(job, m), single=True)
+        job["covers"] = [c.name for c in covers]
+        jlog(job, f"🖼️ cover made{' — ' + title if title else ''}")
+    except Exception as e:  # noqa: BLE001 - the video works without it
+        jlog(job, f"cover skipped: {str(e)[:120]}")
     src.unlink(missing_ok=True)
     for f in ("audio.wav", "vocals16.wav"):
         (d / f).unlink(missing_ok=True)
