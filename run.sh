@@ -2,7 +2,9 @@
 # Start DubLab with waitress. Usage: ./run.sh  (override with PORT=9000 THREADS=4 ./run.sh)
 set -e
 cd "$(dirname "$0")"
-[ -f venv/bin/activate ] && source venv/bin/activate
+if [ -f venv/bin/activate ]; then source venv/bin/activate          # macOS / Linux
+elif [ -f venv/Scripts/activate ]; then source venv/Scripts/activate  # Windows (Git Bash)
+fi
 # Load .env as plain KEY=value lines (values may contain spaces and are not
 # run as shell code; surrounding quotes are optional). Same format as
 # `docker run --env-file`.

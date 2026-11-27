@@ -80,6 +80,63 @@ Override defaults if needed: `PORT=9000 THREADS=4 ./run.sh`.
 Open http://127.0.0.1:8092, drop in a short video, pick a direction and a
 voice, and download the dubbed result.
 
+### Windows
+
+`run.sh` is a bash script, so run it from **Git Bash** (comes with
+[Git for Windows](https://git-scm.com/download/win); in VS Code pick *Git Bash*
+from the terminal dropdown), not PowerShell or cmd.
+
+1. Install Python and ffmpeg (PowerShell):
+
+   ```powershell
+   winget install -e --id Python.Python.3.12
+   winget install -e --id Gyan.FFmpeg
+   ```
+
+   If `python` still says *"Python was not found"*: turn off the two
+   **App Installer — python.exe / python3.exe** switches in
+   *Settings → Apps → Advanced app settings → App execution aliases*, make sure
+   `%LOCALAPPDATA%\Programs\Python\Python312` and its `Scripts` folder are on
+   your user `PATH`, then fully restart VS Code / the terminal.
+
+2. Set up the project (Git Bash):
+
+   ```bash
+   git clone https://github.com/Soe-Htun/dublab.git
+   cd dublab
+   python -m venv venv                  # name it "venv" — that's what .gitignore expects
+   source venv/Scripts/activate         # Windows venvs use Scripts/, not bin/
+   pip install -r requirements.txt
+   cp .env.example .env                 # put your GEMINI_API_KEY in .env
+   ```
+
+3. Start it — `run.sh` activates `venv/Scripts` (Windows) or `venv/bin`
+   (macOS/Linux) by itself:
+
+   ```bash
+   ./run.sh
+   ```
+
+Windows gotchas:
+
+- **`.env` must use LF line endings.** If it's saved with Windows (CRLF)
+  endings, `run.sh` fails with `invalid arithmetic operator` and keys get a
+  hidden `\r`. In VS Code click `CRLF` in the status bar → `LF` and save, or
+  run `sed -i 's/\r$//' .env`.
+- **`run.sh: $'\r': command not found`** means the script was checked out with
+  CRLF. `.gitattributes` keeps `*.sh` and `ngrok` as LF on new clones; on an
+  older clone run `sed -i 's/\r$//' run.sh ngrok`.
+- **Burmese captions** need Pillow's raqm layout, which on Windows also needs
+  `libfribidi-0.dll`. Download
+  [`mingw-w64-x86_64-fribidi-*-any.pkg.tar.zst`](https://mirror.msys2.org/mingw/mingw64/)
+  from MSYS2, extract it (`tar -xf <file>`), and copy
+  `mingw64/bin/libfribidi-0.dll` into `venv/Scripts/`. Check with
+  `python -c "from PIL import features; print(features.check('raqm'))"` →
+  `True`. The caption font is Windows' built-in *Myanmar Text*. Dubbing itself
+  works without this; only burned-in captions need it.
+- Keep the project outside OneDrive if you can — syncing the ~1 GB `venv`
+  (torch) slows everything down.
+
 > 🔗 Link input uses [yt-dlp](https://github.com/yt-dlp/yt-dlp). Sites change often — run
 > `pip install -U yt-dlp` when downloads start failing. YouTube may block
 > datacenter/cloud IPs; a home connection works more reliably.

@@ -964,6 +964,8 @@ _CAPTION_FONTS = [  # (path, face index) — Unicode Burmese, bold first
     ("/usr/share/fonts/truetype/noto/NotoSansMyanmar-Regular.ttf", 0),
     ("/usr/share/fonts/opentype/noto/NotoSansMyanmar-Bold.ttf", 0),
     ("/System/Library/Fonts/Supplemental/Myanmar Sangam MN.ttc", 0),
+    ("C:/Windows/Fonts/mmrtextb.ttf", 0),                        # Windows: Myanmar Text Bold
+    ("C:/Windows/Fonts/mmrtext.ttf", 0),
 ]
 
 
@@ -971,6 +973,7 @@ _LATIN_FONTS = [  # Noto Sans Myanmar has no Latin letters: English words use on
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "C:/Windows/Fonts/arialbd.ttf",
 ]
 
 
