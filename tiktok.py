@@ -165,7 +165,7 @@ def upload_draft(access_token, path, progress=None):
     return _send(access_token, path, f"{API}/post/publish/inbox/video/init/", {}, progress)
 
 
-def post_private(access_token, path, caption, progress=None):
+def post_private(access_token, path, caption, progress=None, aigc=False):
     """📌 Post one video straight to the profile as "Only me" (an unaudited app may only post
     privately) WITH its caption and #tags; the owner just switches it to Everyone. Returns publish_id."""
     info = _post(f"{API}/post/publish/creator_info/query/", {}, token=access_token).get("data") or {}
@@ -173,7 +173,8 @@ def post_private(access_token, path, caption, progress=None):
     level = "SELF_ONLY" if "SELF_ONLY" in opts else opts[0]
     return _send(access_token, path, f"{API}/post/publish/video/init/", {"post_info": {
         "title": (caption or "")[:2000], "privacy_level": level,
-        "disable_duet": False, "disable_comment": False, "disable_stitch": False}}, progress)
+        "disable_duet": False, "disable_comment": False, "disable_stitch": False,
+        "is_aigc": bool(aigc)}}, progress)          # 🤖 TikTok's "AI-generated content" label
 
 
 def _send(access_token, path, init_url, extra, progress=None):

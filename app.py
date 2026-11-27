@@ -3352,13 +3352,19 @@ def _tk_caption(job, n, total):
     return (head + ("\n" + p["tiktok"].strip() if p.get("tiktok") else "")).strip()
 
 
-def _tk_push(path, caption):
+def _tk_push(path, caption, ai=False):
     """To TikTok the chosen way (Settings): "private" = on the profile as Only me with its caption;
     "draft" = to the TikTok inbox (no caption — TikTok doesn't take one there). Returns (publish_id, mode)."""
     mode = _settings.get("tiktok_mode") or "private"
     if mode == "private":
-        return tiktok.post_private(_tk_token(), path, caption), mode
-    return tiktok.upload_draft(_tk_token(), path), mode
+        try:
+            return tiktok.post_private(_tk_token(), path, caption, aigc=ai), mode
+        except tiktok.TikTokError as e:
+            if "private_account" not in str(e):
+                raise
+            # an app TikTok hasn't reviewed may post only to PRIVATE accounts: the inbox draft instead
+            print(f"[tiktok] {e} — sent as an inbox draft instead")
+    return tiktok.upload_draft(_tk_token(), path), "draft"
 
 
 def _tk_sent_today():
@@ -3386,7 +3392,8 @@ def _tk_send_next():
             continue
         try:
             jlog(job, f"📱 sending part {n} to TikTok…")
-            pid, mode = _tk_push(path, _tk_caption(job, n, len(_tk_parts(job))))
+            ai = bool((job.get("posts") or {}).get("ai_film") or _AI_WORDS.search(job.get("name") or ""))
+            pid, mode = _tk_push(path, _tk_caption(job, n, len(_tk_parts(job))), ai)
             threading.Thread(target=_tk_check, args=(job, n, pid), daemon=True).start()
         except tiktok.TikTokError as e:
             tk["error"] = str(e)[:200]
@@ -3596,6 +3603,7 @@ def tiktok_tg_send():
     def run():
         tmp = JOBS / "_tiktok_tmp"
         tmp.mkdir(exist_ok=True)
+        last_mode = ["private"]
         _tk_tg.update(state="sending", msg="")
         sent = 0
         try:
@@ -3605,21 +3613,24 @@ def tiktok_tg_send():
                 telegram.download_video(_settings["telegram_chat_id"], p["id"], f)
                 _tk_tg["msg"] = f"{film['title']} part {p['label']}: TikTok ကို ပို့နေတယ်… ({sent}/{len(todo)})"
                 try:
-                    _tk_push(f, p.get("caption") or f"{film['title']} - {p['label']}")
+                    cap = p.get("caption") or f"{film['title']} - {p['label']}"
+                    _, last_mode[0] = _tk_push(f, cap, bool(_AI_WORDS.search(cap + " " + film["title"])))
                 finally:
                     f.unlink(missing_ok=True)
                 sent += 1
                 _settings.setdefault("tiktok_log", []).append(time.time())
                 _settings.setdefault("tiktok_tg_done", {})[film["title"]] = p["n"]   # next time: from the part after
                 _save_settings()
-            where = ("Profile မှာ Only me (caption ပါ) — Everyone ပြောင်းပါ" if (_settings.get("tiktok_mode") or "private") == "private"
-                     else "TikTok inbox ထဲ draft အဖြစ်")
+            where = ("Profile မှာ Only me (caption ပါ) — Everyone ပြောင်းပါ" if last_mode[0] == "private"
+                     else "TikTok inbox ထဲ draft အဖြစ် (account က public မို့ Only me တင်ခွင့် မရသေး — caption ကို Telegram ကနေ ကူးပါ)")
             _tk_tg.update(state="done", msg=f"✅ {film['title']}: part {todo[0]['label']}–{todo[-1]['label']} "
                                             f"({len(todo)} ခု) — {where}")
         except Exception as e:  # noqa: BLE001 - shown on the page
             msg = str(e)[:200]
-            if "spam_risk" in msg or "too_many" in msg:
-                msg = "TikTok က draft အများကြီး မစောင့်ခိုင်းဘူး — ရှိပြီးသား draft တွေ post ပြီးမှ ကျန်တာ ပို့ပါ"
+            if "pending_share" in msg:
+                msg = "TikTok inbox ထဲ draft များနေပြီ — ရှိပြီးသား draft တွေ post/ဖျက်ပြီးမှ ကျန်တာ ပို့ပါ"
+            elif "spam_risk" in msg or "too_many" in msg:
+                msg = "TikTok က ဒီနေ့ တင်ခွင့် ပြည့်သွားပြီ — မနက်ဖြန် ပြန်ပို့ပါ"
             _tk_tg.update(state="failed", msg=f"⚠️ {sent}/{len(todo)} ခု ပို့ပြီး — {msg}")
 
     threading.Thread(target=run, daemon=True).start()
