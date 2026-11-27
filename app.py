@@ -1089,9 +1089,9 @@ def _music_job(job):
             segs = []                           # Gemini heard no singing
         if ref:                                 # the pasted words, word for word
             segs = _snap_lyrics(segs, ref)
-        # 🎤 each line shows ~0.7 s BEFORE it is sung (karaoke: read it, then sing along) and stays
+        # 🎤 each line shows ~1 s BEFORE it is sung (karaoke: read it, then sing along) and stays
         # until the next one shows (≤ 8 s)
-        lead = 0.7
+        lead = 1.0
         for i, sg in enumerate(segs):
             prev = segs[i - 1]["start"] if i else 0.0
             sg["start"] = round(max(0.0, prev + 0.4 if i else 0.0, sg["start"] - lead), 2)
@@ -3655,7 +3655,7 @@ def tiktok_job(jid):
     return jsonify(ok=True, tk=tk)
 
 
-_MODE_TAG = {"recap": "မြန်မာ Recap", "orig": "မြန်မာစာတန်း", "dub": "မြန်မာ အသံ"}
+_MODE_TAG = {"recap": "မြန်မာ Recap", "orig": "မြန်မာစာတန်း", "dub": "မြန်မာ အသံ", "music": "သီချင်းစာသား"}
 
 
 def _ready_title(job):
@@ -3666,7 +3666,8 @@ def _ready_title(job):
         return None
     ep = job.get("episode")
     film = (job.get("film_name") or "").strip()
-    tag = _MODE_TAG["recap" if job.get("recap") or job.get("scene_recap") else "orig" if job.get("orig_audio") else "dub"]
+    tag = _MODE_TAG["music" if job.get("kind") == "music" else "recap" if job.get("recap") or job.get("scene_recap")
+                    else "orig" if job.get("orig_audio") else "dub"]
     out = title + (f" - {ep}" if ep else "")          # the same as on the cover: "Title - 1"
     if film and film.casefold() not in title.casefold():
         out += f" | {film}"
