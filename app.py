@@ -3355,7 +3355,7 @@ def _tk_caption(job, n, total):
 def _tk_push(path, caption, ai=False):
     """To TikTok the chosen way (Settings): "private" = on the profile as Only me with its caption;
     "draft" = to the TikTok inbox (no caption — TikTok doesn't take one there). Returns (publish_id, mode)."""
-    mode = _settings.get("tiktok_mode") or "private"
+    mode = _settings.get("tiktok_mode") or "draft"
     if mode == "private":
         try:
             return tiktok.post_private(_tk_token(), path, caption, aigc=ai), mode
@@ -3376,7 +3376,7 @@ def _tk_sent_today():
 
 def _tk_send_next():
     """One part to TikTok drafts when the day's quota allows. True when one went."""
-    if not (tiktok.configured() and _settings.get("tiktok_token") and _settings.get("tiktok_auto", True)):
+    if not (tiktok.configured() and _settings.get("tiktok_token") and _settings.get("tiktok_auto", False)):
         return False
     cap = int(_settings.get("tiktok_daily") or 0)     # 0 = no cap of our own: every part right away
     if cap and _tk_sent_today() >= cap:               # (the owner closes the laptop after the dub)
@@ -3452,7 +3452,7 @@ def _tk_loop():
 def _tk_enqueue(job):
     """A finished owner's job: its parts wait for TikTok drafts (when TikTok is connected)."""
     if (job.get("owner") and job.get("kind") != "fix" and _settings.get("tiktok_token")
-            and _settings.get("tiktok_auto", True) and "tk" not in job):
+            and _settings.get("tiktok_auto", False) and "tk" not in job):
         job["tk"] = {"want": True, "upto": 0, "error": ""}
         _save_meta(job)
         threading.Thread(target=_tk_send_all, daemon=True).start()
@@ -3486,9 +3486,9 @@ def tiktok_state():
                       "error": tk.get("error", ""),
                       "missing": sum(1 for n, p in _tk_parts(job) if n > tk.get("upto", 0) and not p.exists())})
     return jsonify(configured=tiktok.configured(), connected=bool(_settings.get("tiktok_token")),
-                   user=_settings.get("tiktok_user", ""), auto=_settings.get("tiktok_auto", True),
+                   user=_settings.get("tiktok_user", ""), auto=_settings.get("tiktok_auto", False),
                    daily=int(_settings.get("tiktok_daily") or 0), today=_tk_sent_today(),
-                   mode=_settings.get("tiktok_mode") or "private",
+                   mode=_settings.get("tiktok_mode") or "draft",
                    can_post="video.publish" in ((_settings.get("tiktok_token") or {}).get("scope") or ""),
                    redirect=tiktok.redirect_uri(), queue=queue)
 
