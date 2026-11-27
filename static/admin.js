@@ -103,6 +103,9 @@ async function loadSettings() {
     $('#logosizev').textContent = j.logo_size + '%';
     showLogo(j.has_logo);
     $('#capsize').value = j.caption_size; $('#capsizev').textContent = j.caption_size + '%';
+    document.querySelectorAll('#modesbox input[data-mode]').forEach((c) => {
+      c.checked = !j.modes || j.modes[c.dataset.mode] !== false;
+    });
     $('#speakspeed').value = j.speak_speed; $('#speakspeedv').textContent = (+j.speak_speed).toFixed(2) + 'x';
     pos.h = { capbottom: j.caption_bottom, blurbottom: j.blur_bottom, blurheight: j.blur_height };
     pos.v = { capbottom: j.caption_bottom_v, blurbottom: j.blur_bottom_v, blurheight: j.blur_height_v };
@@ -120,6 +123,7 @@ $('#setsave').addEventListener('click', async () => {
       body: JSON.stringify({ max_minutes: +$('#maxmin').value, outro: $('#outroin').value, channel_name: $('#chanin').value,
         logo_position: $('#logopos').value, logo_size: +$('#logosize').value,
         caption_size: +$('#capsize').value, speak_speed: +$('#speakspeed').value,
+        modes: Object.fromEntries([...document.querySelectorAll('#modesbox input[data-mode]')].map((c) => [c.dataset.mode, c.checked])),
         caption_bottom: +pos.h.capbottom, blur_bottom: +pos.h.blurbottom, blur_height: +pos.h.blurheight,
         caption_bottom_v: +pos.v.capbottom, blur_bottom_v: +pos.v.blurbottom, blur_height_v: +pos.v.blurheight }),
     });

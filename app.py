@@ -69,7 +69,10 @@ _settings = {"max_minutes": int(os.environ.get("DUBLAB_MAX_MINUTES") or 30),
              # ~20%, and burned-in captions there usually sit higher up
              "caption_bottom_v": 24, "blur_bottom_v": 20, "blur_height_v": 12,
              # how fast the Burmese voice speaks (1.0 = the TTS's own pace)
-             "speak_speed": float(os.environ.get("DUBLAB_SPEAK_SPEED") or 1.15)}
+             "speak_speed": float(os.environ.get("DUBLAB_SPEAK_SPEED") or 1.15),
+             # 🧩 which modes the upload page shows (unticked in Settings = hidden)
+             "modes": {"recap": True, "orig": True, "game": True, "music": True, "cartoon": True, "fix": True}}
+MODE_KEYS = ("recap", "orig", "game", "music", "cartoon", "fix")
 _RANGES = {"caption_size": (3, 10), "caption_bottom": (0, 40),
            "blur_bottom": (0, 60), "blur_height": (4, 40),
            "caption_bottom_v": (0, 60), "blur_bottom_v": (0, 70), "blur_height_v": (4, 40),
@@ -89,6 +92,8 @@ try:
     for _k, (_lo, _hi) in _RANGES.items():
         if isinstance(_saved.get(_k), (int, float)) and _lo <= _saved[_k] <= _hi:
             _settings[_k] = _saved[_k]
+    if isinstance(_saved.get("modes"), dict):
+        _settings["modes"].update({k: bool(v) for k, v in _saved["modes"].items() if k in MODE_KEYS})
     if isinstance(_saved.get("telegram_token"), str):   # set on the admin page
         telegram.set_token(_saved["telegram_token"])
     for _k, _t in (("tiktok_token", dict), ("tiktok_user", str), ("tiktok_auto", bool), ("tiktok_daily", int),
@@ -1417,6 +1422,8 @@ def create_cartoon_job():
     """🎨 A new cartoon: no video, only an (optional) idea / description."""
     if not _admin_ok():
         return jsonify(error="admin password လိုတယ်"), 403
+    if not _settings["modes"].get("cartoon", True):
+        return jsonify(error="Cartoon mode ကို Settings မှာ ပိတ်ထားတယ်"), 400
     try:
         length = int(request.form.get("length") or 60)
     except ValueError:
@@ -2534,7 +2541,7 @@ threading.Thread(target=_awake_while_busy, daemon=True, name="awake").start()
 def index():
     return render_template("index.html", max_minutes=0, max_mb=max_mb(),
                            default_model=default_whisper_model(), outro=_settings["outro"],
-                           has_logo=LOGO_FILE.exists(),
+                           has_logo=LOGO_FILE.exists(), modes=_settings["modes"],
                            maintenance=MAINTENANCE,
                            maintenance_msg=MAINTENANCE_MSG)
 
@@ -2594,6 +2601,10 @@ def create_job():
         model = default_whisper_model()
     if direction not in VOICES or voice not in ("auto", "female", "male"):
         return jsonify(error="ရွေးချယ်မှု မှားနေတယ်"), 400
+    picked = ("game" if request.form.get("game") == "1" else "music" if request.form.get("music") == "1"
+              else "orig" if orig_audio else "recap")
+    if not _settings["modes"].get(picked, True):        # 🧩 turned off in Settings (an old open page)
+        return jsonify(error="ဒီ mode ကို Settings မှာ ပိတ်ထားတယ် — စာမျက်နှာကို refresh လုပ်ပါ"), 400
     recap_auto = request.form.get("recap") == "auto"      # 🤖 55%+ of the film's own length
     try:
         recap = 20 if recap_auto else int(request.form.get("recap") or 0)   # (set from the length later)
@@ -2978,7 +2989,7 @@ def admin_get_settings():
                    channel_name=_settings["channel_name"],
                    has_logo=LOGO_FILE.exists(), logo_position=_settings["logo_position"],
                    logo_size=_settings["logo_size"], caption_size=_settings["caption_size"],
-                   speak_speed=_settings["speak_speed"],
+                   speak_speed=_settings["speak_speed"], modes=_settings["modes"],
                    caption_bottom=_settings["caption_bottom"],
                    blur_bottom=_settings["blur_bottom"], blur_height=_settings["blur_height"],
                    caption_bottom_v=_settings["caption_bottom_v"],
@@ -3016,6 +3027,8 @@ def admin_set_settings():
                 _settings[k] = max(lo, min(hi, round(float(data[k]), 2 if k == "speak_speed" else 1)))
             except (TypeError, ValueError):
                 pass
+    if isinstance(data.get("modes"), dict):
+        _settings["modes"].update({k: bool(v) for k, v in data["modes"].items() if k in MODE_KEYS})
     set_speak_speed(_settings["speak_speed"])
     try:
         SETTINGS_FILE.write_text(json.dumps(_settings, ensure_ascii=False))

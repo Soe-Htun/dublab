@@ -714,6 +714,16 @@ function syncRecap() {
   recap = on ? recapLen : '0';
   setRecapLen(recapLen);
 }
+// 🧩 a mode turned off in Settings: its row is hidden — if it was the ticked one, the first shown mode is ticked
+(function () {
+  const radios = [...document.querySelectorAll('input[name="mode"]')];
+  const shown = radios.filter((r) => !r.closest('label').hidden);
+  const cur = radios.find((r) => r.checked);
+  if (shown.length && (!cur || cur.closest('label').hidden)) {
+    shown[0].checked = true;
+    setTimeout(() => shown[0].dispatchEvent(new Event('change')), 0);
+  }
+})();
 // recap / no recap are radios: either one changing re-syncs everything
 ['#recapchk', '#fullchk', '#gamechk', '#musicchk'].forEach((id) => $(id).addEventListener('change', () => {
   syncRecap(); syncOrig(); try { syncYtMode(); partsNote(); } catch (e) { /* not ready */ }
@@ -794,7 +804,7 @@ syncYtMode();
 (function () {
   const open = $('#fixopen');
   if (!open) return;
-  if (admKey()) open.hidden = false;
+  if (admKey() && !open.dataset.off) open.hidden = false;
   let fixCensor = 'auto';
   const back = $('#fixback'), fdrop = $('#fixdrop'), finput = $('#fixfile');
   let fixFile = null;
@@ -888,7 +898,7 @@ syncYtMode();
 (function () {
   const open = $('#cartoonopen');
   if (!open) return;
-  if (admKey()) open.hidden = false;
+  if (admKey() && !open.dataset.off) open.hidden = false;   // (off in Settings: never shown)
   const back = $('#fixback');
   let len = '60';
   const show = (on) => {

@@ -68,8 +68,8 @@
     </div>
     <video id="preview" controls playsinline hidden></video>
     <p id="filemeta" class="filemeta" hidden></p>
-    <button class="ghost fixopen" id="cartoonopen" type="button" hidden>🎨 Cartoon ဇာတ်လမ်း ဖန်တီးမယ် <span class="dim">(ဗီဒီယို / link မလို)</span></button>
-    <button class="ghost fixopen" id="fixopen" type="button" hidden>🔧 Warning ထိထားတဲ့ ဗီဒီယို ပြင်မယ် <span class="dim">(အပိုင်း တစ်ခုတည်း ပြန်ထုတ်မယ်)</span></button>
+    <button class="ghost fixopen" id="cartoonopen" type="button" hidden{% if not modes.cartoon %} data-off="1"{% endif %}>🎨 Cartoon ဇာတ်လမ်း ဖန်တီးမယ် <span class="dim">(ဗီဒီယို / link မလို)</span></button>
+    <button class="ghost fixopen" id="fixopen" type="button" hidden{% if not modes.fix %} data-off="1"{% endif %}>🔧 Warning ထိထားတဲ့ ဗီဒီယို ပြင်မယ် <span class="dim">(အပိုင်း တစ်ခုတည်း ပြန်ထုတ်မယ်)</span></button>
   </section>
 
   <!-- 🔧 fix one flagged part -->
@@ -151,7 +151,7 @@
         <span class="opt-sub">~2 ဆ မြန် · English အတွက် အဆင်ပြေ၊ တရုတ်စကား မှားတာ ပိုများ</span>
       </button>
     </div>
-    <label class="checkrow recaprow" id="recaprow">
+    <label class="checkrow recaprow" id="recaprow" data-mode="recap"{% if not modes.recap %} hidden{% endif %}>
       <input type="radio" name="mode" id="recapchk" value="recap" checked>
       <span>🎬 <b>Recap version</b> လုပ်မယ် <span class="dim">— စကားပြောတဲ့ အခန်းတွေပဲ ချန် (အစ၊ အဆုံး၊ ကပွဲ၊ စကားမပြောတဲ့ အခန်းတွေ ဖြတ် — ဇာတ်ကားရဲ့ ~၄၅–၆၀%)၊ ဇာတ်ကောင်တွေ ပြောတာကို AI အသံနဲ့ တိုတို ရှင်းရှင်း မြန်မာလို ပြောမယ်၊ စကားမပြောတဲ့ အခန်းမှာ narrator က ဘာဖြစ်နေလဲ ပြောမယ်</span></span>
     </label>
@@ -165,7 +165,7 @@
       </div>
       <p class="splitnote dim" id="recapnote"></p>
     </div>
-    <label class="checkrow recaprow">
+    <label class="checkrow recaprow" data-mode="orig"{% if not modes.orig %} hidden{% endif %}>
       <input type="radio" name="mode" id="fullchk" value="full">
       <span>🎞️ <b>Recap မလုပ်ဘူး</b> <span class="dim">— ဗီဒီယို အပြည့်အတိုင်း၊ မူရင်းအသံ + မြန်မာစာတန်း၊ စကားမပြောတဲ့ အခန်းမှာ AI က ကြားဖြတ် ရှင်းပြမယ်</span></span>
     </label>
@@ -174,7 +174,7 @@
         <span>🎵 <b>နောက်ခံ ဂီတ ဖယ်မယ်</b> <span class="dim">— copyright ရှိတဲ့ သီချင်း နောက်ခံမှာ ပါရင် · ၂ နာရီ ဇာတ်ကားဆို ~၂၀–၂၅ မိနစ် ပိုကြာမယ်</span></span></label>
       <p class="warnnote" id="origwarn" hidden>⚠️ မူရင်းအသံ + စာတန်း ထည့်ရုံဆိုရင် TikTok / YouTube က <b>“unoriginal / reused content”</b> လို့ သတ်မှတ်နိုင်တယ် — For You restrict၊ Creator Rewards / monetization အပြီးပိတ် ဖြစ်နိုင်တယ်။ ပိုက်ဆံရမယ့် account မှာ မတင်ပါနဲ့</p>
     </div>
-    <label class="checkrow recaprow">
+    <label class="checkrow recaprow" data-mode="game"{% if not modes.game %} hidden{% endif %}>
       <input type="radio" name="mode" id="gamechk" value="game">
       <span>🎮 <b>Game highlight</b> <span class="dim">— ကိုယ်တိုင် ကစားထားတဲ့ ဗီဒီယို (MLBB…) ကို edit လုပ်မယ် · စာတန်း၊ AI အသံ မပါ</span></span>
     </label>
@@ -190,7 +190,7 @@
       <label class="checkrow"><input type="checkbox" id="gamememechk">
         <span>😂 <b>Meme ညှပ်မယ်</b> <span class="dim">— kill အကြီး၊ ရယ်စရာ သေတာ ပြီးတိုင်း ၃ စက္ကန့် meme ("ဆရာကြီးပဲဟေ့"၊ "ဟားဟားဟား သေပြီ"… AI အသံနဲ့) · dublab/memes/kill, memes/fail… ထဲ ကိုယ်ပိုင် clip ထည့်ထားရင် အဲဒါ အရင်သုံးမယ်</span></span></label>
     </div>
-    <label class="checkrow recaprow">
+    <label class="checkrow recaprow" data-mode="music"{% if not modes.music %} hidden{% endif %}>
       <input type="radio" name="mode" id="musicchk" value="music">
       <span>🎵 <b>Music (မြန်မာ သီချင်း)</b> <span class="dim">— သီချင်းစာသားကို AI က နားထောင်ရေးပြီး တစ်လုံးချင်း ရိုက်ထည့်သလို ပေါ်အောင် ထည့်မယ် · ဘာသာ မပြန်ဘူး</span></span>
     </label>
