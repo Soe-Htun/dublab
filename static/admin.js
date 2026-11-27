@@ -307,13 +307,15 @@ $('#tk-scan').addEventListener('click', async () => {
     $('#tk-films').innerHTML = j.films.map((f, i) => {
       const next = Math.min(f.done + 1, f.parts.length), left = f.parts.length - f.done;
       const opts = f.parts.map(p => `<option value="${p.n}"${p.n === next ? ' selected' : ''}>${esc(p.label)}</option>`).join('');
+      const last = Math.min(f.parts.length, next + 4);           // 5 parts by default
+      const optsTo = f.parts.map(p => `<option value="${p.n}"${p.n === last ? ' selected' : ''}>${esc(p.label)}</option>`).join('');
       return `<div class="tkfilm" data-i="${i}">
         <div class="tkhead"><b>${esc(f.title)}</b><span class="dim">part ${f.parts.length} ခု${f.done ? ` · ✅ ${f.done} ထိ ပို့ပြီး` : ''}
           <button class="tkhide" title="စာရင်းက ဖယ်မယ်">✕</button></span></div>
         ${left <= 0 ? '<p class="dim">✅ အကုန် ပို့ပြီးပြီ</p>' : `
         <div class="tkpick">
           <label>part <select class="tkfrom">${opts}</select> ကနေ</label>
-          <label><input type="number" class="tkcount" min="1" max="50" value="${Math.min(5, left)}"> ခု</label>
+          <label><select class="tkto">${optsTo}</select> ထိ</label>
           <button class="ghost tksend">📤 TikTok ပို့မယ်</button>
         </div>
         <p class="dim tkrange"></p>`}
@@ -336,15 +338,21 @@ $('#tk-scan').addEventListener('click', async () => {
     });
     const range = row => {
       const f = j.films[+row.dataset.i], from = +row.querySelector('.tkfrom').value;
-      const pick = f.parts.filter(p => p.n >= from).slice(0, Math.max(1, +row.querySelector('.tkcount').value || 1));
-      row.querySelector('.tkrange').textContent = pick.length ? `→ part ${pick[0].label} – ${pick[pick.length - 1].label} (${pick.length} ခု)` : '';
+      const to = +row.querySelector('.tkto').value;
+      const pick = f.parts.filter(p => p.n >= from && p.n <= to);
+      row.querySelector('.tkrange').textContent = pick.length
+        ? `→ part ${pick.map(p => p.label).join(', ')} (${pick.length} ခု)` : '⚠️ "ထိ" က "ကနေ" ထက် နောက်ကျရမယ်';
       return pick;
     };
     document.querySelectorAll('.tkfilm').forEach(row => {
       if (!row.querySelector('.tkfrom')) return;
       range(row);
-      row.querySelector('.tkfrom').addEventListener('change', () => range(row));
-      row.querySelector('.tkcount').addEventListener('input', () => range(row));
+      row.querySelector('.tkfrom').addEventListener('change', () => {
+        const fr = +row.querySelector('.tkfrom').value, to = row.querySelector('.tkto');
+        if (+to.value < fr) to.value = String(fr);          // "to" never before "from"
+        range(row);
+      });
+      row.querySelector('.tkto').addEventListener('change', () => range(row));
     });
     document.querySelectorAll('.tksend').forEach(b => b.addEventListener('click', async () => {
       const row = b.closest('.tkfilm'), f = j.films[+row.dataset.i], pick = range(row);
