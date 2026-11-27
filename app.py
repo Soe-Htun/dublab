@@ -2067,7 +2067,8 @@ def _voice_and_mux(job):
                                       LANG_NAMES.get(job.get("seg_lang") or "", job.get("seg_lang")), title=job.get("name") or "")
                 except Exception:  # noqa: BLE001 - pictures alone then
                     cast = ""
-            chooser = (lambda shots: pick_cover_frames(shots, key, cast)) if key else None
+            poster = (d / "src_thumb.jpg").read_bytes() if (d / "src_thumb.jpg").exists() else None
+            chooser = (lambda shots: pick_cover_frames(shots, key, cast, poster)) if key else None   # 🖼️ the poster's stars
             art = None
             if key and job.get("cover_scene"):
                 try:

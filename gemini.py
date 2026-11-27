@@ -1422,11 +1422,18 @@ Never pick dark, blurry, black, fading, empty or unclear frames (furniture, wall
 landscape-only, logo, title, credit or text frames, and never frames with SUBTITLE text on them (any language). Apart from "action", a frame may appear in only one list."""
 
 
-def pick_cover_frames(jpegs, api_key, cast=""):
+def pick_cover_frames(jpegs, api_key, cast="", poster=None):
     """jpegs: [bytes]. Returns (hero indices, other indices, 2 or 4 photos); raises on failure.
-    cast: the film's characters from its dialogue (most important first) — who the leads are."""
+    cast: the film's characters from its dialogue (most important first) — who the leads are.
+    poster: the uploader's thumbnail / film poster (bytes) — the stars on it ARE the leads."""
     data = {}
     prompt = COVER_PROMPT.format(last=len(jpegs) - 1)
+    if poster:    # old films: blurry frames, Gemini picked side characters — the poster shows who the stars are
+        prompt += ("\n\nTHE POSTER (the first picture, labelled POSTER) shows the film's STARS — the people with "
+                   "the biggest faces on it are the MAIN characters. \"hero\" and \"second\" MUST be frames of "
+                   "THOSE SAME PEOPLE (match their faces, hair, build and clothes to the poster); never pick a "
+                   "person who is not on the poster for hero / second. Prefer frames where one of them is "
+                   "large and clear. The poster itself is not one of the numbered frames.")
     if cast:      # pictures alone: the man seen most was "main" and the villain "second" (God of Gamblers II:
         # Andy Lau + a villain, Stephen Chow half hidden behind) — the story says who leads
         prompt += ("\n\nTHE FILM'S CHARACTERS (from its dialogue, most important first):\n" + cast +
@@ -1435,7 +1442,7 @@ def pick_cover_frames(jpegs, api_key, cast=""):
                    "lead is SECOND, never the villain). The villain is at most THIRD.")
     for attempt in range(2):          # the model's JSON is sometimes broken: ask once more
         raw = _call(prompt, api_key, max_tokens=2048,
-                    images=[(f"Frame {i}:", b) for i, b in enumerate(jpegs)])
+                    images=([("POSTER:", poster)] if poster else []) + [(f"Frame {i}:", b) for i, b in enumerate(jpegs)])
         m = re.search(r"\{.*\}", raw, re.S)
         try:
             data = json.loads(re.sub(r",\s*([}\]])", r"\1", m.group(0))) if m else {}
