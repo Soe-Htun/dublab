@@ -888,7 +888,8 @@ LYRICS_PROMPT = """This audio is a {length:.0f}-second piece of a BURMESE (Myanm
 out where possible). Write down the LYRICS exactly as sung, in Burmese (Myanmar script), with the time each line
 starts, from 0 at the start of this piece. One sung line (a phrase of a few seconds) per output line; a repeated
 chorus is written again each time it is sung. Correct Burmese spelling, real words only — never invent words
-for mumbled bits (leave them out). Skip instrumental parts. Like:
+for mumbled bits (leave them out). Skip instrumental parts, and skip SPOKEN talk (someone speaking, not
+singing — an intro speech before the song, an announcer, a talk between verses): only SUNG lyrics. Like:
 00:12|မင်းမရှိတဲ့ ညတွေမှာ
 00:17|ကိုယ်တစ်ယောက်တည်း လွမ်းနေမိတယ်
 Output only such lines."""

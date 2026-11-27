@@ -1011,6 +1011,8 @@ def _snap_lyrics(segs, ref):
             out.append({**sg, "text": " ".join(ref[i:i + k])})
             pos = best_end % len(ref)
         else:
+            if not out:                             # 🗣️ talk BEFORE the song (an intro speech, "this song
+                continue                            # is…"): not in the lyrics → not a caption (and cut)
             out.append(sg)                          # not in the pasted lyrics: as heard
     merged = []                                     # one line heard in pieces → shown once
     for sg in out:
@@ -1108,6 +1110,23 @@ def _music_job(job):
         for i, sg in enumerate(segs):
             nxt = segs[i + 1]["start"] if i + 1 < len(segs) else job["total"]
             sg["end"] = round(max(sg["start"] + 1.0, min(nxt - 0.1, sg["start"] + 8.0 + lead)), 2)
+        # ✂️ a long intro (music only, or someone talking before the song) is cut: the video starts
+        # ~5 s before the singing (a few seconds of the tune leading in, with a short fade-in), so
+        # viewers hear the song right away instead of scrolling past (sung at 0:35 → starts at 0:30)
+        cut = round(segs[0]["start"] + lead - 5.0, 2) if segs else 0
+        if cut >= 6:
+            tmp = d / ("input_cut" + job["ext"])
+            run(["ffmpeg", "-y", "-v", "error", "-ss", f"{cut:.2f}", "-i", str(src),
+                 "-map", "0:v:0?", "-map", "0:a:0?", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                 "-pix_fmt", "yuv420p", "-af", "afade=t=in:d=0.6", "-c:a", "aac", "-b:a", "192k", str(tmp)])
+            tmp.replace(src)
+            for f in ("audio.wav", "vocals16.wav"):          # (made from the uncut song)
+                (d / f).unlink(missing_ok=True)
+            for sg in segs:
+                sg["start"] = round(max(0.0, sg["start"] - cut), 2)
+                sg["end"] = round(max(sg["start"] + 0.5, sg["end"] - cut), 2)
+            job["total"] = probe_duration(src)
+            jlog(job, f"✂️ {cut:.0f}s music-only intro cut — the video starts just before the singing")
         job["segs"] = segs
     if not segs:
         raise ValueError("သီချင်းစာသား မကြားရဘူး (တီးလုံးသက်သက်လား?)")
