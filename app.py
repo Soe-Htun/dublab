@@ -3354,7 +3354,7 @@ def _tg_groups(vids):
         head = re.sub(r"^[📱📺🎬]\s*\S*\s*", "", head).strip() if head[:1] in "📱📺🎬" else head
         m = _PART_RE.match(head)
         title, label = (m.group(1).strip(), m.group(2)) if m else (head or "(no title)", "1")
-        if v["caption"].startswith("📺"):
+        if v["caption"].startswith("📺") or (v.get("w") and v.get("h") and v["w"] > v["h"]):
             continue                                   # the YouTube (16:9) copy: not for TikTok
         f = films.setdefault(title, {"title": title, "parts": [], "date": 0})
         f["date"] = max(f["date"], v["date"])
@@ -3390,6 +3390,10 @@ def tiktok_tg_list():
         return jsonify(error=str(e)[:200]), 400
     # remembered films (a film seen once stays until all its parts went, even past the scan window)
     store = _settings.setdefault("tiktok_tg_films", {})
+    wide = {v["id"] for v in vids if v.get("w") and v.get("h") and v["w"] > v["h"]}
+    for t in list(store):                                  # remembered before the 16:9 copies were left out
+        if store[t]["parts"] and all(p["id"] in wide for p in store[t]["parts"]):
+            store.pop(t)
     for f in _tg_groups(vids):
         old = store.get(f["title"]) or {"parts": [], "date": 0}
         parts = {p["label"]: {"label": p["label"], "id": p["id"], "caption": p.get("caption", "")} for p in old["parts"]}

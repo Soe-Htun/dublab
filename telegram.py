@@ -472,11 +472,12 @@ def sent_videos(chat_id, days=3):
                     v = getattr(m, "video", None) or (m.document if m.document and str(
                         getattr(m.document, "mime_type", "")).startswith("video/") else None)
                     if v and m.out:                   # sent by the bot
-                        dur = 0
+                        dur, vw, vh = 0, 0, 0
                         for a in getattr(v, "attributes", []) or []:
                             dur = int(getattr(a, "duration", 0) or dur)
+                            vw, vh = int(getattr(a, "w", 0) or vw), int(getattr(a, "h", 0) or vh)
                         out.append({"id": m.id, "caption": (m.message or "").strip(), "date": int(m.date.timestamp()),
-                                    "size": int(getattr(v, "size", 0) or 0), "duration": dur})
+                                    "size": int(getattr(v, "size", 0) or 0), "duration": dur, "w": vw, "h": vh})
                 if old and old >= sum(1 for m in msgs if m) * 0.9:
                     break                              # this batch is older than `days`
                 empty = empty + 1 if not any(msgs) else 0

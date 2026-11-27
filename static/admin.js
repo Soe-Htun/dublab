@@ -314,7 +314,7 @@ $('#tk-scan').addEventListener('click', async () => {
         <div class="tkpick">
           <label>part <select class="tkfrom">${opts}</select> ကနေ</label>
           <label><input type="number" class="tkcount" min="1" max="50" value="${Math.min(5, left)}"> ခု</label>
-          <button class="ghost tksend">📤 draft ပို့မယ်</button>
+          <button class="ghost tksend">📤 TikTok ပို့မယ်</button>
         </div>
         <p class="dim tkrange"></p>`}
       </div>`;
@@ -349,7 +349,7 @@ $('#tk-scan').addEventListener('click', async () => {
     document.querySelectorAll('.tksend').forEach(b => b.addEventListener('click', async () => {
       const row = b.closest('.tkfilm'), f = j.films[+row.dataset.i], pick = range(row);
       if (!pick.length) return;
-      if (!(await askConfirm({ title: `${f.title} — part ${pick[0].label}–${pick[pick.length - 1].label} (${pick.length} ခု) draft ပို့မလား?`, icon: 'upload', message: 'Telegram ကနေ ယူပြီး TikTok draft ထဲ ပို့မယ်' }))) return;
+      if (!(await askConfirm({ title: `${f.title} — part ${pick[0].label}–${pick[pick.length - 1].label} (${pick.length} ခု) TikTok ပို့မလား?`, icon: 'upload', message: 'Telegram ကနေ ယူပြီး TikTok ကို ပို့မယ် (Settings မှာ ရွေးထားတဲ့ ပုံစံအတိုင်း)' }))) return;
       const r2 = await fetch('/api/tiktok/telegram?key=' + encodeURIComponent(key), {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: f.title, from: pick[0].n, count: pick.length }),
       });
