@@ -3827,14 +3827,18 @@ def music_lyric_frames(segs, total, out_dir, width=1080, size=66, max_w=940):
         return b[2] - b[0]
 
     def layout(text):                        # wrapped at spaces (never inside a word), ≤2 lines, as units
-        rows = [""]
-        for word in text.split():
-            trial = (rows[-1] + " " + word).strip()
-            if w_of(trial) > max_w and rows[-1] and len(rows) < 2:
-                rows.append(word)
-            else:
-                rows[-1] = trial
-        return [_mm_units(r) for r in rows]
+        words = text.split()
+        if w_of(text) <= max_w or len(words) < 2:
+            return [_mm_units(text)]
+        # two lines as even as possible (not a long line and one word left alone under it)
+        best = None
+        for k in range(1, len(words)):
+            a, b = " ".join(words[:k]), " ".join(words[k:])
+            wa, wb = w_of(a), w_of(b)
+            score = max(wa, wb) + (10 ** 6 if max(wa, wb) > max_w else 0)
+            if best is None or score < best[0]:
+                best = (score, a, b)
+        return [_mm_units(best[1]), _mm_units(best[2])]
 
     def draw(lines, shown, cursor):
         img = Image.new("RGBA", (width, strip_h), (0, 0, 0, 0))
@@ -3966,7 +3970,7 @@ def _music_player_art(photo, out_dir, total, logo=None, W=1080, H=1920):
         bg.alpha_composite(lg, (W - 180, 40))
     bg_p = out_dir / "bg.png"
     bg.convert("RGB").save(bg_p)
-    # the round photo (turns slowly like a record)
+    # the round photo
     face = ImageOps.fit(src, (D, D), centering=(0.5, 0.35)).convert("RGBA")
     m = Image.new("L", (D * 3, D * 3), 0)
     ImageDraw.Draw(m).ellipse((0, 0, D * 3, D * 3), fill=255)
@@ -4068,7 +4072,7 @@ def render_music_video(src, segs, out, photo=None, logo=None, blur=None, log=Non
               f"fscale=log:win_size=1024:rate=25:colors=white,format=gray,scale={bw}:{bh}:flags=neighbor[bars0]",
               "[4:v]format=gray[str]", "[bars0][str]blend=all_mode=multiply:shortest=1[mask]",
               "[3:v]format=rgba[gr]", "[gr][mask]alphamerge[bars]",
-              "[2:v]format=rgba,rotate=a='t*0.25':c=none:ow=iw:oh=ih[disc]",
+              "[2:v]format=rgba[disc]",           # (still: a turning photo of a person went upside down)
               f"[1:v][disc]overlay={dx}:{dy}[a]",
               f"[a][bars]overlay={bx}:{by}:shortest=1[b]",
               f"[b][5:v]overlay=x='{px0}-{L}+{L}*t/{T}':y={py - 4}[c]",
