@@ -1089,9 +1089,9 @@ def _music_job(job):
             segs = []                           # Gemini heard no singing
         if ref:                                 # the pasted words, word for word
             segs = _snap_lyrics(segs, ref)
-        # 🎤 each line shows ~1 s BEFORE it is sung (karaoke: read it, then sing along) and stays
+        # 🎤 each line shows ~0.8 s BEFORE it is sung (karaoke: read it, then sing along) and stays
         # until the next one shows (≤ 8 s)
-        lead = 1.0
+        lead = 0.8
         for i, sg in enumerate(segs):
             prev = segs[i - 1]["start"] if i else 0.0
             sg["start"] = round(max(0.0, prev + 0.4 if i else 0.0, sg["start"] - lead), 2)
@@ -2330,7 +2330,8 @@ def create_job():
     intro = request.form.get("intro", "0") == "1"      # off unless ticked
     commentary = request.form.get("commentary", "1") == "1"   # 🎙️ narrator remarks (no-recap videos)
     char_voice = request.form.get("fullstyle") == "char"       # 🗣️ characters' lines, short, one AI voice
-    cover_src = "frames"       # 🖼️ covers always from the video: the main character (+ one more photo)
+    cover_src = "auto"         # 🖼️ the uploader's poster when Gemini says it shows the main characters well
+    # (old Burmese films: the poster has the stars, the blurry frames didn't), else the video's frames
     hook = request.form.get("hook", "0") == "1"        # ⚡ a teaser scene from inside the video first (off unless ticked)
     youtube = request.form.get("youtube", "0") == "1"  # TikTok 9:16 always; this adds the 16:9 YouTube one
     yt_full = False            # 📺 YouTube = the recap as one video (the 83%+ long version was dropped)
@@ -3677,9 +3678,17 @@ def _ready_title(job):
 
 def _download_name(job, ext, part=None, tiktok=False):
     ready = _ready_title(job)
-    if ready:                                   # "… (မြန်မာ Recap).mp4", "… (မြန်မာ Recap) - TikTok 2.mp4"
-        return ready + (" - TikTok" if tiktok else "") + (f" {part}" if tiktok and part else
-                                                        f" - {part}" if part else "") + ext
+    if ready:
+        # "Title-1.mp4", "Title-2.mp4"… (the owner's choice: short and clear — a ~200-byte name with the
+        # film, the mode and "TikTok 2" at its end was cut in the MIDDLE by Telegram / macOS, so every
+        # part was saved under one name). " TikTok" only when a YouTube copy is made too.
+        title = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', " ", (job.get("title_mm") or "").strip())
+        title = re.sub(r"\s+", " ", title).strip()
+        while len(title.encode()) > 120:
+            title = title[:-1].rstrip()
+        ep = job.get("episode")
+        num = f"-{ep}-{part}" if ep and part else f"-{ep}" if ep else f"-{part}" if part else ""
+        return title + num + (" TikTok" if tiktok and job.get("tt") else "") + ext
     """Short, file-system-safe name from the source video's title or file name,
     e.g. "Bullies Picked on the Wrong Girl - mm.mp4"."""
     name = re.sub(r"#\S+", "", job.get("name") or "")        # drop hashtags
