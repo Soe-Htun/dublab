@@ -68,6 +68,7 @@
     </div>
     <video id="preview" controls playsinline hidden></video>
     <p id="filemeta" class="filemeta" hidden></p>
+    <button class="ghost fixopen" id="cartoonopen" type="button" hidden>🎨 Cartoon ဇာတ်လမ်း ဖန်တီးမယ် <span class="dim">(ဗီဒီယို / link မလို)</span></button>
     <button class="ghost fixopen" id="fixopen" type="button" hidden>🔧 Warning ထိထားတဲ့ ဗီဒီယို ပြင်မယ် <span class="dim">(အပိုင်း တစ်ခုတည်း ပြန်ထုတ်မယ်)</span></button>
   </section>
 
@@ -96,6 +97,27 @@
       <button class="opt" data-v="0" type="button"><span class="opt-label">မလုပ်</span></button>
     </div>
     <button class="cta" id="fixgo" type="button">🔧 ပြင်မယ်</button>
+  </section>
+
+  <!-- 🎨 an original cartoon comedy: no video, only an idea -->
+  <section class="card" id="card-cartoon" hidden>
+    <h2>🎨 Cartoon ဇာတ်လမ်း</h2>
+    <p class="note">AI က ဟာသ ဇာတ်လမ်း ရေးပြီး ကာတွန်း ဆွဲ၊ ဇာတ်ကောင်အလိုက် မြန်မာ အသံ၊ စာတန်း၊ sound effect နဲ့ ဗီဒီယို ထုတ်ပေးမယ် — ဗီဒီယို ဖိုင် မလိုဘူး</p>
+    <label class="checkrow"><span>🔗 <b>Short video link</b> <span class="dim">(မထည့်လည်း ရ — ဟာသ short တစ်ခုရဲ့ link ထည့်ရင် အဲ့ဇာတ်လမ်းကို ကိုယ်ပိုင် ဇာတ်ကောင်၊ ကိုယ်ပိုင် စကားနဲ့ ကာတွန်း version ပြန်ရေးမယ်)</span></span></label>
+    <input type="url" id="cartoonurl" class="titlein" placeholder="🔗 YouTube / TikTok link (မထည့်လည်း ရ)" inputmode="url" autocomplete="off">
+    <label class="checkrow"><span>💡 <b>ဇာတ်လမ်း idea / description</b> <span class="dim">(မထည့်လည်း ရ — link ရော idea ပါ မထည့်ရင် AI က ကိုယ်တိုင် ဟာသ ဇာတ်လမ်း စဉ်းစားမယ်)</span></span></label>
+    <textarea id="cartoonidea" class="lyricsin" rows="5" maxlength="3000" placeholder="ဥပမာ — သတ္တိရှိတယ်လို့ ကြွားတဲ့ ကိုဖိုးလပြည့် ညဘက် သင်္ချိုင်းနား ဖြတ်လျှောက်တော့ သရဲနဲ့ တွေ့၊ သရဲက သူ့ထက်တောင် ပိုကြောက်နေ…"></textarea>
+    <label class="checkrow"><span>🏷️ <b>ခေါင်းစဉ်</b> <span class="dim">(မထည့်လည်း ရ — AI ပေးမယ်)</span></span></label>
+    <input type="text" id="cartoontitle" class="titlein" maxlength="60" placeholder="ဥပမာ သရဲကြောက်တဲ့ သရဲ">
+    <label class="checkrow"><span>⏱️ <b>အရှည်</b></span></label>
+    <div class="optgrid chips" id="cartoonlen">
+      <button class="opt selected" data-v="60" type="button"><span class="opt-label">1<span class="dim"> မိနစ်</span></span></button>
+      <button class="opt" data-v="120" type="button"><span class="opt-label">2<span class="dim"> မိနစ်</span></span></button>
+      <button class="opt" data-v="180" type="button"><span class="opt-label">3<span class="dim"> မိနစ်</span></span></button>
+    </div>
+    <label class="checkrow"><input type="checkbox" id="cartoonyt">
+      <span>📺 <b>YouTube (16:9) ပါ ထုတ်မယ်</b> <span class="dim">— TikTok (9:16) က အမြဲ ပါတယ်</span></span></label>
+    <button class="cta" id="cartoongo" type="button">🎨 ဖန်တီးမယ်</button>
   </section>
 
   <!-- STEP 2: options -->

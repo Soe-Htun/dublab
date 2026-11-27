@@ -162,6 +162,13 @@ function showProgress(jid) {
       // turned and the page looked stuck
       const now = document.querySelector(`#stages li[data-s="${j.stage}"]`);
       if (now && now.hidden && j.kind !== 'fix') now.hidden = false;
+      if (j.kind === 'cartoon') document.querySelectorAll('#stages li').forEach((li) => {
+        li.hidden = !['translate', 'voice', 'mux'].concat(j.stage === 'download' || li.dataset.s === 'download' && !li.hidden ? ['download'] : [])
+          .includes(li.dataset.s);   // 🎨 (the link's video) · story · voices · drawing
+        const t = { translate: 'ဇာတ်လမ်း ရေးခြင်း', voice: 'ဇာတ်ကောင် အသံ', mux: 'ကာတွန်း ဆွဲခြင်း' }[li.dataset.s];
+        const tn = [...li.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim());
+        if (t && tn) tn.textContent = t;
+      });
       if (j.kind === 'fix') document.querySelectorAll('#stages li').forEach((li) => {
         li.hidden = !['fixcheck', 'fixing'].includes(li.dataset.s);
       });
@@ -873,6 +880,49 @@ syncYtMode();
       showProgress(j.job_id);
     };
     xhr.onerror = () => { btn.disabled = false; btn.textContent = '🔧 ပြင်မယ်'; showError('upload failed'); };
+    xhr.send(fd);
+  });
+})();
+
+// ---- 🎨 cartoon: an original comedy from an idea (owner only; no video, no link) ----
+(function () {
+  const open = $('#cartoonopen');
+  if (!open) return;
+  if (admKey()) open.hidden = false;
+  const back = $('#fixback');
+  let len = '60';
+  const show = (on) => {
+    $('#card-cartoon').hidden = !on; $('#card-upload').hidden = on; back.hidden = !on;
+    window.scrollTo(0, 0);
+  };
+  open.addEventListener('click', () => show(true));
+  back.addEventListener('click', () => { if (!$('#card-cartoon').hidden) show(false); });
+  document.querySelectorAll('#cartoonlen .opt').forEach((b) => b.addEventListener('click', () => {
+    document.querySelectorAll('#cartoonlen .opt').forEach((x) => x.classList.remove('selected'));
+    b.classList.add('selected'); len = b.dataset.v;
+  }));
+  $('#cartoongo').addEventListener('click', () => {
+    const fd = new FormData();
+    const curl = ($('#cartoonurl').value || '').trim();
+    if (curl && !YT_RE.test(curl)) { alert('YouTube / TikTok link ပဲ ထည့်လို့ရတယ်'); return; }
+    fd.append('url', curl);
+    fd.append('idea', ($('#cartoonidea').value || '').trim());
+    fd.append('title', ($('#cartoontitle').value || '').trim());
+    fd.append('length', len);
+    fd.append('youtube', $('#cartoonyt').checked ? '1' : '0');
+    fd.append('telegram', !$('#tgrow').hidden && $('#tgchk').checked ? '1' : '0');
+    const btn = $('#cartoongo'); btn.disabled = true; btn.textContent = '⏳ စနေတယ်…';
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/cartoon');
+    xhr.setRequestHeader('X-Admin-Key', admKey());
+    xhr.onload = () => {
+      btn.disabled = false; btn.textContent = '🎨 ဖန်တီးမယ်';
+      let j = {}; try { j = JSON.parse(xhr.responseText); } catch (e) {}
+      if (xhr.status !== 200 || !j.job_id) { showError(j.error || 'failed'); return; }
+      $('#card-cartoon').hidden = true; back.hidden = true;
+      showProgress(j.job_id);
+    };
+    xhr.onerror = () => { btn.disabled = false; btn.textContent = '🎨 ဖန်တီးမယ်'; showError('failed'); };
     xhr.send(fd);
   });
 })();

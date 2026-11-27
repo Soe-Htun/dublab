@@ -737,10 +737,11 @@ added after yours.
 No emojis. Reply with ONLY a JSON object with exactly these keys."""
 
 
-def write_posts(title, name, story, api_key, channel="Marco TV", music=False, game=False):
+def write_posts(title, name, story, api_key, channel="Marco TV", music=False, game=False, cartoon=False):
     """Upload texts for TikTok / YouTube / Facebook in one call:
     {tiktok, youtube_title, youtube_desc, facebook, ai_film}. music: a song with its lyrics."""
-    raw = _call((MUSIC_POSTS_PROMPT if music else GAME_POSTS_PROMPT if game else POSTS_PROMPT).format(
+    raw = _call((CARTOON_POSTS_PROMPT if cartoon else MUSIC_POSTS_PROMPT if music else GAME_POSTS_PROMPT if game
+                 else POSTS_PROMPT).format(
         channel=channel, title=title or "-", name=name or "-", story=(story or "")[:3500]), api_key, max_tokens=2048)
     m = re.search(r"\{.*\}", raw, re.S)
     data = json.loads(re.sub(r",\s*([}\]])", r"\1", m.group(0))) if m else {}
@@ -756,7 +757,8 @@ def write_posts(title, name, story, api_key, channel="Marco TV", music=False, ga
     tag = "#" + re.sub(r"\W", "", channel)
     # at most 5 hashtags in all (TikTok allows only 5 here): ours first, then the best of the AI's genre tags
     tag = tag.lower()                   # the account's own tag: #marcotv
-    mine0 = ([tag, "#သီချင်း", "#myanmarsong"] if music else [tag, "#gaming", "#highlights"] if game
+    mine0 = ([tag, "#ကာတွန်း", "#ဟာသ"] if cartoon else [tag, "#သီချင်း", "#myanmarsong"] if music
+             else [tag, "#gaming", "#highlights"] if game
              else [tag, "#မြန်မာRecap", "#myanmarrecap"])
     own = {"tiktok": mine0, "youtube_desc": mine0, "facebook": mine0}
     for k, mine in own.items():
@@ -1729,3 +1731,239 @@ def draw_cover(scene, refs, api_key, portrait=False):
             last = e
         time.sleep(3 * (attempt + 1))
     raise RuntimeError(f"cover image failed: {last}")
+
+
+# ---- 🎨 cartoon mode: an original short comedy, drawn by cartoon.py ----
+CARTOON_KINDS = ("man", "woman", "boy", "girl", "grandpa", "grandma", "ghost", "ghost_lady", "dog", "cat")
+CARTOON_BGS = ("graveyard", "forest_night", "street_night", "room_night", "room_day", "village_day", "tea_shop")
+CARTOON_MOODS = ("normal", "happy", "laugh", "scared", "angry", "surprised", "sad")
+CARTOON_ACTIONS = ("none", "jump", "shake", "run_away", "appear", "vanish", "fall")
+
+CARTOON_PROMPT = """You write a SHORT ORIGINAL CARTOON COMEDY for a Burmese TikTok channel. It is drawn as a simple 2D
+cartoon (cute big-head characters on a stage-like background) and voiced line by line in Burmese.
+
+{idea}
+
+LENGTH: about {seconds} seconds of speech = AT LEAST {n_lines} lines in all (count them), in EXACTLY {n_scenes} scenes (each its own
+background, the story moving on: e.g. the street → the graveyard → back home).
+
+RULES:
+- Original story and characters only (no famous films, cartoons or real people). Clean family humor: no sex, no
+  gore, no jokes about religion, monks or pagodas, no insults about looks, skin or weight, never jokes about how
+  much someone eats.
+- FUNNY: a clear setup, silly misunderstandings, a reversal (e.g. the ghost is more scared than the man), and a
+  punchline at the end. Everyday Myanmar life and names (ကိုဖိုးလပြည့်, မမြဝင်း, ဦးဘချော, ဒေါ်လှ…).
+- Burmese: natural casual SPOKEN Burmese in Myanmar script, the way people really joke ("ဟဲ့… ဘာကြီးလဲ ဟ",
+  "အမလေး ကယ်ကြပါဦး", "မကြောက်ပါနဲ့ မမြဝင်းရယ်"). Real words only. Each line SHORT: under 55 characters.
+- A woman says ကျွန်မ / ရှင် (never ဗျ / ခင်ဗျာ); a man says ကျွန်တော် / ဗျ / ဗျာ (never ကျွန်မ / ရှင်).
+- The channel's own ghost stars (use them whenever there is a ghost): the ghost girl / lady (kind "ghost_lady")
+  is ALWAYS named "မဖဲဝါ", the boy / man ghost (kind "ghost") is ALWAYS named "ကျော်ကြီး" — unless the owner's idea
+  names its ghost itself.
+- 2 to 4 characters in all, at most 3 in one scene. "narrator" may say a line or two (the opening, a time jump,
+  the ending) — not more.
+- Character kinds (pick from): {kinds}. Backgrounds (pick from): {bgs}.
+- Each line has: "who" (a character id or "narrator"), "text", "mood" (one of {moods}), "action" (one of
+  {actions}: jump = jumps in fright/joy, shake = trembles, run_away = runs off screen and is gone for the rest of
+  the scene, appear = appears suddenly (a ghost popping up!), vanish = fades away, fall = faints / falls over).
+  Use actions often — they are the visual jokes. A character whose first line in a scene has "appear" is hidden
+  until then. Someone who ran away / vanished does not speak again in that scene. "react": the OTHER characters' faces while this line is said, e.g. {{"b": "scared"}} (optional).
+
+Reply with ONLY this JSON:
+{{"title": "a short catchy Burmese title (under 40 characters)",
+  "characters": [{{"id": "a", "name": "Burmese name", "kind": "man", "color": "#3a7bd5"}}],
+  "scenes": [{{"bg": "graveyard", "cast": ["a", "b"],
+              "lines": [{{"who": "a", "text": "…", "mood": "scared", "action": "shake", "react": {{"b": "laugh"}}}}]}}]}}"""
+
+
+def write_cartoon_script(idea, seconds, api_key, from_video=""):
+    """🎨 An original Burmese cartoon comedy as JSON (characters, scenes, lines). idea: the owner's
+    description / prompt, or "" (Gemini makes up a comedy itself)."""
+    import random
+    seconds = max(60, min(int(seconds or 60), 240))          # every cartoon is at least 1 minute
+    n_lines = max(8, round(seconds / 2.6))
+    n_scenes = max(2, min(6, round(seconds / 35)))
+    if from_video:
+        idea_txt = ("MAKE A CARTOON VERSION OF THIS SHORT VIDEO'S STORY (same situation and the same kind of joke, but "
+                    "told with YOUR OWN characters, Myanmar names, your own words and an extra funny twist of your own; "
+                    "never copy its lines word for word):\n" + from_video.strip()[:3000]
+                    + (("\nTHE OWNER ALSO SAYS: " + idea.strip()[:1000]) if idea.strip() else ""))
+    elif idea.strip():
+        idea_txt = ("THE OWNER'S IDEA / DESCRIPTION (follow it — its story, characters and setting; make it funny):\n"
+                    + idea.strip()[:3000])
+    else:
+        theme = random.choice([
+            "a scaredy-cat man walks past a graveyard at night and meets a ghost who is even more scared",
+            "a ghost lady tries to scare a family, but the grandma is not scared at all and puts her to work",
+            "two friends dare each other to sleep in a 'haunted' house; the 'ghost' turns out to be the cat",
+            "a ghost who wants to make friends visits a village tea shop at night",
+            "a husband says he is very brave; his wife tests him with a white sheet",
+            "a boy tells his grandpa a scary story, and grandpa gets more scared than the boy",
+            "a lazy man hides from work in the forest at night and every sound becomes a 'ghost'",
+            "a village tea shop: a customer orders in a very fancy way and the waiter boy gets everything wrong",
+            "grandpa learns to use a smartphone and video-calls the whole village by mistake",
+            "a husband secretly cooks for his wife's birthday and the kitchen turns into chaos",
+            "two neighbours compete over whose rooster crows louder at dawn",
+            "a boy tries every trick to skip school and his grandma is always one step ahead",
+            "a man pretends to be rich to impress a girl in the village, and his dog keeps exposing him",
+            "a cat and a dog both want the best sleeping spot in the house",
+            "a man brags about his singing at the village festival and the whole village runs away"])
+        idea_txt = ("No idea was given: make up your own funny story. A starting idea you may use or change: "
+                    + theme)
+    prompt = CARTOON_PROMPT.format(idea=idea_txt, seconds=seconds, n_lines=n_lines, n_scenes=n_scenes,
+                                   kinds=", ".join(CARTOON_KINDS), bgs=", ".join(CARTOON_BGS),
+                                   moods=", ".join(CARTOON_MOODS), actions=", ".join(CARTOON_ACTIONS))
+    data, best = None, -1
+    for attempt in range(2):                      # too few lines (too short a video): asked once more
+        raw = _call(prompt if attempt == 0 else prompt + f"\n\nIMPORTANT: your last story had only {best} lines — "
+                    f"far too short. Write at least {n_lines} lines.", api_key, max_tokens=8192)
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            continue
+        try:
+            d = json.loads(re.sub(r",\s*([}\]])", r"\1", m.group(0)))
+        except ValueError:
+            continue
+        n = sum(len(sc.get("lines") or []) for sc in d.get("scenes") or [])
+        if n > best:
+            data, best = d, n
+        if n >= n_lines * 0.85:
+            break
+    if data is None:
+        raise RuntimeError("cartoon script: no JSON in Gemini's answer")
+    # ---- clean up: only known kinds / backgrounds / moods, ids that exist ----
+    chars, ids = [], set()
+    for i, c in enumerate(data.get("characters") or []):
+        cid = str(c.get("id") or chr(97 + i))[:8]
+        if cid in ids or cid == "narrator":
+            continue
+        ids.add(cid)
+        col = str(c.get("color") or "")
+        chars.append({"id": cid, "name": str(c.get("name") or "")[:30],
+                      "kind": c.get("kind") if c.get("kind") in CARTOON_KINDS else "man",
+                      "color": col if re.fullmatch(r"#[0-9a-fA-F]{6}", col) else None})
+    if not chars:
+        raise RuntimeError("cartoon script: no characters")
+    # 👻 the channel's ghost stars: the first ghost girl is မဖဲဝါ, the first boy ghost ကျော်ကြီး
+    # (kept as the AI named them only when the owner's idea itself gives that name)
+    for kind, star in (("ghost_lady", "မဖဲဝါ"), ("ghost", "ကျော်ကြီး")):
+        c = next((c for c in chars if c["kind"] == kind), None)
+        if c and not (c["name"] and c["name"] in idea):
+            old_name = c["name"]
+            c["name"] = star
+            if old_name and old_name != star:          # the others call it by its new name too
+                for s in data.get("scenes") or []:
+                    for ln in s.get("lines") or []:
+                        ln["text"] = str(ln.get("text") or "").replace(old_name, star)
+    scenes = _clean_scenes(data.get("scenes") or [], ids)
+    if not scenes:
+        raise RuntimeError("cartoon script: no scenes")
+    flat = [ln["text"] for s in scenes for ln in s["lines"]]
+    fixed = fix_script(flat + [str(data.get("title") or "")], api_key)
+    k = 0
+    for s in scenes:
+        for ln in s["lines"]:
+            ln["text"] = fixed[k] or ln["text"]
+            k += 1
+    title = re.sub(r"\s+", " ", _EMOJI.sub("", fixed[-1] or "")).strip()[:60]
+    return {"title": title or "ဟာသ ကာတွန်း", "characters": chars, "scenes": scenes}
+
+
+def _clean_scenes(raw_scenes, ids):
+    """Only known backgrounds / moods / actions, speakers that exist, at most 3 on stage."""
+    scenes = []
+    for s in raw_scenes:
+        lines = []
+        for ln in s.get("lines") or []:
+            who = ln.get("who") if ln.get("who") in ids else "narrator"
+            text = re.sub(r"\s+", " ", _EMOJI.sub("", str(ln.get("text") or ""))).strip()
+            if not text:
+                continue
+            react = {k: v for k, v in (ln.get("react") or {}).items() if k in ids and v in CARTOON_MOODS} \
+                if isinstance(ln.get("react"), dict) else {}
+            lines.append({"who": who, "text": text,
+                          "mood": ln.get("mood") if ln.get("mood") in CARTOON_MOODS else "normal",
+                          "action": ln.get("action") if ln.get("action") in CARTOON_ACTIONS else "none",
+                          "react": react})
+        if not lines:
+            continue
+        cast = [c for c in (s.get("cast") or []) if c in ids]
+        for ln in lines:                              # everyone who talks is on stage
+            if ln["who"] != "narrator" and ln["who"] not in cast:
+                cast.append(ln["who"])
+        scenes.append({"bg": s.get("bg") if s.get("bg") in CARTOON_BGS else "room_day",
+                       "cast": cast[:3], "lines": [ln for ln in lines if ln["who"] in cast[:3] or ln["who"] == "narrator"]})
+    return scenes
+
+
+CARTOON_MORE_PROMPT = """Here is a short Burmese cartoon comedy (JSON). It is too SHORT: it needs about {extra} more
+seconds (about {n} more lines). Write 1–2 NEW scenes that go on from where it ends — the same characters (same ids),
+the story moving on to a new, funnier twist and a strong punchline at the very end. Same rules as before: natural
+casual spoken Burmese, each line under 55 characters, women say ကျွန်မ / ရှင်, men ကျွန်တော် / ဗျ, actions and
+moods from the lists used, clean family humor.
+Characters: {chars}
+The story so far:
+{story}
+Backgrounds: {bgs}. Moods: {moods}. Actions: {actions}.
+Reply with ONLY: {{"scenes": [{{"bg": "...", "cast": ["a"], "lines": [{{"who": "a", "text": "…", "mood": "happy",
+"action": "none", "react": {{}}}}]}}]}}"""
+
+
+def extend_cartoon_script(script, extra_seconds, api_key):
+    """⏱️ A cartoon came out under a minute: 1–2 more scenes are added at its end (in place)."""
+    ids = {c["id"] for c in script["characters"]}
+    story = "\n".join(f"[{sc['bg']}] {ln['who']}: {ln['text']}" for sc in script["scenes"] for ln in sc["lines"])
+    raw = _call(CARTOON_MORE_PROMPT.format(
+        extra=int(extra_seconds), n=max(4, round(extra_seconds / 2.6)),
+        chars=json.dumps(script["characters"], ensure_ascii=False), story=story[-6000:],
+        bgs=", ".join(CARTOON_BGS), moods=", ".join(CARTOON_MOODS), actions=", ".join(CARTOON_ACTIONS)),
+        api_key, max_tokens=4096)
+    m = re.search(r"\{.*\}", raw, re.S)
+    if not m:
+        return 0
+    try:
+        more = _clean_scenes(json.loads(re.sub(r",\s*([}\]])", r"\1", m.group(0))).get("scenes") or [], ids)
+    except ValueError:
+        return 0
+    flat = [ln["text"] for s in more for ln in s["lines"]]
+    if not flat:
+        return 0
+    fixed = fix_script(flat, api_key)
+    k = 0
+    for s in more:
+        for ln in s["lines"]:
+            ln["text"] = fixed[k] or ln["text"]
+            k += 1
+    script["scenes"] += more
+    return len(flat)
+
+
+VIDEO_STORY_PROMPT = """This is a short video (its sound, a few frames, its title and description). Tell its STORY in
+Burmese, for a cartoonist who will make his OWN cartoon inspired by it: who is in it (kind of person / animal),
+the setting, what happens step by step, and what the JOKE / funny twist is. 5–12 short lines. Do not copy long
+dialogue word for word — describe it. Title: {title}
+Description: {desc}"""
+
+
+def story_from_video(audio_mp3, frames, title, desc, api_key):
+    """🎬→🎨 what a short (comedy) video is about, in Burmese, as the idea for an original cartoon version."""
+    images = [("Audio:", audio_mp3, "audio/mp3")] if audio_mp3 else []
+    images += [(f"Frame {i + 1}:", f) for i, f in enumerate(frames or [])]
+    raw = _call(VIDEO_STORY_PROMPT.format(title=(title or "-")[:200], desc=(desc or "-")[:1500]), api_key,
+                max_tokens=2048, images=images)
+    return (raw or "").strip()[:3000]
+
+
+CARTOON_POSTS_PROMPT = """You write the upload texts for a Burmese channel called "{channel}": an ORIGINAL short cartoon
+comedy it made itself. Title: {title}
+Its lines:
+{story}
+
+Write, in natural fun SPOKEN Burmese (Myanmar script):
+- "tiktok": 1–2 short funny lines that make people want to watch (no spoilers of the punchline, a question to the
+  viewers), then the hashtags. Under 200 characters.
+- "youtube_title": under 90 characters, catchy.
+- "youtube_desc": 2 lines about the story, then the hashtags.
+- "facebook": 2 friendly lines with a question to invite comments, then the hashtags.
+HASHTAGS: 2–3 short ones about the story (e.g. #ghost #သရဲ #funny). The channel's own tags are added after yours.
+- "ai_film": true.
+No emojis. Reply with ONLY a JSON object with exactly these keys."""

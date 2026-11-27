@@ -600,6 +600,8 @@ def process_job(jid):
             _game_job(job)
         elif job.get("kind") == "music":
             _music_job(job)
+        elif job.get("kind") == "cartoon":
+            _cartoon_job(job)
         elif job.get("phase") == 2:
             _voice_and_mux(job)
         else:
@@ -1282,6 +1284,172 @@ def create_fix_job():
     n_shots = len(list(d.glob("shot*.jpg")))
     jlog(job, f"uploaded {filename} for fixing" + (f" · {n_shots} screenshot(s)" if n_shots else "")
               + (" · its cover found" if cover else " · its cover not found (job older than a week)"))
+    with lock:
+        queue.append(jid)
+        lock.notify()
+    return jsonify(job_id=jid)
+
+
+def _cartoon_job(job):
+    """🎨 An original Burmese cartoon comedy: Gemini writes it (from the owner's idea, or its own), the
+    lines are voiced, cartoon.py draws it. No source video at all."""
+    import cartoon
+    from gemini import write_cartoon_script
+    d = job["dir"]
+    key = os.environ.get("GEMINI_API_KEY")
+    if not key:
+        raise RuntimeError("server config missing (GEMINI_API_KEY)")
+    sfile = d / "cartoon.json"
+    if sfile.exists():                                   # ▶️ resume: the same story
+        script = json.loads(sfile.read_text(encoding="utf-8"))
+    else:
+        if job.get("url") and not job.get("cartoon_from"):   # 🎬 a short video's story → our cartoon version
+            from gemini import story_from_video
+            job.update(stage="download", pct=2)
+            jlog(job, "downloading the video to see its story…")
+            src = download_url(job["url"], d, max_mb())
+            mp3 = d / "story.mp3"
+            run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-t", "300", "-vn", "-ac", "1", "-ar", "16000",
+                 "-b:a", "32k", str(mp3)])
+            length = min(probe_duration(src), 300)
+            frames = sample_frames(src, length * 0.05, length * 0.95, 6, width=512)
+            info = {}
+            if (d / "src_info.json").exists():
+                try:
+                    info = json.loads((d / "src_info.json").read_text())
+                except ValueError:
+                    pass
+            jlog(job, "👀 Gemini is watching the video's story…")
+            job["cartoon_from"] = story_from_video(mp3.read_bytes(), frames, job.get("name") or "",
+                                                   info.get("description") or "", key)
+            jlog(job, "🎬 its story: " + job["cartoon_from"][:300].replace("\n", " / "))
+            src.unlink(missing_ok=True)
+            mp3.unlink(missing_ok=True)
+        job.update(stage="translate", pct=5)
+        jlog(job, "✍️ Gemini is writing the cartoon story…" + (" (a cartoon version of the video)" if job.get("cartoon_from")
+                                                              else " (from your idea)" if job.get("cartoon_idea")
+                                                              else " (its own comedy idea)"))
+        script = write_cartoon_script(job.get("cartoon_idea") or "", job.get("cartoon_len") or 60, key,
+                                      from_video=job.get("cartoon_from") or "")
+        sfile.write_text(json.dumps(script, ensure_ascii=False, indent=1), encoding="utf-8")
+    n_lines = sum(len(sc["lines"]) for sc in script["scenes"])
+    job["title_mm"] = job.get("my_title") or script["title"]
+    job["name"] = job["title_mm"]
+    script["title"] = job["title_mm"]
+    jlog(job, f"📖 “{script['title']}” — {len(script['characters'])} characters, {len(script['scenes'])} scenes, "
+              f"{n_lines} lines")
+    job.update(stage="voice", pct=25)
+    jlog(job, "🗣️ voicing the characters…")
+    audio = cartoon.voice_lines(script, d, lambda f: _sp(job, f))
+    # ⏱️ every cartoon is at least a minute (or the length chosen): too short → the story goes on
+    want = max(60, job.get("cartoon_len") or 60)
+    for _ in range(3):
+        _, total = cartoon.build_timeline(script, audio)
+        if total >= min(want, 60) + 0.5 and total >= want * 0.85:
+            break
+        from gemini import extend_cartoon_script
+        jlog(job, f"⏱️ only {total:.0f}s — Gemini adds more to the story (at least 1 minute)…")
+        if not extend_cartoon_script(script, want - total + 6, key):
+            break
+        sfile.write_text(json.dumps(script, ensure_ascii=False, indent=1), encoding="utf-8")
+        audio = cartoon.voice_lines(script, d, lambda f: _sp(job, f))     # (the old lines are kept as voiced)
+    _, total = cartoon.build_timeline(script, audio)
+    if total < 60:                                       # still short: a longer pause at the end of each scene
+        jlog(job, f"⏱️ {total:.0f}s — scenes held a little longer to reach 1 minute")
+        script["min_total"] = 60.0
+    job.update(stage="mux", pct=55)
+    jlog(job, "🎨 drawing the cartoon…")
+    logo = LOGO_FILE if job.get("logo", True) and LOGO_FILE.exists() else None
+    total, cover_png = cartoon.render_cartoon(script, d, d / "dubbed.mp4", size=(1080, 1920), logo=logo,
+                                              captions=job.get("captions", True), audio=audio,
+                                              progress=lambda f: _sp(job, f), log=lambda m: jlog(job, m))
+    job["total"] = total
+    if job.get("youtube"):                               # 📺 + 📱 a 16:9 YouTube copy; the 9:16 one is TikTok's
+        try:
+            jlog(job, "📺 drawing the YouTube (16:9) copy…")
+            (d / "dubbed.mp4").replace(d / "dubbed_tt.mp4")
+            cartoon.render_cartoon(script, d, d / "dubbed.mp4", size=(1920, 1080), logo=logo,
+                                   captions=job.get("captions", True), audio=audio)
+            job["tt"] = ["dubbed_tt.mp4"]
+        except Exception as e:  # noqa: BLE001 - one video then
+            jlog(job, f"YouTube copy skipped: {str(e)[:150]}")
+            if not (d / "dubbed.mp4").exists() and (d / "dubbed_tt.mp4").exists():
+                (d / "dubbed_tt.mp4").replace(d / "dubbed.mp4")
+            job.pop("tt", None)
+    story = "\n".join(f"{ln['who']}: {ln['text']}" for sc in script["scenes"] for ln in sc["lines"])
+    if not job.get("posts"):
+        try:
+            job["posts"] = write_posts(script["title"], script["title"], story, key,
+                                       _settings["channel_name"] or "Marco TV", cartoon=True)
+            jlog(job, "📝 upload texts written (TikTok caption + #tags)")
+        except Exception as e:  # noqa: BLE001
+            jlog(job, f"upload texts skipped: {str(e)[:120]}")
+    write_srt([(ln["t0"], ln["t1"], ln["text"]) for ln in _cartoon_cues(script, audio)], d / "captions.srt")
+    try:                                                 # 🖼️ the cover: a funny moment + the title
+        from dub import thumb_cover
+        mvw, mvh = video_size(d / "dubbed.mp4")
+        job["covers"] = [thumb_cover(cover_png, job["title_mm"], d / "cover1.jpg", mvh > mvw, logo).name]
+        if job.get("tt"):
+            (d / "tt").mkdir(exist_ok=True)
+            job["covers_tt"] = ["tt/" + thumb_cover(cover_png, job["title_mm"], d / "tt" / "cover1.jpg", True, logo).name]
+        jlog(job, "🖼️ cover made")
+    except Exception as e:  # noqa: BLE001
+        jlog(job, f"cover skipped: {str(e)[:120]}")
+    for f in d.glob("line_*.mp3"):
+        f.unlink(missing_ok=True)
+    if job.get("telegram"):
+        job["tg"] = {"state": "sending", "error": "", "pct": 0}
+    job.update(status="done", stage="done", pct=100)
+    _save_meta(job)
+    jlog(job, "done ✅")
+    if job.get("telegram"):
+        threading.Thread(target=_telegram_send, args=(job,), daemon=True).start()
+
+
+def _cartoon_cues(script, audio):
+    import cartoon
+    scenes, _ = cartoon.build_timeline(script, audio)
+    return [ln for sc in scenes for ln in sc["lines"]]
+
+
+@app.post("/api/cartoon")
+def create_cartoon_job():
+    """🎨 A new cartoon: no video, only an (optional) idea / description."""
+    if not _admin_ok():
+        return jsonify(error="admin password လိုတယ်"), 403
+    try:
+        length = int(request.form.get("length") or 60)
+    except ValueError:
+        length = 60
+    length = length if length in (60, 120, 180) else 60      # ⏱️ at least 1 minute
+    jid = uuid.uuid4().hex[:12]
+    d = JOBS / jid
+    d.mkdir(parents=True)
+    idea = (request.form.get("idea") or "").strip()[:3000]
+    url = (request.form.get("url") or "").strip()
+    name = "Cartoon"
+    if url:                                              # 🎬 optional: a short video to make a cartoon version of
+        if len(url) > 300 or not is_supported_url(url):
+            shutil.rmtree(d, ignore_errors=True)
+            return jsonify(error="YouTube / TikTok link ပဲ လက်ခံတယ်"), 400
+        try:
+            name, dur, live = probe_url(url)
+        except Exception:  # noqa: BLE001
+            shutil.rmtree(d, ignore_errors=True)
+            return jsonify(error="ဒီ link ကို ဖွင့်မရဘူး — link စစ်ပါ"), 400
+        if live or dur > 20 * 60:
+            shutil.rmtree(d, ignore_errors=True)
+            return jsonify(error="တိုတဲ့ ဗီဒီယို (၂၀ မိနစ်အောက်) ပဲ ရတယ်"), 400
+    job = {"status": "queued", "stage": "queue", "pct": 0, "error": "", "dir": d, "ext": ".mp4", "id": jid,
+           "kind": "cartoon", "name": name, "url": url, "owner": True, "cartoon_idea": idea, "cartoon_len": length,
+           "my_title": re.sub(r"\s+", " ", request.form.get("title") or "").strip()[:60],
+           "youtube": request.form.get("youtube") == "1", "logo": True, "captions": True, "cover": True,
+           "recap": 0, "split": 0, "orig_audio": False,
+           "telegram": request.form.get("telegram") == "1" and telegram.configured(),
+           "created": time.time()}
+    jobs[jid] = job
+    jlog(job, f"🎨 cartoon · {length}s · " + (f"cartoon version of {name[:80]} · {url}" if url else "")
+              + (f" · idea: {idea[:120]}" if idea else "" if url else "no idea given — Gemini makes one up"))
     with lock:
         queue.append(jid)
         lock.notify()
@@ -2582,7 +2750,9 @@ def job_status(jid):
                    cover_pick=job.get("cover_pick", 1), title=job.get("title_mm", ""),
                    name=job.get("name", ""), created=int(job.get("created", 0)),
                    gone=bool(job.get("files_gone")),
-                   label=STAGE_LABEL.get(job["stage"], job["stage"]),
+                   label=({"translate": "ဇာတ်လမ်း ရေးနေတယ်", "voice": "ဇာတ်ကောင် အသံ ထည့်နေတယ်",
+                           "mux": "ကာတွန်း ဆွဲနေတယ်"}.get(job["stage"]) if job.get("kind") == "cartoon" else None)
+                         or STAGE_LABEL.get(job["stage"], job["stage"]),
                    error=job["error"], resumable=_resumable(job), orig=bool(job.get("orig_audio")), kind=job.get("kind") or "",
                    fix_note=job.get("fix_note") or "", fix_changed=bool(job.get("fix_changed", True)),
                    fix_appeal=job.get("fix_appeal") or "", risk=job.get("risk") or [],
@@ -3736,7 +3906,7 @@ def tiktok_job(jid):
     return jsonify(ok=True, tk=tk)
 
 
-_MODE_TAG = {"recap": "မြန်မာ Recap", "orig": "မြန်မာစာတန်း", "dub": "မြန်မာ အသံ", "music": "သီချင်းစာသား"}
+_MODE_TAG = {"recap": "မြန်မာ Recap", "orig": "မြန်မာစာတန်း", "dub": "မြန်မာ အသံ", "music": "သီချင်းစာသား", "cartoon": "ကာတွန်း"}
 
 
 def _ready_title(job):
@@ -3747,7 +3917,7 @@ def _ready_title(job):
         return None
     ep = job.get("episode")
     film = (job.get("film_name") or "").strip()
-    tag = _MODE_TAG["music" if job.get("kind") == "music" else "recap" if job.get("recap") or job.get("scene_recap")
+    tag = _MODE_TAG[job["kind"] if job.get("kind") in ("music", "cartoon") else "recap" if job.get("recap") or job.get("scene_recap")
                     else "orig" if job.get("orig_audio") else "dub"]
     out = title + (f" - {ep}" if ep else "")          # the same as on the cover: "Title - 1"
     if film and film.casefold() not in title.casefold():
