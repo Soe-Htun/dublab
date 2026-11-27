@@ -4102,3 +4102,58 @@ def render_music_video(src, segs, out, photo=None, logo=None, blur=None, log=Non
     run(cmd)
     shutil.rmtree(tmp, ignore_errors=True)
     return probe_duration(out)
+
+
+def music_vertical_from_video(src, segs, out, logo=None, blur=None):
+    """📱 The TikTok (9:16) copy of a link-only song video: the video across the middle, a
+    blurred copy of it behind, the typewriter lyrics under it. Returns the length."""
+    out = Path(out)
+    tmp = out.with_name("music_tt_tmp")
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir()
+    total = probe_duration(src)
+    W, H = 1080, 1920
+    lyr, strip_h = music_lyric_frames(segs, total, tmp / "lyr")
+    vw, vh = video_size(src)
+    fh = int(round(W * vh / vw / 2) * 2)
+    vy = max(200, (H - fh) // 2 - 180)
+    ins = ["-i", str(src), "-f", "concat", "-safe", "0", "-i", str(lyr)]
+    fc = ["[0:v]split[v1][v2]",
+          f"[v1]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},boxblur=30:3,"
+          "eq=brightness=-0.28:saturation=1.2[bgv]"]
+    cur = "v2"
+    if blur:
+        b0, bh0 = float(blur["bottom"]), float(blur["height"])
+        fc += [f"[{cur}]split[m][bb]",
+               f"[bb]crop=iw:ih*{bh0:.4f}:0:ih*{1 - b0 - bh0:.4f},boxblur=luma_radius='min(h/4,20)':luma_power=3[bz]",
+               f"[m][bz]overlay=0:H*{1 - b0 - bh0:.4f}[bl]"]
+        cur = "bl"
+    fc += [f"[{cur}]scale={W}:{fh}[fg]", f"[bgv][fg]overlay=0:{vy}[a]"]
+    last = "a"
+    if logo and Path(logo).exists():
+        ins += ["-i", str(logo)]
+        fc += ["[2:v]scale=140:-1,format=rgba[lg]", "[a][lg]overlay=W-180:40[a2]"]
+        last = "a2"
+    ly = min(H - strip_h - 260, vy + fh + 60)
+    fc += ["[1:v]format=rgba[ly]", f"[{last}][ly]overlay=0:{ly}:eof_action=pass,format=yuv420p[v]"]
+    hw = _has_encoder("h264_videotoolbox")
+    enc = (["-c:v", "h264_videotoolbox", "-b:v", "6000k"] if hw else ["-c:v", "libx264", "-crf", "20", "-preset", "veryfast"])
+    run(["ffmpeg", "-y", "-v", "error", *ins, "-filter_complex", ";".join(fc), "-map", "[v]", "-map", "0:a:0",
+         *enc, "-r", "25", "-c:a", "aac", "-b:a", "192k", "-t", f"{total:.3f}", "-movflags", "+faststart", str(out)])
+    shutil.rmtree(tmp, ignore_errors=True)
+    return probe_duration(out)
+
+
+def music_wide_from_vertical(vertical, photo, out):
+    """📺 The YouTube (16:9) copy of the photo player: the 9:16 player in the middle, the photo
+    blurred and dark on both sides. Returns the length."""
+    hw = _has_encoder("h264_videotoolbox")
+    enc = (["-c:v", "h264_videotoolbox", "-b:v", "6000k"] if hw else ["-c:v", "libx264", "-crf", "20", "-preset", "veryfast"])
+    total = probe_duration(vertical)
+    run(["ffmpeg", "-y", "-v", "error", "-i", str(vertical), "-loop", "1", "-framerate", "25", "-t", f"{total:.3f}",
+         "-i", str(photo), "-filter_complex",
+         "[1:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,boxblur=40:4,"
+         "eq=brightness=-0.35[bg];[0:v]scale=-2:1080[fg];[bg][fg]overlay=(W-w)/2:0,format=yuv420p[v]",
+         "-map", "[v]", "-map", "0:a:0", *enc, "-r", "25", "-c:a", "copy", "-t", f"{total:.3f}",
+         "-movflags", "+faststart", str(out)])
+    return probe_duration(out)

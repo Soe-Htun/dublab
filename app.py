@@ -1111,16 +1111,43 @@ def _music_job(job):
     logo = LOGO_FILE if job.get("logo") and LOGO_FILE.exists() else None
     job["total"] = render_music_video(src, segs, d / "dubbed.mp4", photo=photo, logo=logo, blur=blur,
                                       log=lambda m: jlog(job, m))
+    # 📺 + 📱 "YouTube" ticked: two videos — YouTube 16:9 (main) and TikTok 9:16 (job["tt"])
+    vertical = None
+    if job.get("youtube"):
+        from dub import music_vertical_from_video, music_wide_from_vertical
+        try:
+            if photo:                            # the player is 9:16: TikTok; a 16:9 copy for YouTube
+                (d / "dubbed.mp4").replace(d / "dubbed_tt.mp4")
+                vertical = d / "dubbed_tt.mp4"
+                jlog(job, "📺 making the YouTube (16:9) copy…")
+                music_wide_from_vertical(vertical, photo, d / "dubbed.mp4")
+            elif video_size(src)[0] > video_size(src)[1]:   # a landscape song video: YouTube as it is,
+                jlog(job, "📱 making the TikTok (9:16) copy…")   # a 9:16 copy for TikTok
+                vertical = d / "dubbed_tt.mp4"
+                music_vertical_from_video(src, segs, vertical, logo=logo, blur=blur)
+            if vertical:
+                job["tt"] = [vertical.name]
+        except Exception as e:  # noqa: BLE001 - one video then
+            jlog(job, f"second (YouTube/TikTok) copy skipped: {str(e)[:150]}")
+            if photo and not (d / "dubbed.mp4").exists() and (d / "dubbed_tt.mp4").exists():
+                (d / "dubbed_tt.mp4").replace(d / "dubbed.mp4")
+            job.pop("tt", None)
+            vertical = None
     # 🖼️ the cover: the song's name typed by the owner (else the video's title) over its best frames
     title = job.get("music_title") or job.get("my_title") or (job.get("name") or "")[:60]
     job["title_mm"] = title
+    chooser = (lambda shots: pick_cover_frames(shots, key)) if key and not photo else None
     try:
         out = d / "dubbed.mp4" if photo else src          # (the song's own frames, without our lyrics)
         vw, vh = video_size(out)
-        chooser = (lambda shots: pick_cover_frames(shots, key)) if key and not photo else None
         covers = make_covers(out, title, d, job["total"] * 0.1, job["total"] * 0.9, portrait=vh > vw,
                              logo=logo, parts=1, chooser=chooser, log=lambda m: jlog(job, m), single=True)
         job["covers"] = [c.name for c in covers]
+        if vertical:                                       # the TikTok copy's own 9:16 cover
+            (d / "tt").mkdir(exist_ok=True)
+            tt = make_covers(vertical if photo else src, title, d / "tt", job["total"] * 0.1, job["total"] * 0.9,
+                             portrait=True, logo=logo, parts=1, chooser=chooser, log=lambda m: jlog(job, m), single=True)
+            job["covers_tt"] = ["tt/" + c.name for c in tt]
         jlog(job, f"🖼️ cover made{' — ' + title if title else ''}")
     except Exception as e:  # noqa: BLE001 - the video works without it
         jlog(job, f"cover skipped: {str(e)[:120]}")
