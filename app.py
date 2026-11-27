@@ -964,11 +964,21 @@ def _game_job(job):
                              game_vol=0.35 if track else 1.0, log=lambda m: jlog(job, m), moments=moments,
                              memes=memes, kinds=kinds, idle=idle, idle_step=2.0, meme_cards=bool(job.get("game_meme")))
     src.unlink(missing_ok=True)
+    if key and not job.get("posts"):             # 📝 TikTok caption + #tags for the highlight too
+        try:
+            hero = job.get("game_hero") or ""
+            job["posts"] = write_posts(("MLBB " + hero).strip(), job.get("name") or "",
+                                       f"highlight moments: {len(moments or [])}", key,
+                                       _settings.get("channel_name") or "Marco TV", game=True)
+            jlog(job, "📝 upload texts written (TikTok caption + #tags)")
+        except Exception as e:  # noqa: BLE001
+            jlog(job, f"upload texts skipped: {str(e)[:120]}")
     if job.get("telegram"):
         job["tg"] = {"state": "sending", "error": "", "pct": 0}
     job.update(status="done", stage="done", pct=100)
     _save_meta(job)
     jlog(job, "done ✅")
+    _tk_enqueue(job)
     if job.get("telegram"):
         threading.Thread(target=_telegram_send, args=(job,), daemon=True).start()
 
@@ -1102,6 +1112,14 @@ def _music_job(job):
     if not segs:
         raise ValueError("သီချင်းစာသား မကြားရဘူး (တီးလုံးသက်သက်လား?)")
     jlog(job, f"🎤 {len(segs)} lyric lines")
+    if not job.get("posts"):                     # 📝 TikTok caption + #tags (and YouTube / Facebook texts)
+        try:
+            song = job.get("music_title") or (job.get("name") or "")[:80]
+            job["posts"] = write_posts(song, job.get("name") or "", "\n".join(sg["text"] for sg in segs), key,
+                                       _settings["channel_name"] or "Marco TV", music=True)
+            jlog(job, "📝 upload texts written (TikTok caption + #tags)")
+        except Exception as e:  # noqa: BLE001 - the video works without them
+            jlog(job, f"upload texts skipped: {str(e)[:120]}")
     write_srt([(s["start"], s["end"], s["text"]) for s in segs], d / "captions.srt")
     photo = next(iter(sorted(d.glob("music_photo.*"))), None)
     blur = None
@@ -1137,7 +1155,26 @@ def _music_job(job):
     title = job.get("music_title") or job.get("my_title") or (job.get("name") or "")[:60]
     job["title_mm"] = title
     chooser = (lambda shots: pick_cover_frames(shots, key)) if key and not photo else None
+    # ONE picture (the owner's photo, else the song video's own thumbnail) with the title: a collage
+    # of player frames looked odd (two half-cut player screens)
+    pic = photo or (d / "src_thumb.jpg" if (d / "src_thumb.jpg").exists() else None)
+    if pic:
+        from dub import thumb_cover
+        try:
+            mvw, mvh = video_size(d / "dubbed.mp4")
+            job["covers"] = [thumb_cover(pic, title, d / "cover1.jpg", mvh > mvw, logo).name]
+            if vertical:
+                (d / "tt").mkdir(exist_ok=True)
+                job["covers_tt"] = ["tt/" + thumb_cover(pic, title, d / "tt" / "cover1.jpg", True, logo).name]
+            jlog(job, f"🖼️ cover made from {'your photo' if photo else 'the video thumbnail'}"
+                      f"{' — ' + title if title else ''}")
+            pic = "done"
+        except Exception as e:  # noqa: BLE001 - frames then
+            jlog(job, f"photo cover failed ({str(e)[:80]}) — from the video's frames")
+            pic = None
     try:
+        if pic == "done":
+            raise _CoversDone()
         out = d / "dubbed.mp4" if photo else src          # (the song's own frames, without our lyrics)
         vw, vh = video_size(out)
         covers = make_covers(out, title, d, job["total"] * 0.1, job["total"] * 0.9, portrait=vh > vw,
@@ -1149,6 +1186,8 @@ def _music_job(job):
                              portrait=True, logo=logo, parts=1, chooser=chooser, log=lambda m: jlog(job, m), single=True)
             job["covers_tt"] = ["tt/" + c.name for c in tt]
         jlog(job, f"🖼️ cover made{' — ' + title if title else ''}")
+    except _CoversDone:
+        pass
     except Exception as e:  # noqa: BLE001 - the video works without it
         jlog(job, f"cover skipped: {str(e)[:120]}")
     src.unlink(missing_ok=True)

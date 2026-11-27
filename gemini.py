@@ -703,11 +703,45 @@ Reply with ONLY a JSON object with exactly these keys."""
 _EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u200D\u20E3]")
 
 
-def write_posts(title, name, story, api_key, channel="Marco TV"):
+MUSIC_POSTS_PROMPT = """You write the upload texts for a Burmese channel called "{channel}" that posts Burmese SONGS with
+lyrics shown on screen. Song (singer - title): {title}
+Original video title: {name}
+Lyrics:
+{story}
+
+Write, in natural friendly SPOKEN Burmese (Myanmar script), never stiff written Burmese:
+- "tiktok": 1–2 short warm lines about the song that make people listen and sing along (what it is about, a
+  feeling, a question to the viewers), naming the song and singer; then the hashtags. Under 250 characters.
+- "youtube_title": under 90 characters: singer - song title, plus "(သီချင်းစာသား)".
+- "youtube_desc": 2–3 lines about the song, a line that the lyrics are shown on screen, then the hashtags.
+- "facebook": 2 friendly lines with a question to invite comments, then the hashtags.
+HASHTAGS: 2–3 short ones about the song: the singer's name and the song's theme, in Burmese or English, no spaces
+inside a tag (e.g. #ဝိုင်းချစ် #အမေသီချင်း). The channel's own tags are added after yours.
+- "ai_film": false.
+No emojis. Never claim the channel made or owns the song. Reply with ONLY a JSON object with exactly these keys."""
+
+
+GAME_POSTS_PROMPT = """You write the upload texts for a Burmese gaming channel called "{channel}": a gameplay HIGHLIGHT of the
+owner's own match. Game / hero: {title}
+Original video title: {name}
+Notes: {story}
+
+Write, in natural fun SPOKEN Burmese (Myanmar script), like a gamer talking to friends:
+- "tiktok": 1–2 short hype lines (the best play, a question to the viewers), then the hashtags. Under 200 characters.
+- "youtube_title": under 90 characters, catchy (hero + the big moment).
+- "youtube_desc": 2 lines about the highlight, then the hashtags.
+- "facebook": 2 friendly lines with a question to invite comments, then the hashtags.
+HASHTAGS: 2–3 short English ones about the game and hero (e.g. #mlbb #ling #savage). The channel's own tags are
+added after yours.
+- "ai_film": false.
+No emojis. Reply with ONLY a JSON object with exactly these keys."""
+
+
+def write_posts(title, name, story, api_key, channel="Marco TV", music=False, game=False):
     """Upload texts for TikTok / YouTube / Facebook in one call:
-    {tiktok, youtube_title, youtube_desc, facebook, ai_film}."""
-    raw = _call(POSTS_PROMPT.format(channel=channel, title=title or "-", name=name or "-",
-                                    story=(story or "")[:3500]), api_key, max_tokens=2048)
+    {tiktok, youtube_title, youtube_desc, facebook, ai_film}. music: a song with its lyrics."""
+    raw = _call((MUSIC_POSTS_PROMPT if music else GAME_POSTS_PROMPT if game else POSTS_PROMPT).format(
+        channel=channel, title=title or "-", name=name or "-", story=(story or "")[:3500]), api_key, max_tokens=2048)
     m = re.search(r"\{.*\}", raw, re.S)
     data = json.loads(re.sub(r",\s*([}\]])", r"\1", m.group(0))) if m else {}
     out = {k: (data.get(k) if k == "ai_film" else str(data.get(k) or "").strip())
@@ -722,9 +756,9 @@ def write_posts(title, name, story, api_key, channel="Marco TV"):
     tag = "#" + re.sub(r"\W", "", channel)
     # at most 5 hashtags in all (TikTok allows only 5 here): ours first, then the best of the AI's genre tags
     tag = tag.lower()                   # the account's own tag: #marcotv
-    own = {"tiktok": [tag, "#မြန်မာRecap", "#myanmarrecap"],
-           "youtube_desc": [tag, "#မြန်မာRecap", "#myanmarrecap"],
-           "facebook": [tag, "#မြန်မာRecap", "#myanmarrecap"]}
+    mine0 = ([tag, "#သီချင်း", "#myanmarsong"] if music else [tag, "#gaming", "#highlights"] if game
+             else [tag, "#မြန်မာRecap", "#myanmarrecap"])
+    own = {"tiktok": mine0, "youtube_desc": mine0, "facebook": mine0}
     for k, mine in own.items():
         if not out[k]:
             continue
