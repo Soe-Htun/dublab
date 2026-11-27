@@ -2764,7 +2764,7 @@ def thumb_cover(thumb, title, out_jpg, portrait=False, logo=None, suffix=""):
     return _cover_logo_save(img, logo, W, portrait, out_jpg, badge=suffix, left=_logo_left)
 
 
-def _part_badge(img, suffix, right=False):
+def _part_badge(img, suffix, right=False, rel=None):
     """"EP 7" / "EP 3/1" in a red pill with a gold rim in a top corner: the part number in the
     title's last line sat where TikTok draws the views / length over the thumbnail (hidden)."""
     from PIL import Image, ImageDraw, ImageFont
@@ -2774,7 +2774,7 @@ def _part_badge(img, suffix, right=False):
     text = "END" if num == "End" else f"EP {num.replace('End', 'END')}"
     W, H = img.size
     lat = next((p for p in _LATIN_FONTS if os.path.exists(p)), None)
-    size = int(W * (0.075 if H > W else 0.05))
+    size = int(W * (rel or (0.095 if H > W else 0.06)))   # (0.075 / 0.05 looked small on the phone)
     f = ImageFont.truetype(lat, size) if lat else ImageFont.load_default()
     im = img.convert("RGBA")
     d = ImageDraw.Draw(im)
