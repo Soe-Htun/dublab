@@ -1234,7 +1234,9 @@ def cleanup_segments(job_dir):
 
 
 WATERMARK_TEXT = os.environ.get("DUBLAB_WATERMARK", "made with DubLab")
-_WM_FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+_WM_FONT = next((p for p in ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                              "C:/Windows/Fonts/arial.ttf")  # Windows ffmpeg has no fontconfig setup: no font = crash
+                 if os.path.exists(p)), "")
 _has_drawtext = None
 
 
@@ -1629,7 +1631,7 @@ def mux(src_video, dub_wav, out_mp4, bg_wav=None, bg_volume=0.8, logo=None,
         intro_img = None
     watermark = bool(WATERMARK_TEXT and _drawtext_ok())
     if watermark:
-        font = f"fontfile={_WM_FONT}:" if os.path.exists(_WM_FONT) else ""
+        font = f"fontfile='{_WM_FONT.replace(':', chr(92) + ':')}':" if _WM_FONT else ""  # 'C\:/…' for ffmpeg
         text = WATERMARK_TEXT.replace("\\", "").replace("'", "").replace(":", "\\:")
         vf += (f"drawtext={font}text='{text}':"
                "fontsize=h/40:fontcolor=white@0.72:"
