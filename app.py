@@ -1511,8 +1511,14 @@ def _write_comments(job, api_key, utter=None, video=None):
         utter = [{**u, "end": u["start"] + u["vdur"] + 0.3 if u.get("vdur") else
                   min(u["end"], u["start"] + len(u["text"]) / gemini.TTS_CPS + 0.4)} for u in utter]
     job["comments"] = []
+    # 🔊 the film's own voices (no recap): only a few remarks — the longest quiet pause of every ~5 min
+    # (≤ 2 in 10 min). Every pause of 4 s+ (and a line every ~4½ s in long ones) made ~200 remarks in a
+    # 2-hour Burmese film — the AI voice kept breaking into the film
+    sparse = bool(job.get("orig_audio") and not job.get("char_voice"))
     try:
-        if every_pause:
+        if every_pause and sparse:
+            gaps = comment_gaps(utter, job.get("total") or 0, every=300.0, min_gap=4.0, first=45.0)
+        elif every_pause:
             gaps = comment_gaps(utter, job.get("total") or 0, every=0,
                                 min_gap=4.0 if job.get("orig_audio") else 3.0, first=2.0)
         else:
@@ -1537,7 +1543,7 @@ def _write_comments(job, api_key, utter=None, video=None):
                 gaps = free
             except Exception as e:  # noqa: BLE001 - the transcript's pauses then
                 jlog(job, f"quiet check skipped: {str(e)[:100]}")
-        if every_pause:
+        if every_pause and not sparse:
             # ⚔️ a long scene without talk (a fight, a chase…): a line every ~4½ s, each from its own
             # picture — the narrator tells the action as it goes, no stopping in between (one line
             # per ~12 s left 7–9 s of quiet: a remark is ~3–4 s spoken at 1.3x)
@@ -1552,7 +1558,9 @@ def _write_comments(job, api_key, utter=None, video=None):
             return
         pauses = [{"before": [u["text"] for u in utter[max(0, i - 2):i + 1]],
                    "after": [u["text"] for u in utter[i + 1:i + 3]],
-                   "max": max(12, int((b - a) * gemini.TTS_CPS * 0.85))} for a, b, i in gaps]
+                   "max": max(12, min(int((b - a) * gemini.TTS_CPS * 0.85),
+                                      int(6 * gemini.TTS_CPS) if sparse else 10 ** 6))}   # (sparse: ≤ ~6 s each)
+                  for a, b, i in gaps]
         if every_pause and video:
             from concurrent.futures import ThreadPoolExecutor
             from dub import sample_frames
@@ -1758,7 +1766,9 @@ def _condense(job, src, utter, voice=None):
         spans = tight_spans([{"start": u["start"], "end": u["start"] + max(vd, min(u["end"] - u["start"], vd + 0.4)) + 0.1}
                              for u, vd in zip(said, lens)], job["total"])
     else:
-        spans = speech_spans(utter, pad=1.5, join=8.0)
+        # 🔊 the film's own voices: a quiet stretch over ~6 s is cut down to ~2½ s (the owner: skip the
+        # silent scenes rather than fill them with the AI voice); before only those over ~11 s went
+        spans = speech_spans(utter, pad=1.2, join=4.0) if orig else speech_spans(utter, pad=1.5, join=8.0)
     kept = sum(b - a for a, b in spans)
     total = job["total"]
     if not spans or kept < total * (0.15 if char else 0.6) or kept > total * (0.92 if orig else 0.97):
